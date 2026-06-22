@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 import astropy.units as u
+import numpy as np
 import pandas as pd
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
@@ -18,7 +19,7 @@ from spherex_laser_miner.calibration import image_to_ujy_per_pixel, load_sapm, v
 from spherex_laser_miner.catalog.gaia import query_gaia_for_s_region
 from spherex_laser_miner.catalog.manual_targets import ManualTarget
 from spherex_laser_miner.config import MinerConfig
-from spherex_laser_miner.coordinates import edge_distance_pix, propagate_coordinate, propagate_target
+from spherex_laser_miner.coordinates import edge_distance_pix, propagate_coordinates
 from spherex_laser_miner.live_status import mark_frame, mark_frame_perf, mark_target, reset_live_status
 from spherex_laser_miner.photometry.aperture import aperture_measure
 from spherex_laser_miner.photometry.calibrated_aperture import calibrated_aperture_measure
@@ -129,21 +130,48 @@ def run_trial_field_worker(
             perf["calibration_sec"] += time.perf_counter() - t0
 
             t0 = time.perf_counter()
-            for row in target_rows:
-                ra_epoch, dec_epoch, coord_status = propagate_coordinate(
-                    ra_deg=float(row["ra_reference_deg"]),
-                    dec_deg=float(row["dec_reference_deg"]),
-                    reference_epoch_yr=_optional_float(row.get("reference_epoch_yr")),
-                    pmra_masyr=_optional_float(row.get("pmra_masyr")),
-                    pmdec_masyr=_optional_float(row.get("pmdec_masyr")),
-                    obs_mid_mjd=obs_mid_mjd,
-                )
-                x_pix, y_pix = spatial_wcs.world_to_pixel(SkyCoord(ra_epoch * u.deg, dec_epoch * u.deg))
-                x_pix = float(x_pix)
-                y_pix = float(y_pix)
-                edge_pix = edge_distance_pix(x_pix, y_pix, image.shape)
-                inside = 0 <= x_pix < image.shape[1] and 0 <= y_pix < image.shape[0]
-                selected = inside and edge_pix >= cfg.edge_margin_pix
+            ra_ref = np.asarray([float(row["ra_reference_deg"]) for row in target_rows], dtype=float)
+            dec_ref = np.asarray([float(row["dec_reference_deg"]) for row in target_rows], dtype=float)
+            ref_epoch = np.asarray(
+                [
+                    np.nan if _optional_float(row.get("reference_epoch_yr")) is None else float(row["reference_epoch_yr"])
+                    for row in target_rows
+                ],
+                dtype=float,
+            )
+            pmra = np.asarray(
+                [np.nan if _optional_float(row.get("pmra_masyr")) is None else float(row["pmra_masyr"]) for row in target_rows],
+                dtype=float,
+            )
+            pmdec = np.asarray(
+                [np.nan if _optional_float(row.get("pmdec_masyr")) is None else float(row["pmdec_masyr"]) for row in target_rows],
+                dtype=float,
+            )
+            ra_epoch_arr, dec_epoch_arr, coord_statuses = propagate_coordinates(
+                ra_deg=ra_ref,
+                dec_deg=dec_ref,
+                reference_epoch_yr=ref_epoch,
+                pmra_masyr=pmra,
+                pmdec_masyr=pmdec,
+                obs_mid_mjd=obs_mid_mjd,
+            )
+            x_arr, y_arr = spatial_wcs.world_to_pixel(SkyCoord(ra_epoch_arr * u.deg, dec_epoch_arr * u.deg))
+            x_arr = np.asarray(x_arr, dtype=float)
+            y_arr = np.asarray(y_arr, dtype=float)
+            edge_arr = np.minimum.reduce(
+                [x_arr, y_arr, image.shape[1] - 1 - x_arr, image.shape[0] - 1 - y_arr]
+            )
+            inside_arr = (0 <= x_arr) & (x_arr < image.shape[1]) & (0 <= y_arr) & (y_arr < image.shape[0])
+            selected_arr = inside_arr & (edge_arr >= cfg.edge_margin_pix)
+            for idx, row in enumerate(target_rows):
+                ra_epoch = float(ra_epoch_arr[idx])
+                dec_epoch = float(dec_epoch_arr[idx])
+                coord_status = coord_statuses[idx]
+                x_pix = float(x_arr[idx])
+                y_pix = float(y_arr[idx])
+                edge_pix = float(edge_arr[idx])
+                inside = bool(inside_arr[idx])
+                selected = bool(selected_arr[idx])
                 selection = {
                     **row,
                     "ra_epoch_deg": ra_epoch,

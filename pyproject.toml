@@ -31,6 +31,9 @@ dev = [
   "pytest>=8.2",
   "ruff>=0.5",
 ]
+gpu = [
+  "warp-lang>=1.14",
+]
 
 [project.scripts]
 spherex-mine = "spherex_laser_miner.cli:app"
