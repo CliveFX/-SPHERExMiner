@@ -24,6 +24,7 @@ from spherex_laser_miner.live_status import db_path, init_live_status
 
 
 _COMPLETED_TARGET_CACHE: dict[tuple[str, str, float, float], list[dict[str, object]]] = {}
+LIVE_TARGET_OVERLAY_LIMIT_PER_FRAME = 1200
 
 
 def serve_viewer(run_dir: Path, host: str, port: int) -> None:
@@ -70,7 +71,7 @@ def _make_handler(run_dir: Path):
                     idx = int(path.split("/")[3])
                     self._send_json(_field_targets(active_run_dir, idx))
                 elif path == "/api/targets":
-                    self._send_json(_targets(active_run_dir))
+                    self._send_json(_targets(active_run_dir, params))
                 elif path.startswith("/api/spectrum/"):
                     target_id = urllib.parse.unquote(path.removeprefix("/api/spectrum/"))
                     self._send_json(_spectrum(active_run_dir, target_id))
@@ -226,17 +227,37 @@ def _live_status(run_dir: Path) -> dict[str, object]:
 
         frame_ids = [str(frame["image_id"]) for frame in frames if frame.get("image_id")]
         targets_by_frame: dict[str, list[dict[str, object]]] = {image_id: [] for image_id in frame_ids}
+        target_counts_by_frame: dict[str, dict[str, int]] = {}
         if has_live_frames and frame_ids:
             placeholders = ",".join("?" for _ in frame_ids)
             for row in con.execute(
                 f"""
-                SELECT * FROM targets
+                SELECT image_id, status, COUNT(*) AS count
+                FROM targets
                 WHERE image_id IN ({placeholders})
-                ORDER BY
-                  CASE status WHEN 'active' THEN 0 WHEN 'queued' THEN 1 WHEN 'error' THEN 2 ELSE 3 END,
-                  updated_at DESC
+                GROUP BY image_id, status
                 """,
                 frame_ids,
+            ):
+                target_counts_by_frame.setdefault(str(row["image_id"]), {})[str(row["status"])] = int(row["count"])
+            for row in con.execute(
+                f"""
+                WITH ranked AS (
+                  SELECT *,
+                    ROW_NUMBER() OVER (
+                      PARTITION BY image_id
+                      ORDER BY
+                        CASE status WHEN 'active' THEN 0 WHEN 'queued' THEN 1 WHEN 'error' THEN 2 ELSE 3 END,
+                        updated_at DESC
+                    ) AS rn
+                  FROM targets
+                  WHERE image_id IN ({placeholders})
+                )
+                SELECT * FROM ranked
+                WHERE rn <= ?
+                ORDER BY image_id, rn
+                """,
+                [*frame_ids, LIVE_TARGET_OVERLAY_LIMIT_PER_FRAME],
             ):
                 targets_by_frame.setdefault(str(row["image_id"]), []).append(dict(row))
 
@@ -263,11 +284,17 @@ def _live_status(run_dir: Path) -> dict[str, object]:
                 frame["observation_id"] = candidate.get("obs_id")
         frame["targets"] = targets_by_frame.get(image_id) or _completed_targets_for_frame(run_dir, image_id)
         counts = {"queued": 0, "active": 0, "done": 0, "error": 0}
-        for target in frame["targets"]:
-            status = str(target.get("status") or "queued")
-            counts[status] = counts.get(status, 0) + 1
+        if image_id in target_counts_by_frame:
+            for status, count in target_counts_by_frame[image_id].items():
+                counts[status] = count
+        else:
+            for target in frame["targets"]:
+                status = str(target.get("status") or "queued")
+                counts[status] = counts.get(status, 0) + 1
         frame["target_status_counts"] = counts
         frame["target_count"] = sum(counts.values())
+        frame["target_overlay_count"] = len(frame["targets"])
+        frame["target_overlay_truncated"] = frame["target_overlay_count"] < frame["target_count"]
         frame["progress_percent"] = (100.0 * counts.get("done", 0) / frame["target_count"]) if frame["target_count"] else None
         frame["elapsed_sec"] = _elapsed_seconds(frame.get("started_at"), frame.get("finished_at"))
         perf = _frame_perf(run_dir, image_id)
@@ -625,10 +652,14 @@ def _field_targets(run_dir: Path, idx: int) -> list[dict[str, object]]:
     return df[cols].head(1000).to_dict(orient="records")
 
 
-def _targets(run_dir: Path) -> list[dict[str, object]]:
+def _targets(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
     path = run_dir / "spectra" / "target_summary.parquet"
     if not path.exists():
-        return []
+        return {"rows": [], "total": 0, "limit": 0, "offset": 0, "sort": "measurements", "q": ""}
+    limit = min(500, max(25, _query_int(params, "limit", 200)))
+    offset = max(0, _query_int(params, "offset", 0))
+    sort = (params.get("sort") or ["measurements"])[0]
+    q = (params.get("q") or [""])[0].strip().lower()
     df = pd.read_parquet(path)
     spectra_path = run_dir / "spectra" / "target_spectra.parquet"
     if spectra_path.exists():
@@ -651,7 +682,48 @@ def _targets(run_dir: Path) -> list[dict[str, object]]:
             df[col] = df[col].fillna(0).astype(int)
     if "flagged_fraction" in df:
         df["flagged_fraction"] = df["flagged_fraction"].fillna(0.0)
-    return df.head(500).to_dict(orient="records")
+    if q:
+        query_mask = df["target_id"].astype(str).str.lower().str.contains(q, regex=False)
+        if "target_type" in df.columns:
+            query_mask |= df["target_type"].astype(str).str.lower().str.contains(q, regex=False)
+        df = df[query_mask]
+    total = int(len(df))
+    df = _sort_targets_df(df, sort)
+    rows = df.iloc[offset : offset + limit].to_dict(orient="records")
+    return {"rows": rows, "total": total, "limit": limit, "offset": offset, "sort": sort, "q": q}
+
+
+def _sort_targets_df(df: pd.DataFrame, sort: str) -> pd.DataFrame:
+    if df.empty:
+        return df
+    work = df.copy()
+    if sort == "id":
+        return work.sort_values("target_id", kind="mergesort")
+    if sort == "snr" and "max_snr_uJy" in work:
+        return work.sort_values("max_snr_uJy", ascending=False, na_position="last", kind="mergesort")
+    if sort == "flux" and "median_flux_uJy" in work:
+        work["_abs_flux"] = pd.to_numeric(work["median_flux_uJy"], errors="coerce").abs()
+        return work.sort_values("_abs_flux", ascending=False, na_position="last", kind="mergesort").drop(columns=["_abs_flux"])
+    if sort == "flags":
+        for col in ("flagged_fraction", "flagged_measurements", "n_measurements"):
+            if col not in work:
+                work[col] = 0
+        return work.sort_values(
+            ["flagged_fraction", "flagged_measurements", "n_measurements"],
+            ascending=[True, True, False],
+            na_position="last",
+            kind="mergesort",
+        )
+    if "n_measurements" in work:
+        return work.sort_values("n_measurements", ascending=False, na_position="last", kind="mergesort")
+    return work.sort_values("target_id", kind="mergesort")
+
+
+def _query_int(params: dict[str, list[str]], name: str, default: int) -> int:
+    try:
+        return int((params.get(name) or [default])[0])
+    except (TypeError, ValueError):
+        return default
 
 
 def _spectrum(run_dir: Path, target_id: str) -> dict[str, object]:
@@ -660,6 +732,9 @@ def _spectrum(run_dir: Path, target_id: str) -> dict[str, object]:
         return {"target_id": target_id, "rows": []}
     df = pd.read_parquet(path)
     rows = df[df["target_id"] == target_id].sort_values("cwave_um")
+    if "input_file_path" in rows.columns:
+        rows = rows.copy()
+        rows["fits_file"] = rows["input_file_path"].map(lambda value: Path(str(value)).name if pd.notna(value) else None)
     return {"target_id": target_id, "rows": rows.to_dict(orient="records")}
 
 
@@ -883,7 +958,8 @@ async function init() {
   fields = await getJSON('/api/fields' + runQS());
   const fs = document.getElementById('fieldSelect');
   fs.innerHTML = fields.map(f => `<option value="${f.idx}">D${f.detector} ${f.observation_id} (${f.targets_measured})</option>`).join('');
-  targets = await getJSON('/api/targets' + runQS());
+  const targetData = await getJSON('/api/targets' + runQS('limit=500&offset=0&sort=measurements'));
+  targets = targetData.rows || [];
   const ts = document.getElementById('targetSelect');
   ts.innerHTML = targets.map(t => `<option value="${t.target_id}">${t.target_id} [${t.n_measurements}] ${Number(t.wavelength_min_um).toFixed(3)}-${Number(t.wavelength_max_um).toFixed(3)}um</option>`).join('');
   ts.value = targets.some(t => t.target_id === 'simp0136') ? 'simp0136' : (targets[0]?.target_id || '');
@@ -1214,6 +1290,7 @@ function frameHTML(f) {
   const perf = f.performance || {};
   const done = counts.done || 0;
   const total = f.target_count || Object.values(counts).reduce((a,b) => a + Number(b || 0), 0);
+  const overlayNote = f.target_overlay_truncated ? `${f.target_overlay_count}/${total} drawn` : `${targets.length}/${total} drawn`;
   const elapsed = Number.isFinite(Number(f.elapsed_sec)) ? fmtDuration(Number(f.elapsed_sec)) : '';
   const worker = f.worker_name || (f.status === 'done' ? 'complete' : '');
   const shortId = String(f.image_id || '').replace(/^level2_/, '').replace(/_spx_l2b-.*/, '');
@@ -1237,6 +1314,7 @@ function frameHTML(f) {
       <div>sky <span>${escapeHtml(f.constellation || '')}</span></div>
       <div>width <span>${Number.isFinite(Number(f.cband_um)) ? Number(f.cband_um).toFixed(3) + ' um' : ''}</span></div>
       <div>targets <span>${done}/${total}</span></div>
+      <div>rings <span>${escapeHtml(overlayNote)}</span></div>
       <div>queued <span>${counts.queued || 0}</span></div>
       <div>active <span>${counts.active || 0}</span></div>
       <div>done <span>${counts.done || 0}</span></div>
@@ -1382,15 +1460,20 @@ def _spectra_html() -> str:
     <label for="runSelect">Run</label>
     <select id="runSelect" onchange="switchRun()"></select>
     <label for="filter">Filter targets</label>
-    <input id="filter" placeholder="target id, gaia, simp..." oninput="renderTargetList()">
+    <input id="filter" placeholder="target id, gaia, simp..." oninput="scheduleTargetFetch()">
     <label for="sort">Sort</label>
-    <select id="sort" onchange="renderTargetList()">
+    <select id="sort" onchange="fetchTargets(0)">
       <option value="measurements">Most measurements</option>
       <option value="snr">Max SNR</option>
       <option value="flux">Median aperture flux</option>
       <option value="flags">Fewest flags</option>
       <option value="id">Target id</option>
     </select>
+    <div class="row" style="margin-top:8px">
+      <button onclick="pageTargets(-1)">Prev</button>
+      <button onclick="pageTargets(1)">Next</button>
+    </div>
+    <div id="targetPageInfo" class="small"></div>
     <label for="targetList">Targets</label>
     <select id="targetList" size="24" onchange="loadSelected()"></select>
     <div id="runSummary" class="mono"></div>
@@ -1421,6 +1504,10 @@ def _spectra_html() -> str:
 </main>
 <script>
 let targets = [];
+let targetTotal = 0;
+let targetOffset = 0;
+let targetLimit = 200;
+let targetFetchTimer = null;
 let current = null;
 let currentRows = [];
 let activeRun = new URLSearchParams(window.location.search).get('run') || '';
@@ -1445,10 +1532,9 @@ async function refreshAll() {
   rs.innerHTML = runs.map(r => `<option value="${r.name}">${r.name} ${r.has_spectra ? '[' + (r.measurement_rows || 0) + ' rows]' : ''}</option>`).join('');
   rs.value = activeRun;
   document.getElementById('runSummary').textContent = JSON.stringify(await getJSON('/api/summary' + runQS()), null, 2);
-  targets = await getJSON('/api/targets' + runQS());
-  renderTargetList();
+  await fetchTargets(0);
   if (!current || !targets.some(t => t.target_id === current)) {
-    const preferred = targets.some(t => t.target_id === 'simp0136') ? 'simp0136' : (targets[0]?.target_id || null);
+    const preferred = targets.some(t => t.target_id === 'ucs_0972') ? 'ucs_0972' : (targets[0]?.target_id || null);
     if (preferred) selectTarget(preferred);
   }
   else await selectTarget(current);
@@ -1461,26 +1547,36 @@ function switchRun() {
   refreshAll();
 }
 
-function renderTargetList() {
-  const q = document.getElementById('filter').value.trim().toLowerCase();
+async function fetchTargets(offset) {
+  targetOffset = Math.max(0, offset || 0);
   const sort = document.getElementById('sort').value;
-  let rows = targets.filter(t => !q || String(t.target_id).toLowerCase().includes(q) || String(t.target_type).toLowerCase().includes(q));
-  rows.sort((a,b) => {
-    if (sort === 'id') return String(a.target_id).localeCompare(String(b.target_id));
-    if (sort === 'snr') return num(b.max_snr_uJy) - num(a.max_snr_uJy);
-    if (sort === 'flux') return Math.abs(num(b.median_flux_uJy)) - Math.abs(num(a.median_flux_uJy));
-    if (sort === 'flags') {
-      const fa = flagRate(a), fb = flagRate(b);
-      if (fa !== fb) return fa - fb;
-      const ca = num(a.flagged_measurements), cb = num(b.flagged_measurements);
-      if (ca !== cb) return ca - cb;
-      return num(b.n_measurements) - num(a.n_measurements);
-    }
-    return num(b.n_measurements) - num(a.n_measurements);
-  });
+  const q = document.getElementById('filter').value.trim();
+  const data = await getJSON('/api/targets' + runQS(`limit=${targetLimit}&offset=${targetOffset}&sort=${encodeURIComponent(sort)}&q=${encodeURIComponent(q)}`));
+  targets = data.rows || [];
+  targetTotal = data.total || 0;
+  targetOffset = data.offset || 0;
+  targetLimit = data.limit || targetLimit;
+  renderTargetList();
+}
+
+function scheduleTargetFetch() {
+  clearTimeout(targetFetchTimer);
+  targetFetchTimer = setTimeout(() => fetchTargets(0), 180);
+}
+
+function pageTargets(direction) {
+  const next = Math.min(Math.max(0, targetOffset + direction * targetLimit), Math.max(0, targetTotal - 1));
+  fetchTargets(next);
+}
+
+function renderTargetList() {
+  const rows = targets;
   const list = document.getElementById('targetList');
   list.innerHTML = rows.map(t => `<option value="${escapeHtml(t.target_id)}">${escapeHtml(t.target_id)}  n=${fmt(t.n_measurements)}  flags=${fmt(t.flagged_measurements || 0)}  ${fmt(t.wavelength_min_um)}-${fmt(t.wavelength_max_um)}um</option>`).join('');
   if (current) list.value = current;
+  const start = targetTotal ? targetOffset + 1 : 0;
+  const end = Math.min(targetTotal, targetOffset + rows.length);
+  document.getElementById('targetPageInfo').textContent = `${start}-${end} of ${targetTotal} targets`;
 }
 
 async function loadSelected() {
@@ -1557,10 +1653,17 @@ function drawPlot(rows) {
       const curve = medianBinnedRows(lineRows, 72);
       if (curve.length > 1) add('path',{d:monotonePath(curve, x, y),fill:'none',stroke:'#e5eefb','stroke-width':1.7,opacity:.78});
     }
-    for (const r of sorted) point(x(num(r.cwave_um)), y(num(r.aperture_flux_uJy)), r.fatal_flag_present ? '#f97316' : '#22c55e', r.fatal_flag_present ? .38 : .9, 3.2);
+    for (const r of sorted) point(
+      x(num(r.cwave_um)),
+      y(num(r.aperture_flux_uJy)),
+      r.fatal_flag_present ? '#f97316' : '#22c55e',
+      r.fatal_flag_present ? .38 : .9,
+      3.2,
+      pointTitle(r, 'aperture_flux_uJy')
+    );
   }
   if (psf.length) {
-    for (const r of psf) diamond(x(num(r.cwave_um)), y(num(r.psf_flux_uJy)), r.fatal_flag_present ? '#f97316' : '#c084fc', r.fatal_flag_present ? .3 : .75);
+    for (const r of psf) diamond(x(num(r.cwave_um)), y(num(r.psf_flux_uJy)), r.fatal_flag_present ? '#f97316' : '#c084fc', r.fatal_flag_present ? .3 : .75, pointTitle(r, 'psf_flux_uJy'));
   }
   add('text',{x:m.l,y:18,fill:'#e5eefb'},`${current || ''}  aperture=${ap.length} psf=${psf.length}`);
   legend();
@@ -1584,25 +1687,49 @@ function drawPlot(rows) {
     diamond(W-135, 22, '#c084fc', .8); add('text',{x:W-122,y:26,fill:'#e5eefb'},'PSF');
     point(W-70, 22, '#f97316', .45, 3.2); add('text',{x:W-58,y:26,fill:'#e5eefb'},'flag');
   }
-  function point(cx, cy, color, opacity, r) {
+  function point(cx, cy, color, opacity, r, title) {
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
-    add('circle',{cx,cy,r,fill:color,opacity});
+    add('circle',{cx,cy,r,fill:color,opacity}, title);
   }
-  function diamond(cx, cy, color, opacity) {
+  function diamond(cx, cy, color, opacity, title) {
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
-    add('path',{d:`M ${cx-4} ${cy} L ${cx} ${cy-4} L ${cx+4} ${cy} L ${cx} ${cy+4} Z`,fill:color,opacity});
+    add('path',{d:`M ${cx-4} ${cy} L ${cx} ${cy-4} L ${cx+4} ${cy} L ${cx} ${cy+4} Z`,fill:color,opacity}, title);
   }
   function add(name, attrs, text) {
     const el = document.createElementNS('http://www.w3.org/2000/svg', name);
     for (const [k,v] of Object.entries(attrs)) el.setAttribute(k,v);
-    if (text !== undefined) el.textContent = text;
+    if (text !== undefined && name === 'text') {
+      el.textContent = text;
+    } else if (text !== undefined) {
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+      title.textContent = text;
+      el.appendChild(title);
+    }
     svg.appendChild(el);
   }
 }
 
 function renderTable() {
-  const cols = ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','fatal_flag_present','detector','phot_g_mean_mag','bp_rp','pmra_masyr','pmdec_masyr','coordinate_propagation','observation_id','image_id'];
+  const cols = ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','fatal_flag_present','detector','phot_g_mean_mag','bp_rp','pmra_masyr','pmdec_masyr','coordinate_propagation','observation_id','image_id','fits_file','input_file_path'];
   document.getElementById('pointTable').innerHTML = makeTable([...currentRows].sort((a,b)=>num(a.cwave_um)-num(b.cwave_um)).slice(0, 260), cols);
+}
+
+function pointTitle(r, fluxCol) {
+  return [
+    `target: ${current || r.target_id || ''}`,
+    `wave: ${fmt(r.cwave_um)} um`,
+    `flux: ${fmt(r[fluxCol])} uJy`,
+    `detector: D${fmt(r.detector)}`,
+    `obs: ${r.observation_id || ''}`,
+    `image: ${r.image_id || ''}`,
+    `fits: ${r.fits_file || fileName(r.input_file_path) || ''}`,
+    `path: ${r.input_file_path || ''}`
+  ].join('\\n');
+}
+
+function fileName(path) {
+  if (!path) return '';
+  return String(path).split('/').pop();
 }
 
 function makeTable(rows, cols) {
