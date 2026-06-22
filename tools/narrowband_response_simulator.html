@@ -165,6 +165,9 @@
     <label for="backgroundOpacity">Background opacity <span id="backgroundOpacityVal"></span></label>
     <input id="backgroundOpacity" type="range" min="0" max="1" step="0.05" value="0.45">
 
+    <label for="injectPeak">Add peak to background</label>
+    <input id="injectPeak" type="checkbox" checked>
+
     <label for="lineWave">Line wavelength <span id="lineWaveVal"></span></label>
     <input id="lineWave" type="range" min="0.744" max="5.002" step="0.001" value="1.064">
 
@@ -273,7 +276,7 @@ let calibrationMeta = null;
 let calibrationLoadStatus = 'loading QR2 calibration...';
 let backgroundSpectra = [];
 let backgroundLoadStatus = 'loading captured spectra...';
-const controls = ['backgroundSpectrum','backgroundOpacity','lineWave','lineAmp','lineWidth','continuum','slope','noise','visits','calibrationMode','channels','responseModel','quality'];
+const controls = ['backgroundSpectrum','backgroundOpacity','injectPeak','lineWave','lineAmp','lineWidth','continuum','slope','noise','visits','calibrationMode','channels','responseModel','quality'];
 for (const id of controls) $(id).addEventListener('input', update);
 $('preset1064').addEventListener('click', () => { $('lineWave').value = 1.064; update(); });
 $('preset1083').addEventListener('click', () => { $('lineWave').value = 1.083; update(); });
@@ -335,6 +338,17 @@ function selectedBackground() {
   const id = $('backgroundSpectrum').value;
   if (!id) return null;
   return backgroundSpectra.find(t => t.target_id === id) || null;
+}
+
+function responseForMeasurementPoint(point) {
+  const lineWave = Number($('lineWave').value);
+  const lineWidthUm = Number($('lineWidth').value) / 1000;
+  const detector = Number(point.detector) || bandFor(Number(point.wave)).band;
+  const calibration = calibrationRows.find(row => Number(row.detector) === detector && Number(point.wave) >= Number(row.wl_min_um) && Number(point.wave) <= Number(row.wl_max_um));
+  const cband = calibration
+    ? Number(calibration.wcs_cband_median_um || calibration.bandwidth_um)
+    : Number(point.wave) / bandFor(Number(point.wave)).R;
+  return responseAt({center: Number(point.wave), cband}, lineWave, lineWidthUm);
 }
 
 function bandFor(wave) {
@@ -521,10 +535,15 @@ function drawSpectrum(rows) {
   const xmin = 0.70, xmax = 5.08;
   const bg = selectedBackground();
   const bgPoints = bg ? bg.points.filter(p => Number.isFinite(Number(p.wave)) && Number.isFinite(Number(p.flux))) : [];
+  const injectPeak = $('injectPeak').checked && bgPoints.length > 0;
+  const injectedBgPoints = injectPeak
+    ? bgPoints.map(p => ({...p, injectedFlux: Number(p.flux) + Number($('lineAmp').value) * responseForMeasurementPoint(p)}))
+    : [];
   const ymax = Math.max(
     ...rows.map(r => r.total),
     ...rows.map(r => r.noiselessTotal),
     ...bgPoints.map(p => Number(p.flux)),
+    ...injectedBgPoints.map(p => Number(p.injectedFlux)),
     Number($('continuum').value)
   ) * 1.12;
   const ymin = 0;
@@ -557,6 +576,29 @@ function drawSpectrum(rows) {
         fill:BANDS[(Number(p.detector) || 1) - 1]?.color || '#38bdf8',
         opacity:Math.min(0.85, opacity + 0.18)
       });
+    }
+    if (injectPeak) {
+      const injected = [...injectedBgPoints].sort((a,b) => Number(a.wave) - Number(b.wave));
+      add(svg, 'polyline', {
+        points: injected.map(p => `${x(Number(p.wave))},${y(Number(p.injectedFlux))}`).join(' '),
+        fill:'none',
+        stroke:'#facc15',
+        'stroke-width':1.8,
+        opacity:0.90
+      });
+      for (const p of injected) {
+        const response = responseForMeasurementPoint(p);
+        if (response < 0.02) continue;
+        add(svg, 'circle', {
+          cx:x(Number(p.wave)),
+          cy:y(Number(p.injectedFlux)),
+          r:3 + 5 * Math.sqrt(response),
+          fill:'#facc15',
+          opacity:0.88,
+          stroke:'#fff',
+          'stroke-width': response > 0.45 ? 1 : 0
+        });
+      }
     }
     add(svg, 'text', {x:m.l+10, y:m.t+18, fill:'#7dd3fc'}, bg.label || bg.target_id);
   }
