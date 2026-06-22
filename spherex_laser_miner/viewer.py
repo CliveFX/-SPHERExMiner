@@ -29,15 +29,20 @@ _COMPLETED_TARGET_CACHE: dict[tuple[str, str, float, float], list[dict[str, obje
 def serve_viewer(run_dir: Path, host: str, port: int) -> None:
     handler = _make_handler(run_dir)
     server = ThreadingHTTPServer((host, port), handler)
-    print(f"SPHEREx viewer serving {run_dir} at http://{host}:{port}")
+    print(f"SPHEREx viewer serving {run_dir.parent} at http://{host}:{port}")
     server.serve_forever()
 
 
 def _make_handler(run_dir: Path):
+    default_run_dir = run_dir.resolve()
+    runs_root = default_run_dir.parent
+
     class ViewerHandler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
+            params = urllib.parse.parse_qs(parsed.query)
+            active_run_dir = _requested_run_dir(params, runs_root, default_run_dir)
             try:
                 if path == "/":
                     self._send_html(_index_html())
@@ -45,31 +50,33 @@ def _make_handler(run_dir: Path):
                     self._send_html(_live_html())
                 elif path == "/spectra":
                     self._send_html(_spectra_html())
+                elif path == "/api/runs":
+                    self._send_json(_runs(runs_root, active_run_dir))
                 elif path == "/api/summary":
-                    self._send_json(_summary(run_dir))
+                    self._send_json(_summary(active_run_dir))
                 elif path == "/api/live/status":
-                    self._send_json(_live_status(run_dir))
+                    self._send_json(_live_status(active_run_dir))
                 elif path == "/api/run/status":
-                    self._send_json(_overall_run_status(run_dir))
+                    self._send_json(_overall_run_status(active_run_dir))
                 elif path == "/api/fields":
-                    self._send_json(_fields(run_dir))
+                    self._send_json(_fields(active_run_dir))
                 elif path.startswith("/api/live/frame/") and path.endswith(".jpg"):
                     image_id = urllib.parse.unquote(path.removeprefix("/api/live/frame/").removesuffix(".jpg"))
-                    self._send_jpeg(_live_frame_image(run_dir, image_id))
+                    self._send_jpeg(_live_frame_image(active_run_dir, image_id))
                 elif path.startswith("/api/field/") and path.endswith("/image.png"):
                     idx = int(path.split("/")[3])
-                    self._send_png(_field_image(run_dir, idx))
+                    self._send_png(_field_image(active_run_dir, idx))
                 elif path.startswith("/api/field/") and path.endswith("/targets"):
                     idx = int(path.split("/")[3])
-                    self._send_json(_field_targets(run_dir, idx))
+                    self._send_json(_field_targets(active_run_dir, idx))
                 elif path == "/api/targets":
-                    self._send_json(_targets(run_dir))
+                    self._send_json(_targets(active_run_dir))
                 elif path.startswith("/api/spectrum/"):
                     target_id = urllib.parse.unquote(path.removeprefix("/api/spectrum/"))
-                    self._send_json(_spectrum(run_dir, target_id))
+                    self._send_json(_spectrum(active_run_dir, target_id))
                 elif path.startswith("/api/fits/"):
                     idx = int(path.split("/")[3])
-                    self._send_json(_fits_info(run_dir, idx))
+                    self._send_json(_fits_info(active_run_dir, idx))
                 else:
                     self.send_error(404)
             except Exception as exc:
@@ -111,6 +118,46 @@ def _make_handler(run_dir: Path):
             self.wfile.write(body)
 
     return ViewerHandler
+
+
+def _requested_run_dir(params: dict[str, list[str]], runs_root: Path, default_run_dir: Path) -> Path:
+    names = params.get("run") or []
+    if not names or not names[0]:
+        return default_run_dir
+    name = Path(names[0]).name
+    candidate = (runs_root / name).resolve()
+    try:
+        candidate.relative_to(runs_root.resolve())
+    except ValueError:
+        return default_run_dir
+    return candidate
+
+
+def _runs(runs_root: Path, active_run_dir: Path) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    if not runs_root.exists():
+        return rows
+    for path in sorted([p for p in runs_root.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True):
+        assembly_path = path / "spectra" / "assembly_summary.json"
+        summary = _read_json(assembly_path)
+        status = _read_json(path / "run_summary.json")
+        trial_path = path / "simp_field_trials.json"
+        rows.append(
+            {
+                "name": path.name,
+                "path": str(path),
+                "active": path.resolve() == active_run_dir.resolve(),
+                "mtime": path.stat().st_mtime,
+                "mtime_iso": _format_time(path.stat().st_mtime),
+                "has_spectra": assembly_path.exists(),
+                "has_trials": trial_path.exists(),
+                "target": status.get("target") if isinstance(status, dict) else None,
+                "measurement_rows": summary.get("measurement_rows") if isinstance(summary, dict) else None,
+                "target_count": summary.get("target_count") if isinstance(summary, dict) else None,
+                "shard_count": summary.get("shard_count") if isinstance(summary, dict) else None,
+            }
+        )
+    return rows
 
 
 def _summary(run_dir: Path) -> dict[str, object]:
@@ -778,6 +825,8 @@ def _index_html() -> str:
 <header><strong>SPHEREx Field Miner Viewer</strong></header>
 <main>
   <section>
+    <h3>Run</h3>
+    <select id="runSelect" onchange="switchRun()"></select>
     <h3>Fields</h3>
     <select id="fieldSelect"></select>
     <button onclick="loadField()">Load Field</button>
@@ -809,6 +858,14 @@ def _index_html() -> str:
 <script>
 let fields = [];
 let targets = [];
+let activeRun = new URLSearchParams(window.location.search).get('run') || '';
+
+function runQS(extra) {
+  const p = new URLSearchParams(extra || '');
+  if (activeRun) p.set('run', activeRun);
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
 
 async function getJSON(url) {
   const r = await fetch(url);
@@ -817,29 +874,39 @@ async function getJSON(url) {
 }
 
 async function init() {
-  document.getElementById('summary').textContent = JSON.stringify(await getJSON('/api/summary'), null, 2);
-  fields = await getJSON('/api/fields');
+  const runs = await getJSON('/api/runs' + runQS());
+  const rs = document.getElementById('runSelect');
+  rs.innerHTML = runs.map(r => `<option value="${r.name}">${r.name} ${r.has_spectra ? '[' + (r.measurement_rows || 0) + ' rows]' : ''}</option>`).join('');
+  if (!activeRun && runs.length) activeRun = runs[0].name;
+  rs.value = activeRun;
+  document.getElementById('summary').textContent = JSON.stringify(await getJSON('/api/summary' + runQS()), null, 2);
+  fields = await getJSON('/api/fields' + runQS());
   const fs = document.getElementById('fieldSelect');
   fs.innerHTML = fields.map(f => `<option value="${f.idx}">D${f.detector} ${f.observation_id} (${f.targets_measured})</option>`).join('');
-  targets = await getJSON('/api/targets');
+  targets = await getJSON('/api/targets' + runQS());
   const ts = document.getElementById('targetSelect');
   ts.innerHTML = targets.map(t => `<option value="${t.target_id}">${t.target_id} [${t.n_measurements}] ${Number(t.wavelength_min_um).toFixed(3)}-${Number(t.wavelength_max_um).toFixed(3)}um</option>`).join('');
-  ts.value = 'simp0136';
+  ts.value = targets.some(t => t.target_id === 'simp0136') ? 'simp0136' : (targets[0]?.target_id || '');
   await loadField();
   await loadSpectrum();
 }
 
+function switchRun() {
+  activeRun = document.getElementById('runSelect').value;
+  init();
+}
+
 async function loadField() {
   const idx = document.getElementById('fieldSelect').value || 0;
-  document.getElementById('fieldImage').src = `/api/field/${idx}/image.png?ts=${Date.now()}`;
-  document.getElementById('fitsInfo').textContent = JSON.stringify(await getJSON(`/api/fits/${idx}`), null, 2);
-  const rows = await getJSON(`/api/field/${idx}/targets`);
+  document.getElementById('fieldImage').src = `/api/field/${idx}/image.png` + runQS(`ts=${Date.now()}`);
+  document.getElementById('fitsInfo').textContent = JSON.stringify(await getJSON(`/api/fits/${idx}` + runQS()), null, 2);
+  const rows = await getJSON(`/api/field/${idx}/targets` + runQS());
   document.getElementById('fieldTargets').innerHTML = makeTable(rows.slice(0, 25), ['target_id','target_type','x_pix','y_pix','selected_for_photometry']);
 }
 
 async function loadSpectrum() {
   const targetId = document.getElementById('targetSelect').value;
-  const data = await getJSON(`/api/spectrum/${encodeURIComponent(targetId)}`);
+  const data = await getJSON(`/api/spectrum/${encodeURIComponent(targetId)}` + runQS());
   drawPlot(data.rows || []);
   document.getElementById('spectrumTable').innerHTML = makeTable((data.rows || []).slice(0, 40), ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','psf_flux_uJy','psf_flux_unc_uJy','psf_fit_status','detector','observation_id']);
 }
@@ -1014,8 +1081,9 @@ def _live_html() -> str:
 <body>
 <header>
   <h1>SPHEREx Live Worker Deck</h1>
-  <div class="stats">
-    <div class="pill" id="frameStat">frames --</div>
+	  <div class="stats">
+	    <select class="pill" id="runSelect" onchange="switchRun()"></select>
+	    <div class="pill" id="frameStat">frames --</div>
     <div class="pill" id="workerStat">workers --</div>
     <div class="pill" id="pointStat">spectra --</div>
   </div>
@@ -1042,6 +1110,14 @@ def _live_html() -> str:
 const W = 2048;
 const H = 2048;
 let lastData = null;
+let activeRun = new URLSearchParams(window.location.search).get('run') || '';
+
+function runQS(extra) {
+  const p = new URLSearchParams(extra || '');
+  if (activeRun) p.set('run', activeRun);
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
 
 async function getJSON(url) {
   const r = await fetch(url, {cache: 'no-store'});
@@ -1051,9 +1127,10 @@ async function getJSON(url) {
 
 async function tick() {
   try {
+    await refreshRuns();
     const [live, run] = await Promise.all([
-      getJSON('/api/live/status?ts=' + Date.now()),
-      getJSON('/api/run/status?ts=' + Date.now())
+      getJSON('/api/live/status' + runQS('ts=' + Date.now())),
+      getJSON('/api/run/status' + runQS('ts=' + Date.now()))
     ]);
     lastData = live;
     lastData.run = run;
@@ -1061,6 +1138,23 @@ async function tick() {
   } catch (e) {
     document.getElementById('raw').textContent = e.stack || String(e);
   }
+}
+
+async function refreshRuns() {
+  const runs = await getJSON('/api/runs' + runQS());
+  const rs = document.getElementById('runSelect');
+  if (!activeRun && runs.length) activeRun = runs[0].name;
+  const currentOptions = Array.from(rs.options).map(o => o.value).join('\\n');
+  const nextOptions = runs.map(r => r.name).join('\\n');
+  if (currentOptions !== nextOptions) {
+    rs.innerHTML = runs.map(r => `<option value="${r.name}">${r.name}</option>`).join('');
+  }
+  rs.value = activeRun;
+}
+
+function switchRun() {
+  activeRun = document.getElementById('runSelect').value;
+  tick();
 }
 
 function render(data) {
@@ -1126,7 +1220,7 @@ function frameHTML(f) {
   return `<article class="frame">
     <div class="frame-head"><div title="${escapeHtml(f.image_id || '')}">${escapeHtml(shortId)}</div><div>${escapeHtml(f.status || '')}</div></div>
     <div class="stage">
-      <img src="/api/live/frame/${encodeURIComponent(f.image_id)}.jpg?ts=${Math.floor(Date.now()/30000)}" alt="">
+      <img src="/api/live/frame/${encodeURIComponent(f.image_id)}.jpg${runQS('ts=' + Math.floor(Date.now()/30000))}" alt="">
       <svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${circles}</svg>
     </div>
     <div class="progress"><div style="width:${Math.max(0, Math.min(100, progress))}%"></div></div>
@@ -1285,6 +1379,8 @@ def _spectra_html() -> str:
       <button onclick="selectTarget('simp0136')">SIMP</button>
       <button onclick="refreshAll()">Refresh</button>
     </div>
+    <label for="runSelect">Run</label>
+    <select id="runSelect" onchange="switchRun()"></select>
     <label for="filter">Filter targets</label>
     <input id="filter" placeholder="target id, gaia, simp..." oninput="renderTargetList()">
     <label for="sort">Sort</label>
@@ -1327,6 +1423,14 @@ def _spectra_html() -> str:
 let targets = [];
 let current = null;
 let currentRows = [];
+let activeRun = new URLSearchParams(window.location.search).get('run') || '';
+
+function runQS(extra) {
+  const p = new URLSearchParams(extra || '');
+  if (activeRun) p.set('run', activeRun);
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
 
 async function getJSON(url) {
   const r = await fetch(url, {cache: 'no-store'});
@@ -1335,11 +1439,26 @@ async function getJSON(url) {
 }
 
 async function refreshAll() {
-  document.getElementById('runSummary').textContent = JSON.stringify(await getJSON('/api/summary'), null, 2);
-  targets = await getJSON('/api/targets');
+  const runs = await getJSON('/api/runs' + runQS());
+  const rs = document.getElementById('runSelect');
+  if (!activeRun && runs.length) activeRun = runs[0].name;
+  rs.innerHTML = runs.map(r => `<option value="${r.name}">${r.name} ${r.has_spectra ? '[' + (r.measurement_rows || 0) + ' rows]' : ''}</option>`).join('');
+  rs.value = activeRun;
+  document.getElementById('runSummary').textContent = JSON.stringify(await getJSON('/api/summary' + runQS()), null, 2);
+  targets = await getJSON('/api/targets' + runQS());
   renderTargetList();
-  if (!current) selectTarget('simp0136');
+  if (!current || !targets.some(t => t.target_id === current)) {
+    const preferred = targets.some(t => t.target_id === 'simp0136') ? 'simp0136' : (targets[0]?.target_id || null);
+    if (preferred) selectTarget(preferred);
+  }
   else await selectTarget(current);
+}
+
+function switchRun() {
+  activeRun = document.getElementById('runSelect').value;
+  current = null;
+  currentRows = [];
+  refreshAll();
 }
 
 function renderTargetList() {
@@ -1372,7 +1491,7 @@ async function loadSelected() {
 async function selectTarget(targetId) {
   current = targetId;
   document.getElementById('targetList').value = targetId;
-  const data = await getJSON('/api/spectrum/' + encodeURIComponent(targetId));
+  const data = await getJSON('/api/spectrum/' + encodeURIComponent(targetId) + runQS());
   currentRows = data.rows || [];
   renderSummary();
   redraw();
@@ -1482,7 +1601,7 @@ function drawPlot(rows) {
 }
 
 function renderTable() {
-  const cols = ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','psf_flux_uJy','psf_flux_unc_uJy','fatal_flag_present','detector','observation_id','image_id'];
+  const cols = ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','fatal_flag_present','detector','phot_g_mean_mag','bp_rp','pmra_masyr','pmdec_masyr','coordinate_propagation','observation_id','image_id'];
   document.getElementById('pointTable').innerHTML = makeTable([...currentRows].sort((a,b)=>num(a.cwave_um)-num(b.cwave_um)).slice(0, 260), cols);
 }
 

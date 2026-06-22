@@ -273,6 +273,7 @@ def run_field_smoke_test(
     measured = [trial for trial in trials if trial.get("status") == "measured"]
     summary = {
         "target": target,
+        "run_name": cfg.run_name,
         "release": release,
         "trial_count": len(trials),
         "measured_count": len(measured),
@@ -334,6 +335,7 @@ def run_multifield_smoke_test(
 @app.command("run-depth-test")
 def run_depth_test(
     target: str = typer.Option("simp0136", help="Manual target id."),
+    run_name: str | None = typer.Option(None, help="Output run name under cache_root/runs."),
     release: str = typer.Option("qr2", help="SPHEREx release."),
     limit_fields: int = typer.Option(220, min=1, help="Number of SIA candidates to evaluate/process."),
     max_gaia_sources: int = typer.Option(100, min=0, help="Fixed Gaia targets carried through every field."),
@@ -347,6 +349,7 @@ def run_depth_test(
     """Run a deeper SIMP-centered spectral pass using one fixed target set."""
     summary = _run_depth_pipeline(
         target=target,
+        run_name=run_name,
         release=release,
         limit_fields=limit_fields,
         max_gaia_sources=max_gaia_sources,
@@ -363,6 +366,7 @@ def run_depth_test(
 @app.command("run-benchmark")
 def run_benchmark(
     target: str = typer.Option("simp0136", help="Manual target id."),
+    run_name: str | None = typer.Option(None, help="Output run name under cache_root/runs."),
     release: str = typer.Option("qr2", help="SPHEREx release."),
     limit_fields: int = typer.Option(30, min=1, help="Number of SIA candidates to evaluate/process."),
     max_gaia_sources: int = typer.Option(100, min=0, help="Fixed Gaia targets carried through every field."),
@@ -378,6 +382,7 @@ def run_benchmark(
     wall_start = time.perf_counter()
     summary = _run_depth_pipeline(
         target=target,
+        run_name=run_name,
         release=release,
         limit_fields=limit_fields,
         max_gaia_sources=max_gaia_sources,
@@ -414,6 +419,7 @@ def run_benchmark(
 def _run_depth_pipeline(
     *,
     target: str,
+    run_name: str | None,
     release: str,
     limit_fields: int,
     max_gaia_sources: int,
@@ -425,6 +431,8 @@ def _run_depth_pipeline(
     redownload: bool,
 ) -> dict[str, object]:
     cfg = load_config(cache_root)
+    if run_name is not None:
+        cfg.run_name = run_name
     cfg.release = release
     cfg.enable_psf_photometry = enable_psf
     ensure_cache_dirs(cfg.cache_root)
@@ -480,6 +488,7 @@ def _run_depth_pipeline(
         "assembly": assembly,
         "run_dir": str(cfg.smoke_run_dir),
     }
+    (cfg.smoke_run_dir / "run_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     return summary
 
 
@@ -487,10 +496,13 @@ def _run_depth_pipeline(
 def viewer(
     host: str = typer.Option("0.0.0.0", help="Bind host."),
     port: int = typer.Option(8765, help="Bind port."),
+    run_name: str | None = typer.Option(None, help="Initial run name under cache_root/runs."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
 ) -> None:
     """Serve a local web viewer for smoke run artifacts."""
     cfg = load_config(cache_root)
+    if run_name is not None:
+        cfg.run_name = run_name
     serve_viewer(cfg.smoke_run_dir, host, port)
 
 

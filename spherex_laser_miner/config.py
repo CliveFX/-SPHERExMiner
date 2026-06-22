@@ -12,6 +12,7 @@ DEFAULT_CACHE_ROOT = Path("/mnt/niroseti/spherex_cache")
 
 class MinerConfig(BaseModel):
     cache_root: Path = Field(default_factory=lambda: Path(os.getenv("SPHEREX_CACHE_ROOT", DEFAULT_CACHE_ROOT)))
+    run_name: str = Field(default_factory=lambda: os.getenv("SPHEREX_RUN_NAME", "smoke_simp_field"))
     release: str = Field(default_factory=lambda: os.getenv("SPHEREX_RELEASE", "qr2"))
     filter_profile: str = Field(default_factory=lambda: os.getenv("FILTER_PROFILE", "broad_debug"))
     photometry_backend: Literal["cpu_numpy"] = "cpu_numpy"
@@ -40,7 +41,7 @@ class MinerConfig(BaseModel):
 
     @property
     def smoke_run_dir(self) -> Path:
-        return self.cache_root / "runs" / "smoke_simp_field"
+        return self.cache_root / "runs" / self.run_name
 
 
 def load_config(cache_root: Path | None = None) -> MinerConfig:
