@@ -59,9 +59,11 @@ def run_trial_field_worker(
     target_rows_override: list[dict[str, Any]] | None = None,
     gaia_g_min: float = 8.0,
     gaia_g_max: float = 19.0,
+    path_overrides: dict[str, str] | None = None,
 ) -> dict[str, object]:
     candidate = dict(trial["candidate"])
-    local_path = Path(str(trial["local_path"]))
+    original_local_path = Path(str(trial["local_path"]))
+    local_path = Path(path_overrides.get(str(original_local_path), str(original_local_path))) if path_overrides else original_local_path
     gaia_cache_path = (
         cfg.cache_root
         / "gaia"
@@ -291,6 +293,8 @@ def run_trial_field_worker(
                     "photometry_backend": cfg.photometry_backend,
                     "diagnostic_aperture_enabled": cfg.enable_diagnostic_aperture,
                     "input_file_path": str(local_path),
+                    "original_input_file_path": str(original_local_path),
+                    "path_override_applied": str(local_path) != str(original_local_path),
                     "pipeline_version": "0.1.0",
                     **aperture_json,
                     **calibrated.to_json_dict(),
@@ -329,6 +333,8 @@ def run_trial_field_worker(
         "manual_target_id": target.target_id,
         "image_id": local_path.stem,
         "input_file_path": str(local_path),
+        "original_input_file_path": str(original_local_path),
+        "path_override_applied": str(local_path) != str(original_local_path),
         "candidate": candidate,
         "gaia_cache_path": str(gaia_cache_path),
         "output_dir": str(output_dir),
@@ -353,6 +359,7 @@ def run_multi_trial_field_workers(
     target_rows_override: list[dict[str, Any]] | None = None,
     gaia_g_min: float = 8.0,
     gaia_g_max: float = 19.0,
+    path_overrides: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
     reset_live_status(cfg.smoke_run_dir)
     shard_root = cfg.smoke_run_dir / "field_shards"
@@ -379,6 +386,7 @@ def run_multi_trial_field_workers(
             target_rows_override=target_rows_override,
             gaia_g_min=gaia_g_min,
             gaia_g_max=gaia_g_max,
+            path_overrides=path_overrides,
         )
 
     worker_count = max(1, min(int(max_field_workers), len(selected_trials) or 1))

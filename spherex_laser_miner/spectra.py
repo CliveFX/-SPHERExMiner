@@ -71,6 +71,8 @@ def assemble_spectra_from_jobs(run_dir: Path, jobs: list[dict[str, object]]) -> 
         "flags_summary",
         "zodi_model_at_target",
         "input_file_path",
+        "original_input_file_path",
+        "path_override_applied",
         "shard_path",
     ]
     available_cols = [col for col in spectra_cols if col in all_measurements.columns]

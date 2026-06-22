@@ -348,6 +348,7 @@ def run_depth_test(
     enable_diagnostic_aperture: bool = typer.Option(False, help="Run raw diagnostic aperture QA photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
+    path_overrides: Path | None = typer.Option(None, help="JSON map from raw FITS path to replacement FITS path."),
 ) -> None:
     """Run a deeper SIMP-centered spectral pass using one fixed target set."""
     summary = _run_depth_pipeline(
@@ -365,6 +366,7 @@ def run_depth_test(
         enable_diagnostic_aperture=enable_diagnostic_aperture,
         cache_root=cache_root,
         redownload=redownload,
+        path_overrides=path_overrides,
     )
     typer.echo(json.dumps(summary, indent=2, sort_keys=True))
 
@@ -386,6 +388,7 @@ def run_benchmark(
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
     output: Path | None = typer.Option(None, help="Optional benchmark summary JSON output."),
+    path_overrides: Path | None = typer.Option(None, help="JSON map from raw FITS path to replacement FITS path."),
 ) -> None:
     """Run one controlled benchmark pass and write throughput metrics."""
     wall_start = time.perf_counter()
@@ -404,6 +407,7 @@ def run_benchmark(
         enable_diagnostic_aperture=enable_diagnostic_aperture,
         cache_root=cache_root,
         redownload=redownload,
+        path_overrides=path_overrides,
     )
     wall_elapsed = time.perf_counter() - wall_start
     measurements = int(dict(summary.get("assembly") or {}).get("measurement_rows") or 0)
@@ -444,6 +448,7 @@ def _run_depth_pipeline(
     enable_diagnostic_aperture: bool,
     cache_root: Path | None,
     redownload: bool,
+    path_overrides: Path | None = None,
 ) -> dict[str, object]:
     cfg = load_config(cache_root)
     if run_name is not None:
@@ -467,6 +472,7 @@ def _run_depth_pipeline(
     measured_trials = [trial for trial in trials if trial.get("status") == "measured"]
     if not measured_trials:
         raise typer.BadParameter("No measured parent fields available for depth run.")
+    path_override_map = _load_path_overrides(path_overrides)
     best_trial = max(
         measured_trials,
         key=lambda trial: (
@@ -492,6 +498,7 @@ def _run_depth_pipeline(
         target_rows_override=fixed_targets,
         gaia_g_min=gaia_g_min,
         gaia_g_max=gaia_g_max,
+        path_overrides=path_override_map,
     )
     assembly = assemble_spectra_from_jobs(cfg.smoke_run_dir, jobs)
     summary = {
@@ -508,6 +515,8 @@ def _run_depth_pipeline(
         "warp_devices": list(cfg.warp_devices),
         "psf_enabled": enable_psf,
         "diagnostic_aperture_enabled": enable_diagnostic_aperture,
+        "path_overrides_path": str(path_overrides) if path_overrides is not None else None,
+        "path_override_count": len(path_override_map),
         "assembly": assembly,
         "run_dir": str(cfg.smoke_run_dir),
     }
@@ -537,6 +546,17 @@ def _is_writable_dir(path: Path) -> bool:
         return probe.read_text(encoding="utf-8") == "ok\n"
     finally:
         probe.unlink(missing_ok=True)
+
+
+def _load_path_overrides(path: Path | None) -> dict[str, str]:
+    if path is None:
+        return {}
+    if not path.exists():
+        raise typer.BadParameter(f"Path override JSON not found: {path}")
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise typer.BadParameter("Path override JSON must be an object mapping original path to replacement path")
+    return {str(key): str(value) for key, value in data.items()}
 
 
 def _check_imports() -> dict[str, bool]:
