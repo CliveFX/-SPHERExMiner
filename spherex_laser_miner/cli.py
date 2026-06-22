@@ -343,6 +343,7 @@ def run_depth_test(
     gaia_g_max: float = typer.Option(10.0, help="Maximum Gaia G magnitude for fixed depth targets."),
     max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
     enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
+    enable_diagnostic_aperture: bool = typer.Option(False, help="Run raw diagnostic aperture QA photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
 ) -> None:
@@ -357,6 +358,7 @@ def run_depth_test(
         gaia_g_max=gaia_g_max,
         max_field_workers=max_field_workers,
         enable_psf=enable_psf,
+        enable_diagnostic_aperture=enable_diagnostic_aperture,
         cache_root=cache_root,
         redownload=redownload,
     )
@@ -374,6 +376,7 @@ def run_benchmark(
     gaia_g_max: float = typer.Option(14.0, help="Maximum Gaia G magnitude for fixed benchmark targets."),
     max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
     enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
+    enable_diagnostic_aperture: bool = typer.Option(False, help="Run raw diagnostic aperture QA photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
     output: Path | None = typer.Option(None, help="Optional benchmark summary JSON output."),
@@ -390,6 +393,7 @@ def run_benchmark(
         gaia_g_max=gaia_g_max,
         max_field_workers=max_field_workers,
         enable_psf=enable_psf,
+        enable_diagnostic_aperture=enable_diagnostic_aperture,
         cache_root=cache_root,
         redownload=redownload,
     )
@@ -427,6 +431,7 @@ def _run_depth_pipeline(
     gaia_g_max: float,
     max_field_workers: int,
     enable_psf: bool,
+    enable_diagnostic_aperture: bool,
     cache_root: Path | None,
     redownload: bool,
 ) -> dict[str, object]:
@@ -435,6 +440,7 @@ def _run_depth_pipeline(
         cfg.run_name = run_name
     cfg.release = release
     cfg.enable_psf_photometry = enable_psf
+    cfg.enable_diagnostic_aperture = enable_diagnostic_aperture
     ensure_cache_dirs(cfg.cache_root)
     manual_target = get_manual_target(cfg.manual_targets_path, target)
     trials = evaluate_target_fields(
@@ -485,6 +491,7 @@ def _run_depth_pipeline(
         "field_job_count": len(jobs),
         "max_field_workers": max_field_workers,
         "psf_enabled": enable_psf,
+        "diagnostic_aperture_enabled": enable_diagnostic_aperture,
         "assembly": assembly,
         "run_dir": str(cfg.smoke_run_dir),
     }

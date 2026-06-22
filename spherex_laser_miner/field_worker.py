@@ -199,20 +199,29 @@ def run_trial_field_worker(
                 x_pix = float(row["x_pix"])
                 y_pix = float(row["y_pix"])
                 cwave_um, cband_um = _wavelength_at(spectral_wcs, x_pix, y_pix)
-                tp = time.perf_counter()
-                aperture = aperture_measure(
-                    image=image,
-                    variance=variance,
-                    flags=flags,
-                    zodi=zodi,
-                    x_pix=x_pix,
-                    y_pix=y_pix,
-                    aperture_radius_pix=cfg.aperture_radius_pix,
-                    annulus_inner_pix=cfg.annulus_inner_pix,
-                    annulus_outer_pix=cfg.annulus_outer_pix,
-                    fatal_flag_bits=cfg.fatal_flag_bits,
-                )
-                perf["aperture_sec"] += time.perf_counter() - tp
+                aperture_json = {
+                    "aperture_status": "diagnostic_disabled",
+                    "aperture_flux": None,
+                    "aperture_flux_unc": None,
+                    "aperture_flux_unit": None,
+                    "flags_summary": None,
+                }
+                if cfg.enable_diagnostic_aperture:
+                    tp = time.perf_counter()
+                    aperture = aperture_measure(
+                        image=image,
+                        variance=variance,
+                        flags=flags,
+                        zodi=zodi,
+                        x_pix=x_pix,
+                        y_pix=y_pix,
+                        aperture_radius_pix=cfg.aperture_radius_pix,
+                        annulus_inner_pix=cfg.annulus_inner_pix,
+                        annulus_outer_pix=cfg.annulus_outer_pix,
+                        fatal_flag_bits=cfg.fatal_flag_bits,
+                    )
+                    perf["aperture_sec"] += time.perf_counter() - tp
+                    aperture_json = aperture.to_json_dict()
                 tp = time.perf_counter()
                 calibrated = calibrated_aperture_measure(
                     flux_ujy=flux_ujy,
@@ -257,10 +266,12 @@ def run_trial_field_worker(
                     "sapm_file_path": str(sapm_path),
                     "image_unit": str(image_hdu.header.get("BUNIT", "")),
                     "photometry_backend": cfg.photometry_backend,
+                    "diagnostic_aperture_enabled": cfg.enable_diagnostic_aperture,
                     "input_file_path": str(local_path),
                     "pipeline_version": "0.1.0",
-                    **aperture.to_json_dict(),
+                    **aperture_json,
                     **calibrated.to_json_dict(),
+                    "fatal_flag_present": calibrated.n_bad_aperture_pixels_calibrated > 0,
                     **psf.to_json_dict(),
                 }
                 measurement_rows.append(measurement)
