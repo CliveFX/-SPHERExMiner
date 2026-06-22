@@ -29,6 +29,7 @@ else:
 MAX_RADIUS_PIX = 6
 SUBPIX = 5
 ANNULUS_MAX_PIX = 128
+SIGMA_CLIP_ITERS = 5
 
 
 if wp is not None:
@@ -66,6 +67,8 @@ if wp is not None:
         ann_sumsq = float(0.0)
         ann_count = int(0)
         ann_values = wp.zeros(shape=ANNULUS_MAX_PIX, dtype=wp.float32)
+        ann_active = wp.zeros(shape=ANNULUS_MAX_PIX, dtype=wp.int32)
+        clipped_values = wp.zeros(shape=ANNULUS_MAX_PIX, dtype=wp.float32)
 
         for dy in range(-MAX_RADIUS_PIX, MAX_RADIUS_PIX + 1):
             for dx in range(-MAX_RADIUS_PIX, MAX_RADIUS_PIX + 1):
@@ -87,6 +90,7 @@ if wp is not None:
                         ann_sumsq += value * value
                         if ann_count < ANNULUS_MAX_PIX:
                             ann_values[ann_count] = value
+                            ann_active[ann_count] = 1
                         ann_count += 1
 
                     if good:
@@ -117,27 +121,66 @@ if wp is not None:
             return
 
         usable_ann_count = wp.min(ann_count, ANNULUS_MAX_PIX)
-        for i in range(ANNULUS_MAX_PIX):
-            if i < usable_ann_count:
-                min_j = i
-                min_v = ann_values[i]
-                for j in range(ANNULUS_MAX_PIX):
-                    if j >= i and j < usable_ann_count:
-                        v = ann_values[j]
-                        if v < min_v:
-                            min_v = v
-                            min_j = j
-                tmp = ann_values[i]
-                ann_values[i] = ann_values[min_j]
-                ann_values[min_j] = tmp
+        bkg = float(0.0)
+        ann_std = float(0.0)
+        active_count = int(0)
+        for clip_iter in range(SIGMA_CLIP_ITERS):
+            active_count = int(0)
+            for i in range(ANNULUS_MAX_PIX):
+                if i < usable_ann_count and ann_active[i] == 1:
+                    clipped_values[active_count] = ann_values[i]
+                    active_count += 1
+            if active_count <= 0:
+                out_flux[tid] = 0.0
+                out_unc[tid] = 0.0
+                out_bkg[tid] = 0.0
+                out_area[tid] = ap_area
+                out_bad[tid] = bad_ap
+                out_status[tid] = 1
+                return
+            for i in range(ANNULUS_MAX_PIX):
+                if i < active_count:
+                    min_j = i
+                    min_v = clipped_values[i]
+                    for j in range(ANNULUS_MAX_PIX):
+                        if j >= i and j < active_count:
+                            v = clipped_values[j]
+                            if v < min_v:
+                                min_v = v
+                                min_j = j
+                    tmp = clipped_values[i]
+                    clipped_values[i] = clipped_values[min_j]
+                    clipped_values[min_j] = tmp
+            mid = active_count / 2
+            bkg = clipped_values[mid]
+            if active_count > 1 and active_count - 2 * mid == 0:
+                bkg = 0.5 * (clipped_values[mid - 1] + clipped_values[mid])
 
-        mid = usable_ann_count / 2
-        bkg = ann_values[mid]
-        if usable_ann_count > 1 and usable_ann_count - 2 * mid == 0:
-            bkg = 0.5 * (ann_values[mid - 1] + ann_values[mid])
-        ann_mean = ann_sum / float(ann_count)
-        ann_var = wp.max(float(0.0), ann_sumsq / float(ann_count) - ann_mean * ann_mean)
-        total_var = ap_var_sum + ap_area * ap_area * ann_var / float(ann_count)
+            mean = float(0.0)
+            sumsq = float(0.0)
+            for i in range(ANNULUS_MAX_PIX):
+                if i < active_count:
+                    v = clipped_values[i]
+                    mean += v
+                    sumsq += v * v
+            mean = mean / float(active_count)
+            ann_var = wp.max(float(0.0), sumsq / float(active_count) - mean * mean)
+            ann_std = wp.sqrt(ann_var)
+
+            changed = int(0)
+            if ann_std > 0.0:
+                lower = bkg - 3.0 * ann_std
+                upper = bkg + 3.0 * ann_std
+                for i in range(ANNULUS_MAX_PIX):
+                    if i < usable_ann_count and ann_active[i] == 1:
+                        v = ann_values[i]
+                        if v < lower or v > upper:
+                            ann_active[i] = 0
+                            changed += 1
+            if changed == 0:
+                break
+
+        total_var = ap_var_sum + ap_area * ap_area * ann_std * ann_std / float(active_count)
         out_flux[tid] = ap_sum - bkg * ap_area
         out_unc[tid] = wp.sqrt(wp.max(float(0.0), total_var))
         out_bkg[tid] = bkg
@@ -150,7 +193,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Benchmark a more CPU-like Warp aperture kernel: subpixel aperture weights, calibrated "
-            "uJy image, bad-pixel mask, variance propagation, and mean annulus background. The CPU "
+            "uJy image, bad-pixel mask, variance propagation, and sigma-clipped median annulus background. The CPU "
             "reference still uses photutils exact aperture + sigma-clipped median background."
         )
     )
@@ -237,8 +280,7 @@ def main() -> None:
         "input_file_path": frame.input_file_path,
         "algorithm": (
             "Warp calibrated-ish aperture: 5x5 subpixel aperture weighting, center-pixel annulus, "
-            "mean background, bad-pixel mask, variance propagation. Not yet photutils exact + "
-            "sigma-clipped median."
+            "sigma-clipped median background, bad-pixel mask, variance propagation. Not yet photutils exact geometry."
         ),
         "target_counts": target_counts,
         "devices": devices,
