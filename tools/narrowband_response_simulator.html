@@ -165,15 +165,14 @@
     <label for="backgroundOpacity">Background opacity <span id="backgroundOpacityVal"></span></label>
     <input id="backgroundOpacity" type="range" min="0" max="1" step="0.05" value="0.45">
 
-    <label for="peakDisplay">Peak display</label>
-    <select id="peakDisplay">
-      <option value="simulated">On calibrated samples</option>
-      <option value="background" selected>Added to captured spectrum</option>
-      <option value="both">Both</option>
-    </select>
+    <label for="showMainSpectrum">Show main spectra</label>
+    <input id="showMainSpectrum" type="checkbox" checked>
 
-    <label for="showContinuum">Show continuum</label>
-    <input id="showContinuum" type="checkbox" checked>
+    <label for="showBackgroundSpectrum">Show background spectra</label>
+    <input id="showBackgroundSpectrum" type="checkbox" checked>
+
+    <label for="addSignal">Add narrowband signal</label>
+    <input id="addSignal" type="checkbox" checked>
 
     <label for="lineWave">Line wavelength <span id="lineWaveVal"></span></label>
     <input id="lineWave" type="range" min="0.744" max="5.002" step="0.001" value="1.064">
@@ -203,7 +202,7 @@
       <option value="approx">Design approximation</option>
     </select>
 
-    <label for="channels">Channels per band <span id="channelsVal"></span></label>
+    <label for="channels">Approx channels per band <span id="channelsVal"></span></label>
     <input id="channels" type="range" min="8" max="34" step="1" value="17">
 
     <label for="responseModel">Response model</label>
@@ -283,7 +282,7 @@ let calibrationMeta = null;
 let calibrationLoadStatus = 'loading QR2 calibration...';
 let backgroundSpectra = [];
 let backgroundLoadStatus = 'loading captured spectra...';
-const controls = ['backgroundSpectrum','backgroundOpacity','peakDisplay','showContinuum','lineWave','lineAmp','lineWidth','continuum','slope','noise','visits','calibrationMode','channels','responseModel','quality'];
+const controls = ['backgroundSpectrum','backgroundOpacity','showMainSpectrum','showBackgroundSpectrum','addSignal','lineWave','lineAmp','lineWidth','continuum','slope','noise','visits','calibrationMode','channels','responseModel','quality'];
 for (const id of controls) $(id).addEventListener('input', update);
 $('preset1064').addEventListener('click', () => { $('lineWave').value = 1.064; update(); });
 $('preset1083').addEventListener('click', () => { $('lineWave').value = 1.083; update(); });
@@ -473,8 +472,7 @@ function deterministicNoise(i, sigma) {
 
 function modelRows() {
   const lineWave = Number($('lineWave').value);
-  const peakDisplay = $('peakDisplay').value;
-  const lineAmp = peakDisplay === 'background' ? 0 : Number($('lineAmp').value);
+  const lineAmp = $('addSignal').checked ? Number($('lineAmp').value) : 0;
   const lineWidthUm = Number($('lineWidth').value) / 1000;
   const noise = Number($('noise').value);
   return makeSamples().map((s, i) => {
@@ -503,6 +501,7 @@ function updateLabels() {
   $('visitsVal').textContent = `${Number($('visits').value)}`;
   $('channelsVal').textContent = $('calibrationMode').value === 'approx' ? `${Number($('channels').value)}` : '17 QR2';
   $('backgroundOpacityVal').textContent = `${Math.round(Number($('backgroundOpacity').value) * 100)}%`;
+  $('channels').disabled = $('calibrationMode').value !== 'approx';
 }
 
 function update() {
@@ -521,7 +520,7 @@ function drawMetrics(rows) {
   const noise = Number($('noise').value);
   const top = [...rows].sort((a,b) => b.response - a.response).slice(0, 12);
   const best = top[0];
-  const lineAmp = Number($('lineAmp').value);
+  const lineAmp = $('addSignal').checked ? Number($('lineAmp').value) : 0;
   const templatePower = rows.reduce((acc,r) => acc + (lineAmp * r.response / Math.max(1, noise)) ** 2, 0);
   const hits = rows.filter(r => r.response > 0.25).length;
   const independentBands = new Set(top.filter(r => r.response > 0.05).map(r => r.band)).size;
@@ -542,17 +541,18 @@ function drawSpectrum(rows) {
   clear(svg);
   const W = 1100, H = 470, m = {l:74,r:24,t:28,b:52};
   const xmin = 0.70, xmax = 5.08;
+  const showMain = $('showMainSpectrum').checked;
+  const showBackground = $('showBackgroundSpectrum').checked;
+  const addSignal = $('addSignal').checked;
   const bg = selectedBackground();
-  const bgPoints = bg ? bg.points.filter(p => Number.isFinite(Number(p.wave)) && Number.isFinite(Number(p.flux))) : [];
-  const peakDisplay = $('peakDisplay').value;
-  const showSyntheticSamples = peakDisplay !== 'background' || $('showContinuum').checked;
-  const injectPeak = (peakDisplay === 'background' || peakDisplay === 'both') && bgPoints.length > 0;
+  const bgPoints = showBackground && bg ? bg.points.filter(p => Number.isFinite(Number(p.wave)) && Number.isFinite(Number(p.flux))) : [];
+  const injectPeak = addSignal && bgPoints.length > 0;
   const injectedBgPoints = injectPeak
     ? bgPoints.map(p => ({...p, injectedFlux: Number(p.flux) + Number($('lineAmp').value) * responseForMeasurementPoint(p)}))
     : [];
   const ymax = Math.max(
-    ...rows.map(r => r.total),
-    ...rows.map(r => r.noiselessTotal),
+    ...(showMain ? rows.map(r => r.total) : []),
+    ...(showMain ? rows.map(r => r.noiselessTotal) : []),
     ...bgPoints.map(p => Number(p.flux)),
     ...injectedBgPoints.map(p => Number(p.injectedFlux)),
     Number($('continuum').value)
@@ -562,8 +562,8 @@ function drawSpectrum(rows) {
   const y = v => H - m.b - (v - ymin) / (ymax - ymin || 1) * (H - m.t - m.b);
   grid(svg, W, H, m, x, y, xmin, xmax, ymin, ymax, 'Flux density (uJy)');
 
-  const cont = [];
-  if ($('showContinuum').checked) {
+  if (showMain) {
+    const cont = [];
     for (let i = 0; i <= 240; i++) {
       const wave = xmin + i / 240 * (xmax - xmin);
       cont.push(`${x(wave)},${y(continuumAt(wave))}`);
@@ -616,7 +616,7 @@ function drawSpectrum(rows) {
     add(svg, 'text', {x:m.l+10, y:m.t+18, fill:'#7dd3fc'}, bg.label || bg.target_id);
   }
 
-  if (showSyntheticSamples) {
+  if (showMain) {
     const line = rows.map(r => `${x(r.center)},${y(r.noiselessTotal)}`).join(' ');
     add(svg, 'polyline', {points: line, fill:'none', stroke:'#e6f1ff', 'stroke-width':1.5, opacity:.7});
     for (const r of rows) {
