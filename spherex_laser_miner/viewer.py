@@ -685,15 +685,112 @@ def _targets(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
             df[col] = df[col].fillna(0).astype(int)
     if "flagged_fraction" in df:
         df["flagged_fraction"] = df["flagged_fraction"].fillna(0.0)
+    injection_summary = _injection_target_summary(run_dir)
+    if not injection_summary.empty:
+        df = df.merge(injection_summary, on="target_id", how="left")
+    for col in ("injected_signal_count", "injected_frame_count"):
+        if col in df:
+            df[col] = df[col].fillna(0).astype(int)
+    if "is_injected_target" in df:
+        df["is_injected_target"] = df["is_injected_target"].fillna(False).astype(bool)
+    else:
+        df["is_injected_target"] = False
+    for col in ("injected_line_families", "injected_lines_nm"):
+        if col in df:
+            df[col] = df[col].fillna("")
     if q:
         query_mask = df["target_id"].astype(str).str.lower().str.contains(q, regex=False)
         if "target_type" in df.columns:
             query_mask |= df["target_type"].astype(str).str.lower().str.contains(q, regex=False)
+        if "injected_line_families" in df.columns:
+            query_mask |= df["injected_line_families"].astype(str).str.lower().str.contains(q, regex=False)
         df = df[query_mask]
     total = int(len(df))
     df = _sort_targets_df(df, sort)
     rows = df.iloc[offset : offset + limit].to_dict(orient="records")
     return {"rows": rows, "total": total, "limit": limit, "offset": offset, "sort": sort, "q": q}
+
+
+def _injection_manifest_candidates(run_dir: Path) -> list[Path]:
+    candidates = [
+        run_dir / "injection_manifest.json",
+        run_dir / "injections" / "injection_manifest.json",
+    ]
+    summary_path = run_dir / "run_summary.json"
+    if summary_path.exists():
+        try:
+            summary = _read_json(summary_path)
+            overrides_path = summary.get("path_overrides_path")
+            if overrides_path:
+                candidates.append(Path(str(overrides_path)).parent / "injection_manifest.json")
+        except Exception:
+            pass
+    out: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            out.append(path)
+    return out
+
+
+def _injection_target_summary(run_dir: Path) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for manifest_path in _injection_manifest_candidates(run_dir):
+        if not manifest_path.exists():
+            continue
+        try:
+            manifest = _read_json(manifest_path)
+        except Exception:
+            continue
+        injections = manifest.get("injections")
+        if isinstance(injections, list):
+            for injection in injections:
+                frames = injection.get("frames") or []
+                rows.append(
+                    {
+                        "target_id": str(injection.get("target_id")),
+                        "line_family": str(injection.get("line_family") or ""),
+                        "line_nm": injection.get("injected_line_nm"),
+                        "find_me_snr": injection.get("find_me_snr"),
+                        "frame_count": len([frame for frame in frames if frame.get("status") == "injected"]),
+                    }
+                )
+        elif manifest.get("target_id"):
+            rows.append(
+                {
+                    "target_id": str(manifest.get("target_id")),
+                    "line_family": str(dict(manifest.get("line") or {}).get("line_family") or ""),
+                    "line_nm": dict(manifest.get("line") or {}).get("line_nm"),
+                    "find_me_snr": dict(manifest.get("intensity") or {}).get("find_me_snr"),
+                    "frame_count": int(manifest.get("frames_written") or 0),
+                }
+            )
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows)
+    df = df[df["target_id"].notna() & df["target_id"].ne("None")]
+    if df.empty:
+        return pd.DataFrame()
+    grouped = df.groupby("target_id", dropna=False)
+    summary = grouped.agg(
+        injected_signal_count=("target_id", "size"),
+        injected_frame_count=("frame_count", "sum"),
+        injected_max_snr=("find_me_snr", "max"),
+    ).reset_index()
+    families = grouped["line_family"].apply(
+        lambda s: ",".join(sorted({str(value) for value in s if str(value)}))
+    ).rename("injected_line_families").reset_index()
+    lines = grouped["line_nm"].apply(_format_injected_lines).rename("injected_lines_nm").reset_index()
+    summary = summary.merge(families, on="target_id", how="left").merge(lines, on="target_id", how="left")
+    summary["is_injected_target"] = True
+    return summary
+
+
+def _format_injected_lines(values: pd.Series) -> str:
+    parsed = sorted({line for value in values if (line := _maybe_float(value)) is not None})
+    return ",".join(f"{value:g}" for value in parsed)
 
 
 def _sort_targets_df(df: pd.DataFrame, sort: str) -> pd.DataFrame:
@@ -742,6 +839,14 @@ def _html_escape(value: object) -> str:
 
 def _fmt_optional(value: float | None) -> str:
     return "" if value is None else f"{value:.3f}"
+
+
+def _maybe_float(value: object) -> float | None:
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return None
+    return out if np.isfinite(out) else None
 
 
 def _spectrum(run_dir: Path, target_id: str) -> dict[str, object]:
@@ -1536,6 +1641,7 @@ def _spectra_html() -> str:
     section { background: rgba(15,27,45,.9); border: 1px solid var(--line); border-radius: 6px; padding: 10px; min-width: 0; box-shadow: inset 0 0 0 1px rgba(56,189,248,.035), 0 0 20px rgba(2,6,23,.35); }
     label { display: block; color: var(--muted); font-size: 12px; margin: 8px 0 4px; }
     input, select, button { width: 100%; padding: 8px; background: #07111f; color: var(--text); border: 1px solid var(--line); border-radius: 4px; box-shadow: inset 0 0 12px rgba(56,189,248,.035); }
+    #targetList option.injected-target { color: #ff4fd8; font-weight: 700; }
     button { cursor: pointer; }
     button:hover { border-color: var(--accent); }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
@@ -1678,7 +1784,13 @@ function pageTargets(direction) {
 function renderTargetList() {
   const rows = targets;
   const list = document.getElementById('targetList');
-  list.innerHTML = rows.map(t => `<option value="${escapeHtml(t.target_id)}">${escapeHtml(t.target_id)}  n=${fmt(t.n_measurements)}  flags=${fmt(t.flagged_measurements || 0)}  ${fmt(t.wavelength_min_um)}-${fmt(t.wavelength_max_um)}um</option>`).join('');
+  list.innerHTML = rows.map(t => {
+    const injected = !!t.is_injected_target;
+    const cls = injected ? ' class="injected-target"' : '';
+    const mark = injected ? '◆ ' : '';
+    const inj = injected ? `  INJ ${escapeHtml(t.injected_lines_nm || '')}nm s=${fmt(t.injected_max_snr)}` : '';
+    return `<option${cls} value="${escapeHtml(t.target_id)}">${mark}${escapeHtml(t.target_id)}  n=${fmt(t.n_measurements)}  flags=${fmt(t.flagged_measurements || 0)}  ${fmt(t.wavelength_min_um)}-${fmt(t.wavelength_max_um)}um${inj}</option>`;
+  }).join('');
   if (current) list.value = current;
   const start = targetTotal ? targetOffset + 1 : 0;
   const end = Math.min(targetTotal, targetOffset + rows.length);
@@ -1709,7 +1821,8 @@ function renderSummary() {
     ['Rows', rows.length],
     ['Wave', rows.length ? `${fmt(Math.min(...rows.map(r=>num(r.cwave_um))))}-${fmt(Math.max(...rows.map(r=>num(r.cwave_um))))} um` : ''],
     ['Median flux', fmt(summary.median_flux_uJy) + ' uJy'],
-    ['Fatal', rows.length ? `${fatal}/${rows.length}` : '']
+    ['Fatal', rows.length ? `${fatal}/${rows.length}` : ''],
+    ['Injection', summary.is_injected_target ? `${summary.injected_lines_nm || ''} nm · ${summary.injected_signal_count || 0} signals` : 'none']
   ];
   document.getElementById('targetSummary').innerHTML = tiles.map(([k,v]) => `<div class="tile"><div class="k">${k}</div><div class="v">${escapeHtml(v)}</div></div>`).join('');
 }

@@ -503,6 +503,31 @@ Pipeline hook:
 - `spherex-mine run-benchmark --path-overrides path_overrides.json`
 - `spherex-mine run-depth-test --path-overrides path_overrides.json`
 
+Run mode rule:
+
+- No `--path-overrides`: run against the normal cached SPHEREx FITS.
+- With `--path-overrides`: run the same target/field configuration against copied injected FITS.
+
+This should remain a permanent switch. Every benchmark run should be reproducible in paired form:
+
+```bash
+spherex-mine run-benchmark \
+  --run-name baseline_example \
+  ...
+
+spherex-mine run-benchmark \
+  --run-name injected_example \
+  --path-overrides /path/to/injection_campaign/path_overrides.json \
+  ...
+```
+
+Both runs should write `run_summary.json`. Injected runs should include:
+
+```text
+path_overrides_path
+path_override_count
+```
+
 Important execution rule:
 
 Do not inject multiple strengths for the same target/line into one campaign unless intentionally testing accumulation. A strength sweep should run one strength slice at a time:
