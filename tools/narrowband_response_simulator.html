@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SPHEREx Narrowband Response Simulator</title>
+  <style>
+    :root {
+      --bg: #06111c;
+      --panel: #0c1a2a;
+      --panel2: #102238;
+      --line: #24384f;
+      --text: #e6f1ff;
+      --muted: #94a9c2;
+      --cyan: #35d5ff;
+      --pink: #ff4fd8;
+      --green: #55f38a;
+      --amber: #ffb84a;
+      --red: #ff5f6d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      color: var(--text);
+      font: 13px/1.35 system-ui, -apple-system, Segoe UI, sans-serif;
+      background:
+        linear-gradient(90deg, rgba(53,213,255,.055) 1px, transparent 1px),
+        linear-gradient(rgba(255,79,216,.04) 1px, transparent 1px),
+        radial-gradient(circle at 84% 8%, rgba(53,213,255,.14), transparent 30%),
+        radial-gradient(circle at 8% 92%, rgba(255,79,216,.10), transparent 34%),
+        var(--bg);
+      background-size: 42px 42px, 42px 42px, auto, auto;
+    }
+    header {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(6, 17, 28, .92);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    h1 {
+      margin: 0;
+      font-size: 19px;
+      letter-spacing: 0;
+      color: var(--cyan);
+      text-shadow: 0 0 16px rgba(53,213,255,.45);
+    }
+    main {
+      display: grid;
+      grid-template-columns: 360px minmax(720px, 1fr);
+      gap: 12px;
+      padding: 12px;
+    }
+    section {
+      border: 1px solid var(--line);
+      background: rgba(12, 26, 42, .92);
+      border-radius: 6px;
+      padding: 12px;
+      min-width: 0;
+      box-shadow: inset 0 0 0 1px rgba(53,213,255,.035), 0 0 24px rgba(0,0,0,.24);
+    }
+    .controls {
+      position: sticky;
+      top: 64px;
+      align-self: start;
+    }
+    label {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      margin: 10px 0 4px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    input, select, button {
+      width: 100%;
+      color: var(--text);
+      background: #071421;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 8px;
+    }
+    input[type="range"] { padding: 0; accent-color: var(--cyan); }
+    button { cursor: pointer; }
+    button:hover { border-color: var(--cyan); }
+    .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .metricGrid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(120px, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .metric {
+      background: rgba(7,20,33,.88);
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      padding: 9px;
+    }
+    .metric .k {
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+    }
+    .metric .v {
+      font-size: 17px;
+      margin-top: 3px;
+    }
+    svg {
+      width: 100%;
+      background: rgba(4,10,18,.86);
+      border: 1px solid #1c5871;
+      border-radius: 6px;
+      display: block;
+    }
+    #spectrum { height: 470px; }
+    #response { height: 320px; }
+    #plane { height: 260px; }
+    .stack { display: grid; gap: 12px; }
+    .note {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 10px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    th, td {
+      border-bottom: 1px solid var(--line);
+      padding: 5px 6px;
+      text-align: right;
+      white-space: nowrap;
+    }
+    th:first-child, td:first-child { text-align: left; }
+    th { color: #7dd3fc; font-weight: 600; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .small { color: var(--muted); font-size: 12px; }
+    a { color: #93c5fd; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>SPHEREx Narrowband Response Simulator</h1>
+  <div class="small">Bandpass-weighted spike footprint, not a delta-point search</div>
+</header>
+<main>
+  <section class="controls">
+    <div class="grid2">
+      <button id="preset1064">1064 nm</button>
+      <button id="preset1083">He 1.083 um</button>
+    </div>
+
+    <label for="lineWave">Line wavelength <span id="lineWaveVal"></span></label>
+    <input id="lineWave" type="range" min="0.744" max="5.002" step="0.001" value="1.064">
+
+    <label for="lineAmp">Peak line excess <span id="lineAmpVal"></span></label>
+    <input id="lineAmp" type="range" min="0" max="100000" step="250" value="30000">
+
+    <label for="lineWidth">Intrinsic line FWHM <span id="lineWidthVal"></span></label>
+    <input id="lineWidth" type="range" min="0" max="80" step="1" value="2">
+
+    <label for="continuum">Continuum flux density <span id="continuumVal"></span></label>
+    <input id="continuum" type="range" min="0" max="80000" step="500" value="30000">
+
+    <label for="slope">Continuum slope <span id="slopeVal"></span></label>
+    <input id="slope" type="range" min="-2.5" max="2.5" step="0.05" value="-0.3">
+
+    <label for="noise">Per-sample noise <span id="noiseVal"></span></label>
+    <input id="noise" type="range" min="0" max="5000" step="50" value="600">
+
+    <label for="visits">Sub-channel visits <span id="visitsVal"></span></label>
+    <input id="visits" type="range" min="1" max="6" step="1" value="3">
+
+    <label for="channels">Channels per band <span id="channelsVal"></span></label>
+    <input id="channels" type="range" min="8" max="34" step="1" value="17">
+
+    <label for="responseModel">Response model</label>
+    <select id="responseModel">
+      <option value="gaussian" selected>Gaussian, FWHM = CBAND</option>
+      <option value="super">Super-Gaussian shoulders</option>
+      <option value="triangle">Triangular finite bandpass</option>
+      <option value="tophat">Top-hat finite bandpass</option>
+    </select>
+
+    <label for="quality">Quality cut</label>
+    <select id="quality">
+      <option value="all">All simulated samples</option>
+      <option value="edge" selected>Drop edge-like samples</option>
+      <option value="strict">Strict central samples only</option>
+    </select>
+
+    <div class="note">
+      Supplement-derived defaults: wavelength range `0.744-5.002 um`, six bands with resolving powers
+      `R=39,41,41,35,112,128`, and `CBAND = CWAVE / R`. The response shape here is approximate until
+      we ingest measured response curves.
+    </div>
+  </section>
+
+  <div class="stack">
+    <section>
+      <div class="metricGrid" id="metrics"></div>
+      <svg id="spectrum" viewBox="0 0 1100 470"></svg>
+      <div class="note">
+        The colored points are simulated SPHEREx measurements. A true narrowband source is expected to
+        make a response-shaped local bump across overlapping samples, not necessarily a single isolated spike.
+      </div>
+    </section>
+
+    <section>
+      <svg id="response" viewBox="0 0 1100 320"></svg>
+      <div class="note">Local matched-filter template around the line. Nearby samples are weighted by their bandpass response at the line wavelength.</div>
+    </section>
+
+    <section>
+      <svg id="plane" viewBox="0 0 1100 260"></svg>
+      <div class="note">Detector/band plane: each cell is one simulated spectral sample. Bright cells are where the line leaks through the finite response.</div>
+    </section>
+
+    <section>
+      <table>
+        <thead>
+          <tr>
+            <th>rank</th><th>band</th><th>center um</th><th>CBAND um</th><th>R</th><th>response</th><th>line uJy</th><th>total uJy</th><th>SNR excess</th>
+          </tr>
+        </thead>
+        <tbody id="topRows"></tbody>
+      </table>
+      <div class="note">
+        Source: SPHEREx Explanatory Supplement QR, local file
+        <span class="mono">/mnt/niroseti/spherex_cache/external/docs/SPHEREx_Expsupp_QR.pdf</span>.
+        It describes the six band ranges/resolutions and says science analysis should use spectral WCS
+        <span class="mono">CWAVE</span>/<span class="mono">CBAND</span>; this app approximates those values.
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+const BANDS = [
+  {band: 1, min: 0.744, max: 1.116, R: 39, color: '#35d5ff'},
+  {band: 2, min: 1.099, max: 1.651, R: 41, color: '#55f38a'},
+  {band: 3, min: 1.636, max: 2.421, R: 41, color: '#ffb84a'},
+  {band: 4, min: 2.423, max: 3.822, R: 35, color: '#ff4fd8'},
+  {band: 5, min: 3.809, max: 4.420, R: 112, color: '#a78bfa'},
+  {band: 6, min: 4.412, max: 5.002, R: 128, color: '#f472b6'}
+];
+
+const $ = id => document.getElementById(id);
+const controls = ['lineWave','lineAmp','lineWidth','continuum','slope','noise','visits','channels','responseModel','quality'];
+for (const id of controls) $(id).addEventListener('input', update);
+$('preset1064').addEventListener('click', () => { $('lineWave').value = 1.064; update(); });
+$('preset1083').addEventListener('click', () => { $('lineWave').value = 1.083; update(); });
+
+function fmt(v, n=3) {
+  if (!Number.isFinite(v)) return '';
+  return Number(v).toFixed(n);
+}
+
+function bandFor(wave) {
+  return BANDS.find(b => wave >= b.min && wave <= b.max) || BANDS.reduce((best,b) => Math.abs((b.min+b.max)/2-wave) < Math.abs((best.min+best.max)/2-wave) ? b : best, BANDS[0]);
+}
+
+function makeSamples() {
+  const nChan = Number($('channels').value);
+  const visits = Number($('visits').value);
+  const quality = $('quality').value;
+  const rows = [];
+  for (const band of BANDS) {
+    const span = band.max - band.min;
+    for (let c = 0; c < nChan; c++) {
+      const base = band.min + (c + 0.5) / nChan * span;
+      for (let v = 0; v < visits; v++) {
+        const dither = (v - (visits - 1) / 2) * span / nChan / Math.max(2, visits + 1);
+        const center = clamp(base + dither, band.min, band.max);
+        const edgeFrac = Math.min((center - band.min) / span, (band.max - center) / span);
+        if (quality === 'edge' && edgeFrac < 0.025) continue;
+        if (quality === 'strict' && edgeFrac < 0.075) continue;
+        rows.push({
+          band: band.band,
+          color: band.color,
+          center,
+          R: band.R,
+          cband: center / band.R,
+          channel: c + 1,
+          visit: v + 1,
+          edgeFrac
+        });
+      }
+    }
+  }
+  return rows.sort((a,b) => a.center - b.center);
+}
+
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function responseAt(sample, lineWave, lineWidthUm) {
+  const model = $('responseModel').value;
+  const fwhm = Math.sqrt(sample.cband * sample.cband + lineWidthUm * lineWidthUm);
+  const d = Math.abs(sample.center - lineWave);
+  if (model === 'triangle') return Math.max(0, 1 - d / Math.max(1e-6, fwhm));
+  if (model === 'tophat') return d <= fwhm / 2 ? 1 : 0;
+  if (model === 'super') {
+    const sigma = fwhm / 2.355;
+    return Math.exp(-0.5 * Math.pow(d / Math.max(1e-6, sigma), 4));
+  }
+  const sigma = fwhm / 2.355;
+  return Math.exp(-0.5 * Math.pow(d / Math.max(1e-6, sigma), 2));
+}
+
+function continuumAt(wave) {
+  const cont = Number($('continuum').value);
+  const slope = Number($('slope').value);
+  return cont * Math.pow(wave / 2.0, slope);
+}
+
+function deterministicNoise(i, sigma) {
+  const x = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+  const u1 = Math.max(1e-6, x - Math.floor(x));
+  const y = Math.sin(i * 93.9898 + 11.133) * 24634.6345;
+  const u2 = Math.max(1e-6, y - Math.floor(y));
+  return sigma * Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+}
+
+function modelRows() {
+  const lineWave = Number($('lineWave').value);
+  const lineAmp = Number($('lineAmp').value);
+  const lineWidthUm = Number($('lineWidth').value) / 1000;
+  const noise = Number($('noise').value);
+  return makeSamples().map((s, i) => {
+    const response = responseAt(s, lineWave, lineWidthUm);
+    const line = lineAmp * response;
+    const continuum = continuumAt(s.center);
+    return {
+      ...s,
+      response,
+      line,
+      continuum,
+      total: continuum + line + deterministicNoise(i, noise),
+      noiselessTotal: continuum + line,
+      excessSnr: noise > 0 ? line / noise : 0
+    };
+  });
+}
+
+function updateLabels() {
+  $('lineWaveVal').textContent = `${fmt(Number($('lineWave').value), 3)} um`;
+  $('lineAmpVal').textContent = `${Math.round(Number($('lineAmp').value)).toLocaleString()} uJy`;
+  $('lineWidthVal').textContent = `${Number($('lineWidth').value)} nm`;
+  $('continuumVal').textContent = `${Math.round(Number($('continuum').value)).toLocaleString()} uJy`;
+  $('slopeVal').textContent = `${Number($('slope').value).toFixed(2)}`;
+  $('noiseVal').textContent = `${Math.round(Number($('noise').value)).toLocaleString()} uJy`;
+  $('visitsVal').textContent = `${Number($('visits').value)}`;
+  $('channelsVal').textContent = `${Number($('channels').value)}`;
+}
+
+function update() {
+  updateLabels();
+  const rows = modelRows();
+  drawSpectrum(rows);
+  drawResponse(rows);
+  drawPlane(rows);
+  drawMetrics(rows);
+  drawTable(rows);
+}
+
+function drawMetrics(rows) {
+  const lineWave = Number($('lineWave').value);
+  const b = bandFor(lineWave);
+  const noise = Number($('noise').value);
+  const top = [...rows].sort((a,b) => b.response - a.response).slice(0, 12);
+  const templatePower = rows.reduce((acc,r) => acc + (r.line / Math.max(1, noise)) ** 2, 0);
+  const hits = rows.filter(r => r.response > 0.25).length;
+  const independentBands = new Set(top.filter(r => r.response > 0.05).map(r => r.band)).size;
+  const metrics = [
+    ['Band', `D${b.band}`],
+    ['R / CBAND', `${b.R} / ${fmt(lineWave / b.R, 4)} um`],
+    ['Samples', rows.length],
+    ['Response hits', hits],
+    ['Ideal MF SNR', fmt(Math.sqrt(templatePower), 1)]
+  ];
+  $('metrics').innerHTML = metrics.map(([k,v]) => `<div class="metric"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+}
+
+function drawSpectrum(rows) {
+  const svg = $('spectrum');
+  clear(svg);
+  const W = 1100, H = 470, m = {l:74,r:24,t:28,b:52};
+  const xmin = 0.70, xmax = 5.08;
+  const ymax = Math.max(...rows.map(r => r.total), ...rows.map(r => r.noiselessTotal), Number($('continuum').value)) * 1.12;
+  const ymin = 0;
+  const x = v => m.l + (v - xmin) / (xmax - xmin) * (W - m.l - m.r);
+  const y = v => H - m.b - (v - ymin) / (ymax - ymin || 1) * (H - m.t - m.b);
+  grid(svg, W, H, m, x, y, xmin, xmax, ymin, ymax, 'Flux density (uJy)');
+
+  const cont = [];
+  for (let i = 0; i <= 240; i++) {
+    const wave = xmin + i / 240 * (xmax - xmin);
+    cont.push(`${x(wave)},${y(continuumAt(wave))}`);
+  }
+  add(svg, 'polyline', {points: cont.join(' '), fill:'none', stroke:'#94a9c2', 'stroke-width':1.2, opacity:.72});
+
+  const line = rows.map(r => `${x(r.center)},${y(r.noiselessTotal)}`).join(' ');
+  add(svg, 'polyline', {points: line, fill:'none', stroke:'#e6f1ff', 'stroke-width':1.5, opacity:.7});
+  for (const r of rows) {
+    const rad = 2.8 + 4.5 * Math.sqrt(r.response);
+    add(svg, 'circle', {cx:x(r.center), cy:y(r.total), r:rad, fill:r.color, opacity:0.82, stroke:r.response > .4 ? '#fff' : 'none', 'stroke-width':1});
+  }
+  const lw = Number($('lineWave').value);
+  add(svg, 'line', {x1:x(lw), x2:x(lw), y1:m.t, y2:H-m.b, stroke:'#ff4fd8', 'stroke-width':1.4, 'stroke-dasharray':'5 5'});
+  add(svg, 'text', {x:x(lw)+8, y:m.t+18, fill:'#ffbdf0'}, `${fmt(lw,3)} um`);
+}
+
+function drawResponse(rows) {
+  const svg = $('response');
+  clear(svg);
+  const W = 1100, H = 320, m = {l:74,r:24,t:24,b:48};
+  const lw = Number($('lineWave').value);
+  const band = bandFor(lw);
+  const width = Math.max(0.16, 5.5 * lw / band.R);
+  const xmin = Math.max(0.70, lw - width);
+  const xmax = Math.min(5.08, lw + width);
+  const x = v => m.l + (v - xmin) / (xmax - xmin) * (W - m.l - m.r);
+  const y = v => H - m.b - v * (H - m.t - m.b);
+  grid(svg, W, H, m, x, y, xmin, xmax, 0, 1, 'Relative response');
+  const local = rows.filter(r => r.center >= xmin && r.center <= xmax);
+  const curve = [];
+  const fake = {center: lw, cband: lw / band.R};
+  const lineWidthUm = Number($('lineWidth').value) / 1000;
+  for (let i = 0; i <= 300; i++) {
+    const wave = xmin + i / 300 * (xmax - xmin);
+    curve.push(`${x(wave)},${y(responseAt({...fake, center: wave}, lw, lineWidthUm))}`);
+  }
+  add(svg, 'polyline', {points:curve.join(' '), fill:'none', stroke:'#ff4fd8', 'stroke-width':2, opacity:.72});
+  for (const r of local) {
+    add(svg, 'line', {x1:x(r.center), x2:x(r.center), y1:y(0), y2:y(r.response), stroke:r.color, 'stroke-width':2, opacity:.7});
+    add(svg, 'circle', {cx:x(r.center), cy:y(r.response), r:4.5, fill:r.color, stroke:'#fff', 'stroke-width': r.response > .5 ? 1 : 0, opacity:.9});
+  }
+}
+
+function drawPlane(rows) {
+  const svg = $('plane');
+  clear(svg);
+  const W = 1100, H = 260, m = {l:74,r:24,t:24,b:42};
+  const xmin = 0.70, xmax = 5.08;
+  const x = v => m.l + (v - xmin) / (xmax - xmin) * (W - m.l - m.r);
+  add(svg, 'rect', {x:0,y:0,width:W,height:H,fill:'transparent'});
+  for (let i = 0; i <= 8; i++) {
+    const wave = 0.75 + i * 0.5;
+    add(svg, 'line', {x1:x(wave),x2:x(wave),y1:m.t,y2:H-m.b,stroke:'#1f3348','stroke-width':1});
+    add(svg, 'text', {x:x(wave),y:H-16,fill:'#94a9c2','text-anchor':'middle'}, fmt(wave,2));
+  }
+  for (const band of BANDS) {
+    const y0 = m.t + (band.band - 1) / 6 * (H - m.t - m.b);
+    const h = (H - m.t - m.b) / 6 - 5;
+    add(svg, 'text', {x:22,y:y0+h/2+4,fill:band.color}, `D${band.band}`);
+    add(svg, 'rect', {x:x(band.min), y:y0, width:x(band.max)-x(band.min), height:h, fill:band.color, opacity:.08, stroke:band.color, 'stroke-width':1});
+  }
+  for (const r of rows) {
+    const y0 = m.t + (r.band - 1) / 6 * (H - m.t - m.b);
+    const h = (H - m.t - m.b) / 6 - 5;
+    const w = Math.max(3, r.cband / (xmax - xmin) * (W - m.l - m.r));
+    add(svg, 'rect', {
+      x:x(r.center)-w/2, y:y0+2, width:w, height:h-4,
+      fill:r.color, opacity:0.10 + 0.88 * r.response, stroke:r.response > .5 ? '#fff' : 'none', 'stroke-width':1
+    });
+  }
+  const lw = Number($('lineWave').value);
+  add(svg, 'line', {x1:x(lw),x2:x(lw),y1:m.t-6,y2:H-m.b+6,stroke:'#ff4fd8','stroke-width':1.4,'stroke-dasharray':'5 5'});
+}
+
+function drawTable(rows) {
+  const top = [...rows].sort((a,b) => b.response - a.response).slice(0, 14);
+  $('topRows').innerHTML = top.map((r,i) => `
+    <tr>
+      <td>${i+1}</td>
+      <td>D${r.band}</td>
+      <td>${fmt(r.center,4)}</td>
+      <td>${fmt(r.cband,4)}</td>
+      <td>${r.R}</td>
+      <td>${fmt(r.response,3)}</td>
+      <td>${Math.round(r.line).toLocaleString()}</td>
+      <td>${Math.round(r.total).toLocaleString()}</td>
+      <td>${fmt(r.excessSnr,1)}</td>
+    </tr>`).join('');
+}
+
+function clear(svg) {
+  while (svg.firstChild) svg.removeChild(svg.firstChild);
+}
+
+function add(svg, tag, attrs, text) {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k,v] of Object.entries(attrs)) el.setAttribute(k, v);
+  if (text !== undefined) el.textContent = text;
+  svg.appendChild(el);
+  return el;
+}
+
+function grid(svg, W, H, m, x, y, xmin, xmax, ymin, ymax, ylabel) {
+  add(svg, 'rect', {x:0,y:0,width:W,height:H,fill:'transparent'});
+  for (let i = 0; i <= 8; i++) {
+    const xv = xmin + i / 8 * (xmax - xmin);
+    add(svg, 'line', {x1:x(xv),x2:x(xv),y1:m.t,y2:H-m.b,stroke:'#1f3348','stroke-width':1});
+    add(svg, 'text', {x:x(xv),y:H-17,fill:'#94a9c2','text-anchor':'middle'}, fmt(xv,2));
+  }
+  for (let i = 0; i <= 5; i++) {
+    const yv = ymin + i / 5 * (ymax - ymin);
+    add(svg, 'line', {x1:m.l,x2:W-m.r,y1:y(yv),y2:y(yv),stroke:'#1f3348','stroke-width':1});
+    add(svg, 'text', {x:m.l-9,y:y(yv)+4,fill:'#94a9c2','text-anchor':'end'}, ymax <= 1.5 ? fmt(yv,1) : Math.round(yv).toLocaleString());
+  }
+  add(svg, 'line', {x1:m.l,x2:W-m.r,y1:H-m.b,y2:H-m.b,stroke:'#55708c','stroke-width':1});
+  add(svg, 'line', {x1:m.l,x2:m.l,y1:m.t,y2:H-m.b,stroke:'#55708c','stroke-width':1});
+  add(svg, 'text', {x:W/2,y:H-5,fill:'#c7d8ea','text-anchor':'middle'}, 'Wavelength (um)');
+  add(svg, 'text', {x:16,y:H/2,fill:'#c7d8ea',transform:`rotate(-90 16 ${H/2})`,'text-anchor':'middle'}, ylabel);
+}
+
+update();
+</script>
+</body>
+</html>
