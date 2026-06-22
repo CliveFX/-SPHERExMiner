@@ -165,8 +165,12 @@
     <label for="backgroundOpacity">Background opacity <span id="backgroundOpacityVal"></span></label>
     <input id="backgroundOpacity" type="range" min="0" max="1" step="0.05" value="0.45">
 
-    <label for="injectPeak">Add peak to background</label>
-    <input id="injectPeak" type="checkbox" checked>
+    <label for="peakDisplay">Peak display</label>
+    <select id="peakDisplay">
+      <option value="simulated">On calibrated samples</option>
+      <option value="background" selected>Added to captured spectrum</option>
+      <option value="both">Both</option>
+    </select>
 
     <label for="showContinuum">Show continuum</label>
     <input id="showContinuum" type="checkbox" checked>
@@ -279,7 +283,7 @@ let calibrationMeta = null;
 let calibrationLoadStatus = 'loading QR2 calibration...';
 let backgroundSpectra = [];
 let backgroundLoadStatus = 'loading captured spectra...';
-const controls = ['backgroundSpectrum','backgroundOpacity','injectPeak','showContinuum','lineWave','lineAmp','lineWidth','continuum','slope','noise','visits','calibrationMode','channels','responseModel','quality'];
+const controls = ['backgroundSpectrum','backgroundOpacity','peakDisplay','showContinuum','lineWave','lineAmp','lineWidth','continuum','slope','noise','visits','calibrationMode','channels','responseModel','quality'];
 for (const id of controls) $(id).addEventListener('input', update);
 $('preset1064').addEventListener('click', () => { $('lineWave').value = 1.064; update(); });
 $('preset1083').addEventListener('click', () => { $('lineWave').value = 1.083; update(); });
@@ -469,7 +473,8 @@ function deterministicNoise(i, sigma) {
 
 function modelRows() {
   const lineWave = Number($('lineWave').value);
-  const lineAmp = Number($('lineAmp').value);
+  const peakDisplay = $('peakDisplay').value;
+  const lineAmp = peakDisplay === 'background' ? 0 : Number($('lineAmp').value);
   const lineWidthUm = Number($('lineWidth').value) / 1000;
   const noise = Number($('noise').value);
   return makeSamples().map((s, i) => {
@@ -516,7 +521,8 @@ function drawMetrics(rows) {
   const noise = Number($('noise').value);
   const top = [...rows].sort((a,b) => b.response - a.response).slice(0, 12);
   const best = top[0];
-  const templatePower = rows.reduce((acc,r) => acc + (r.line / Math.max(1, noise)) ** 2, 0);
+  const lineAmp = Number($('lineAmp').value);
+  const templatePower = rows.reduce((acc,r) => acc + (lineAmp * r.response / Math.max(1, noise)) ** 2, 0);
   const hits = rows.filter(r => r.response > 0.25).length;
   const independentBands = new Set(top.filter(r => r.response > 0.05).map(r => r.band)).size;
   const metrics = [
@@ -538,7 +544,9 @@ function drawSpectrum(rows) {
   const xmin = 0.70, xmax = 5.08;
   const bg = selectedBackground();
   const bgPoints = bg ? bg.points.filter(p => Number.isFinite(Number(p.wave)) && Number.isFinite(Number(p.flux))) : [];
-  const injectPeak = $('injectPeak').checked && bgPoints.length > 0;
+  const peakDisplay = $('peakDisplay').value;
+  const showSyntheticSamples = peakDisplay !== 'background' || $('showContinuum').checked;
+  const injectPeak = (peakDisplay === 'background' || peakDisplay === 'both') && bgPoints.length > 0;
   const injectedBgPoints = injectPeak
     ? bgPoints.map(p => ({...p, injectedFlux: Number(p.flux) + Number($('lineAmp').value) * responseForMeasurementPoint(p)}))
     : [];
@@ -608,11 +616,13 @@ function drawSpectrum(rows) {
     add(svg, 'text', {x:m.l+10, y:m.t+18, fill:'#7dd3fc'}, bg.label || bg.target_id);
   }
 
-  const line = rows.map(r => `${x(r.center)},${y(r.noiselessTotal)}`).join(' ');
-  add(svg, 'polyline', {points: line, fill:'none', stroke:'#e6f1ff', 'stroke-width':1.5, opacity:.7});
-  for (const r of rows) {
-    const rad = 2.8 + 4.5 * Math.sqrt(r.response);
-    add(svg, 'circle', {cx:x(r.center), cy:y(r.total), r:rad, fill:r.color, opacity:0.82, stroke:r.response > .4 ? '#fff' : 'none', 'stroke-width':1});
+  if (showSyntheticSamples) {
+    const line = rows.map(r => `${x(r.center)},${y(r.noiselessTotal)}`).join(' ');
+    add(svg, 'polyline', {points: line, fill:'none', stroke:'#e6f1ff', 'stroke-width':1.5, opacity:.7});
+    for (const r of rows) {
+      const rad = 2.8 + 4.5 * Math.sqrt(r.response);
+      add(svg, 'circle', {cx:x(r.center), cy:y(r.total), r:rad, fill:r.color, opacity:0.82, stroke:r.response > .4 ? '#fff' : 'none', 'stroke-width':1});
+    }
   }
   const lw = Number($('lineWave').value);
   add(svg, 'line', {x1:x(lw), x2:x(lw), y1:m.t, y2:H-m.b, stroke:'#ff4fd8', 'stroke-width':1.4, 'stroke-dasharray':'5 5'});
