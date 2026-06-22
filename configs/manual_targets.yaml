@@ -12,3 +12,16 @@ targets:
     source_catalog_id: simp0136
     priority_score: 100.0
     notes: "SPExPI reference brown dwarf target."
+  - target_id: ucs_0972
+    target_type: manual_coordinate
+    object_name: "UCS_0972_2MASS_J05392474+4038437"
+    ra_deg: 84.857137
+    dec_deg: 40.641523
+    reference_epoch_yr: 2016.0
+    pmra_masyr: 646.149592
+    pmdec_masyr: -834.491923
+    parallax_mas: 87.974669
+    source_catalog: gaia_dr3
+    source_catalog_id: "191109281417914880"
+    priority_score: 100.0
+    notes: "Gaia DR3 counterpart to 2MASS J05392474+4038437; Gaia position back-propagates to within 1.14 arcsec of 2MASS-name coordinate at epoch 2000."

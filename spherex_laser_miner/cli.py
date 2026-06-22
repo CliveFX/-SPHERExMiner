@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from pathlib import Path
 
 import typer
 
 from spherex_laser_miner.cache import ensure_cache_dirs
+from spherex_laser_miner.catalog.local_gaia_lite import (
+    GAIA_LITE_COLUMNS,
+    build_gaia_lite_index,
+    query_local_gaia_lite,
+    query_local_gaia_lite_duckdb,
+    validate_local_gaia_result,
+)
 from spherex_laser_miner.catalog.manual_targets import get_manual_target, load_manual_targets
 from spherex_laser_miner.config import load_config
 from spherex_laser_miner.field_eval import evaluate_target_fields
@@ -48,18 +56,205 @@ def doctor(cache_root: Path | None = typer.Option(None, help="Override SPHEREx c
     typer.echo(json.dumps(checks, indent=2, sort_keys=True))
 
 
+@app.command("build-gaia-lite")
+def build_gaia_lite(
+    cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
+    limit_files: int | None = typer.Option(
+        None,
+        min=1,
+        help="Only process this many raw Gaia CSV files.",
+    ),
+    overwrite: bool = typer.Option(False, help="Replace an existing local Gaia lite index."),
+    hp_level: int = typer.Option(
+        3,
+        "--hpx-level",
+        "--hp-level",
+        min=0,
+        max=12,
+        help="Gaia source_id HEALPix partition level.",
+    ),
+    max_rows_per_file: int = typer.Option(2_500_000, min=1, help="Approximate max rows per Parquet file."),
+    max_buffered_rows: int = typer.Option(5_000_000, min=1, help="Flush largest buffers above this row count."),
+) -> None:
+    """Build a local Gaia DR3 lite Parquet index."""
+    cfg = load_config(cache_root)
+    manifest = build_gaia_lite_index(
+        cache_root=cfg.cache_root,
+        limit_files=limit_files,
+        overwrite=overwrite,
+        hp_level=hp_level,
+        max_rows_per_file=max_rows_per_file,
+        max_buffered_rows=max_buffered_rows,
+    )
+    typer.echo(json.dumps(manifest, indent=2, sort_keys=True))
+
+
+@app.command("query-local-gaia")
+def query_local_gaia(
+    s_region: str = typer.Option(..., "--s-region", help="SIA POLYGON s_region to query."),
+    g_min: float = typer.Option(8.0, help="Minimum Gaia G magnitude."),
+    g_max: float = typer.Option(19.0, help="Maximum Gaia G magnitude."),
+    max_sources: int = typer.Option(500, min=0, help="Maximum Gaia sources to return."),
+    cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
+    output: Path | None = typer.Option(None, help="Optional .parquet or .csv output path."),
+    engine: str = typer.Option("pyarrow", help="Query engine: pyarrow or duckdb."),
+) -> None:
+    """Query the local Gaia lite index for one SIA polygon."""
+    cfg = load_config(cache_root)
+    query_fn = query_local_gaia_lite_duckdb if engine == "duckdb" else query_local_gaia_lite
+    if engine not in {"pyarrow", "duckdb"}:
+        raise typer.BadParameter("engine must be pyarrow or duckdb")
+    df = query_fn(
+        s_region=s_region,
+        cache_root=cfg.cache_root,
+        max_sources=max_sources,
+        g_min=g_min,
+        g_max=g_max,
+    )
+    if output is not None:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        if output.suffix.lower() == ".csv":
+            df.to_csv(output, index=False)
+        else:
+            df.to_parquet(output, index=False)
+    summary = validate_local_gaia_result(df, s_region=s_region, g_min=g_min, g_max=g_max)
+    summary["output"] = str(output) if output is not None else None
+    typer.echo(json.dumps(summary, indent=2, sort_keys=True))
+
+
+@app.command("compare-local-gaia")
+def compare_local_gaia(
+    s_region: str = typer.Option(..., "--s-region", help="SIA POLYGON s_region to query."),
+    g_min: float = typer.Option(8.0, help="Minimum Gaia G magnitude."),
+    g_max: float = typer.Option(19.0, help="Maximum Gaia G magnitude."),
+    max_sources: int = typer.Option(500, min=0, help="Maximum Gaia sources to return."),
+    cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
+) -> None:
+    """Validate local Gaia lite query behavior and deterministic sampling."""
+    cfg = load_config(cache_root)
+    first = query_local_gaia_lite(
+        s_region=s_region,
+        cache_root=cfg.cache_root,
+        max_sources=max_sources,
+        g_min=g_min,
+        g_max=g_max,
+    )
+    second = query_local_gaia_lite(
+        s_region=s_region,
+        cache_root=cfg.cache_root,
+        max_sources=max_sources,
+        g_min=g_min,
+        g_max=g_max,
+    )
+    summary = validate_local_gaia_result(first, s_region=s_region, g_min=g_min, g_max=g_max)
+    summary["deterministic_repeated_query"] = first.equals(second)
+    summary["validation_passed"] = all(
+        [
+            summary["columns_match_remote_contract"],
+            summary["inside_conservative_bounds"],
+            summary["magnitude_cuts_respected"],
+            summary["source_ids_unique"],
+            summary["deterministic_repeated_query"],
+        ]
+    )
+    typer.echo(json.dumps(summary, indent=2, sort_keys=True))
+
+
+@app.command("smoke-local-gaia-duckdb")
+def smoke_local_gaia_duckdb(
+    cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
+    max_sources: int = typer.Option(25, min=1, help="Sources to return from each query engine."),
+    half_width_deg: float = typer.Option(0.25, min=0.001, help="Half-width of generated test polygon."),
+) -> None:
+    """Compare PyArrow and DuckDB local Gaia queries on one generated polygon."""
+    import duckdb
+    import pandas as pd
+
+    cfg = load_config(cache_root)
+    index = cfg.cache_root / "gaia" / "parquet" / "dr3_source_lite"
+    sample_file = next(index.glob("hpx_level=*/hpx=*/part-*.parquet"), None)
+    if sample_file is None:
+        raise typer.BadParameter(f"No Parquet files found in {index}")
+    hpx = int(sample_file.parent.name.split("=", 1)[1])
+    sample = pd.read_parquet(sample_file, columns=["source_id", "ra", "dec", "phot_g_mean_mag"]).dropna(
+        subset=["ra", "dec", "phot_g_mean_mag"]
+    )
+    if sample.empty:
+        raise typer.BadParameter(f"No queryable rows found in {sample_file}")
+    row = sample.iloc[len(sample) // 2]
+    ra = float(row.ra)
+    dec = float(row.dec)
+    half = half_width_deg
+    s_region = (
+        f"POLYGON {ra - half} {dec - half} {ra + half} {dec - half} "
+        f"{ra + half} {dec + half} {ra - half} {dec + half}"
+    )
+    pyarrow_df = pd.read_parquet(sample_file)
+    pyarrow_df = pyarrow_df[
+        pyarrow_df["ra"].between(ra - half, ra + half)
+        & pyarrow_df["dec"].between(dec - half, dec + half)
+        & pyarrow_df["phot_g_mean_mag"].between(8.0, 19.0)
+    ].sort_values(["phot_g_mean_mag", "source_id"]).head(max_sources)
+    pyarrow_df = pyarrow_df[GAIA_LITE_COLUMNS].reset_index(drop=True)
+    duckdb_start = time.perf_counter()
+    con = duckdb.connect(":memory:")
+    try:
+        duckdb_df = con.execute(
+            f"""
+            SELECT {", ".join(GAIA_LITE_COLUMNS)}
+            FROM read_parquet('{index}/hpx_level=*/hpx=*/part-*.parquet', hive_partitioning = true)
+            WHERE hpx = ?
+              AND phot_g_mean_mag BETWEEN 8.0 AND 19.0
+              AND ra BETWEEN ? AND ?
+              AND dec BETWEEN ? AND ?
+            ORDER BY phot_g_mean_mag, source_id
+            LIMIT ?
+            """,
+            [hpx, ra - half, ra + half, dec - half, dec + half, max_sources],
+        ).fetchdf()
+    finally:
+        con.close()
+    duckdb_df.attrs["local_gaia_metrics"] = {
+        "engine": "duckdb",
+        "sample_file": str(sample_file),
+        "hpx": hpx,
+        "query_wall_time_sec": time.perf_counter() - duckdb_start,
+    }
+    pyarrow_df.attrs["local_gaia_metrics"] = {
+        "engine": "pyarrow-single-file",
+        "sample_file": str(sample_file),
+        "hpx": hpx,
+        "rows_scanned": len(sample),
+    }
+    summary = {
+        "cache_root": str(cfg.cache_root),
+        "index": str(index),
+        "sample_file": str(sample_file),
+        "hpx": hpx,
+        "s_region": s_region,
+        "pyarrow": validate_local_gaia_result(pyarrow_df, s_region=s_region, g_min=8.0, g_max=19.0),
+        "duckdb": validate_local_gaia_result(duckdb_df, s_region=s_region, g_min=8.0, g_max=19.0),
+        "same_source_ids": pyarrow_df["source_id"].tolist() == duckdb_df["source_id"].tolist(),
+        "pyarrow_metrics": pyarrow_df.attrs.get("local_gaia_metrics", {}),
+        "duckdb_metrics": duckdb_df.attrs.get("local_gaia_metrics", {}),
+    }
+    typer.echo(json.dumps(summary, indent=2, sort_keys=True))
+
+
 @app.command("run-field-smoke-test")
 def run_field_smoke_test(
     target: str = typer.Option("simp0136", help="Manual target id."),
     release: str = typer.Option("qr2", help="SPHEREx release."),
     limit_fields: int = typer.Option(3, min=1, help="Number of SIA candidates to download/evaluate."),
     max_gaia_sources: int = typer.Option(500, min=0, help="Maximum Gaia sources to select in the best field."),
+    enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
 ) -> None:
     """Evaluate parent SPHEREx fields covering a manual target."""
     cfg = load_config(cache_root)
     cfg.release = release
+    cfg.enable_psf_photometry = enable_psf
     ensure_cache_dirs(cfg.cache_root)
     manual_target = get_manual_target(cfg.manual_targets_path, target)
     trials = evaluate_target_fields(
@@ -97,6 +292,7 @@ def run_multifield_smoke_test(
     limit_fields: int = typer.Option(10, min=1, help="Number of SIA candidates to download/evaluate."),
     max_gaia_sources: int = typer.Option(100, min=0, help="Maximum Gaia sources per field shard."),
     max_field_workers: int = typer.Option(6, min=1, help="Concurrent parent-field workers."),
+    enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
     include_fatal_simp_trials: bool = typer.Option(True, help="Process measured SIMP trial fields even when SIMP aperture has a fatal flag."),
@@ -104,6 +300,7 @@ def run_multifield_smoke_test(
     """Process every measured SIMP-overlap parent field as a full-field shard."""
     cfg = load_config(cache_root)
     cfg.release = release
+    cfg.enable_psf_photometry = enable_psf
     ensure_cache_dirs(cfg.cache_root)
     manual_target = get_manual_target(cfg.manual_targets_path, target)
     trials = evaluate_target_fields(
@@ -143,12 +340,93 @@ def run_depth_test(
     gaia_g_min: float = typer.Option(7.0, help="Minimum Gaia G magnitude for fixed depth targets."),
     gaia_g_max: float = typer.Option(10.0, help="Maximum Gaia G magnitude for fixed depth targets."),
     max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
+    enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
 ) -> None:
     """Run a deeper SIMP-centered spectral pass using one fixed target set."""
+    summary = _run_depth_pipeline(
+        target=target,
+        release=release,
+        limit_fields=limit_fields,
+        max_gaia_sources=max_gaia_sources,
+        gaia_g_min=gaia_g_min,
+        gaia_g_max=gaia_g_max,
+        max_field_workers=max_field_workers,
+        enable_psf=enable_psf,
+        cache_root=cache_root,
+        redownload=redownload,
+    )
+    typer.echo(json.dumps(summary, indent=2, sort_keys=True))
+
+
+@app.command("run-benchmark")
+def run_benchmark(
+    target: str = typer.Option("simp0136", help="Manual target id."),
+    release: str = typer.Option("qr2", help="SPHEREx release."),
+    limit_fields: int = typer.Option(30, min=1, help="Number of SIA candidates to evaluate/process."),
+    max_gaia_sources: int = typer.Option(100, min=0, help="Fixed Gaia targets carried through every field."),
+    gaia_g_min: float = typer.Option(12.5, help="Minimum Gaia G magnitude for fixed benchmark targets."),
+    gaia_g_max: float = typer.Option(14.0, help="Maximum Gaia G magnitude for fixed benchmark targets."),
+    max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
+    enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
+    cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
+    redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
+    output: Path | None = typer.Option(None, help="Optional benchmark summary JSON output."),
+) -> None:
+    """Run one controlled benchmark pass and write throughput metrics."""
+    wall_start = time.perf_counter()
+    summary = _run_depth_pipeline(
+        target=target,
+        release=release,
+        limit_fields=limit_fields,
+        max_gaia_sources=max_gaia_sources,
+        gaia_g_min=gaia_g_min,
+        gaia_g_max=gaia_g_max,
+        max_field_workers=max_field_workers,
+        enable_psf=enable_psf,
+        cache_root=cache_root,
+        redownload=redownload,
+    )
+    wall_elapsed = time.perf_counter() - wall_start
+    measurements = int(dict(summary.get("assembly") or {}).get("measurement_rows") or 0)
+    benchmark = {
+        **summary,
+        "benchmark": {
+            "wall_elapsed_sec": wall_elapsed,
+            "measurement_rows": measurements,
+            "measurements_per_wall_sec": measurements / wall_elapsed if wall_elapsed > 0 else None,
+            "measurements_per_worker_sec_estimate": (
+                measurements / (wall_elapsed * max_field_workers) if wall_elapsed > 0 and max_field_workers > 0 else None
+            ),
+            "psf_enabled": enable_psf,
+        },
+    }
+    if output is None:
+        cfg = load_config(cache_root)
+        output = cfg.smoke_run_dir / "benchmark_summary.json"
+    output.parent.mkdir(parents=True, exist_ok=True)
+    benchmark["benchmark"]["output"] = str(output)
+    output.write_text(json.dumps(benchmark, indent=2, sort_keys=True), encoding="utf-8")
+    typer.echo(json.dumps(benchmark, indent=2, sort_keys=True))
+
+
+def _run_depth_pipeline(
+    *,
+    target: str,
+    release: str,
+    limit_fields: int,
+    max_gaia_sources: int,
+    gaia_g_min: float,
+    gaia_g_max: float,
+    max_field_workers: int,
+    enable_psf: bool,
+    cache_root: Path | None,
+    redownload: bool,
+) -> dict[str, object]:
     cfg = load_config(cache_root)
     cfg.release = release
+    cfg.enable_psf_photometry = enable_psf
     ensure_cache_dirs(cfg.cache_root)
     manual_target = get_manual_target(cfg.manual_targets_path, target)
     trials = evaluate_target_fields(
@@ -198,10 +476,11 @@ def run_depth_test(
         "gaia_g_max": gaia_g_max,
         "field_job_count": len(jobs),
         "max_field_workers": max_field_workers,
+        "psf_enabled": enable_psf,
         "assembly": assembly,
         "run_dir": str(cfg.smoke_run_dir),
     }
-    typer.echo(json.dumps(summary, indent=2, sort_keys=True))
+    return summary
 
 
 @app.command()

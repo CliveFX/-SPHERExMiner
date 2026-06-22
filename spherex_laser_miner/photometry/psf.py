@@ -56,6 +56,10 @@ def psf_measure(
         return out
 
 
+def psf_not_run(status: str = "disabled") -> PsfMeasurement:
+    return _bad(status)
+
+
 def _extract_native_psf(
     psf_cube: np.ndarray,
     image_shape: tuple[int, int],

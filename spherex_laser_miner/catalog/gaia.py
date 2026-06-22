@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
 import pandas as pd
 import pyvo
+
+from spherex_laser_miner.catalog.local_gaia_lite import (
+    local_gaia_lite_exists,
+    query_local_gaia_lite_duckdb,
+)
+from spherex_laser_miner.config import DEFAULT_CACHE_ROOT
 
 
 GAIA_TAP_URL = "https://gea.esac.esa.int/tap-server/tap"
@@ -19,6 +26,19 @@ def query_gaia_for_s_region(
 ) -> pd.DataFrame:
     if cache_path.exists() and cache_path.stat().st_size > 0:
         return pd.read_parquet(cache_path)
+
+    cache_root = _cache_root_from_query_cache(cache_path)
+    if local_gaia_lite_exists(cache_root):
+        df = query_local_gaia_lite_duckdb(
+            s_region=s_region,
+            cache_root=cache_root,
+            max_sources=max_sources,
+            g_min=g_min,
+            g_max=g_max,
+        )
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(cache_path, index=False)
+        return df
 
     coords = polygon_coords_from_s_region(s_region)
     vertices = polygon_vertices_from_s_region(s_region)
@@ -130,3 +150,11 @@ def polygon_vertices_from_s_region(s_region: str) -> list[tuple[float, float]]:
     if len(vertices) >= 2 and vertices[0] == vertices[-1]:
         vertices = vertices[:-1]
     return vertices
+
+
+def _cache_root_from_query_cache(cache_path: Path) -> Path:
+    resolved = cache_path.resolve()
+    for parent in [resolved.parent, *resolved.parents]:
+        if parent.name == "runs":
+            return parent.parent
+    return Path(os.getenv("SPHEREX_CACHE_ROOT", DEFAULT_CACHE_ROOT))

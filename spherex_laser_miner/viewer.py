@@ -223,6 +223,9 @@ def _live_status(run_dir: Path) -> dict[str, object]:
         frame["target_count"] = sum(counts.values())
         frame["progress_percent"] = (100.0 * counts.get("done", 0) / frame["target_count"]) if frame["target_count"] else None
         frame["elapsed_sec"] = _elapsed_seconds(frame.get("started_at"), frame.get("finished_at"))
+        perf = _frame_perf(run_dir, image_id)
+        if perf:
+            frame["performance"] = perf
 
     return {
         "run_dir": str(run_dir),
@@ -248,6 +251,7 @@ def _overall_run_status(run_dir: Path) -> dict[str, object]:
     job_files = list(shard_root.glob("image_id=*/field_job.json")) if shard_root.exists() else []
 
     live = _live_db_counts(run_dir)
+    perf = _live_perf_summary(run_dir)
     spectra_dir = run_dir / "spectra"
     assembly_path = spectra_dir / "assembly_summary.json"
     assembly = _read_json(assembly_path)
@@ -255,10 +259,11 @@ def _overall_run_status(run_dir: Path) -> dict[str, object]:
     process = _depth_process_status()
 
     total_fields = len(measured_trials) or len(trials) or None
-    completed_fields = max(len(measurement_files), live.get("done", 0))
+    completed_fields = int(live.get("done", 0))
     errored_fields = live.get("error", 0)
     active_fields = live.get("active", 0)
-    progress = (100.0 * completed_fields / total_fields) if total_fields else None
+    seen_fields = live.get("total", 0)
+    progress = (100.0 * min(completed_fields + errored_fields, total_fields) / total_fields) if total_fields else None
 
     return {
         "run_dir": str(run_dir),
@@ -268,6 +273,8 @@ def _overall_run_status(run_dir: Path) -> dict[str, object]:
         "field_total_estimate": total_fields,
         "field_shards_with_measurements": len(measurement_files),
         "field_job_files": len(job_files),
+        "fields_completed": completed_fields,
+        "fields_seen": seen_fields,
         "live_frames_active": active_fields,
         "live_frames_done": live.get("done", 0),
         "live_frames_error": errored_fields,
@@ -276,6 +283,7 @@ def _overall_run_status(run_dir: Path) -> dict[str, object]:
         "live_targets_active": live.get("target_active", 0),
         "live_targets_done": live.get("target_done", 0),
         "live_spectra_points": live.get("spectra_points", 0),
+        "performance": perf,
         "field_progress_percent": progress,
         "assembly": assembly,
         "assembly_mtime": spectra_mtime,
@@ -309,6 +317,77 @@ def _live_db_counts(run_dir: Path) -> dict[str, int]:
     except sqlite3.Error:
         pass
     return counts
+
+
+def _frame_perf(run_dir: Path, image_id: str) -> dict[str, object] | None:
+    path = db_path(run_dir)
+    try:
+        with sqlite3.connect(path) as con:
+            con.row_factory = sqlite3.Row
+            row = con.execute("SELECT * FROM frame_perf WHERE image_id = ?", (image_id,)).fetchone()
+            return dict(row) if row else None
+    except sqlite3.Error:
+        return None
+
+
+def _live_perf_summary(run_dir: Path) -> dict[str, object]:
+    init_live_status(run_dir)
+    path = db_path(run_dir)
+    try:
+        with sqlite3.connect(path) as con:
+            con.row_factory = sqlite3.Row
+            rows = [dict(row) for row in con.execute("SELECT * FROM frame_perf")]
+    except sqlite3.Error:
+        rows = []
+    if not rows:
+        return {
+            "frames_profiled": 0,
+            "targets_profiled": 0,
+            "target_rate_per_sec_sum": None,
+            "target_rate_per_core_sec": None,
+        }
+    targets = sum(int(row.get("targets_measured") or 0) for row in rows)
+    elapsed_sum = sum(float(row.get("elapsed_sec") or 0) for row in rows)
+    worker_count = len({row.get("worker_name") for row in rows if row.get("worker_name")})
+    wall_start = min(float(row.get("finished_at") or 0) - float(row.get("elapsed_sec") or 0) for row in rows)
+    wall_end = max(float(row.get("finished_at") or 0) for row in rows)
+    wall_elapsed = max(0.0, wall_end - wall_start)
+    phase_cols = [
+        "fits_open_sec",
+        "calibration_sec",
+        "selection_sec",
+        "photometry_sec",
+        "aperture_sec",
+        "calibrated_aperture_sec",
+        "psf_sec",
+        "status_sec",
+        "write_sec",
+        "elapsed_sec",
+    ]
+    phase = {f"{col}_median": _median([row.get(col) for row in rows]) for col in phase_cols}
+    phase.update({f"{col}_sum": _sum_float([row.get(col) for row in rows]) for col in phase_cols})
+    return {
+        "frames_profiled": len(rows),
+        "targets_profiled": targets,
+        "workers_seen": worker_count,
+        "wall_elapsed_sec": wall_elapsed,
+        "sum_worker_elapsed_sec": elapsed_sum,
+        "target_rate_per_wall_sec": targets / wall_elapsed if wall_elapsed > 0 else None,
+        "target_rate_per_worker_sec": targets / elapsed_sum if elapsed_sum > 0 else None,
+        "target_rate_per_core_sec": targets / elapsed_sum if elapsed_sum > 0 else None,
+        **phase,
+    }
+
+
+def _median(values: list[object]) -> float | None:
+    arr = sorted(float(value) for value in values if value is not None)
+    if not arr:
+        return None
+    return arr[len(arr) // 2]
+
+
+def _sum_float(values: list[object]) -> float:
+    return sum(float(value) for value in values if value is not None)
 
 
 def _depth_process_status() -> dict[str, object]:
@@ -504,6 +583,27 @@ def _targets(run_dir: Path) -> list[dict[str, object]]:
     if not path.exists():
         return []
     df = pd.read_parquet(path)
+    spectra_path = run_dir / "spectra" / "target_spectra.parquet"
+    if spectra_path.exists():
+        spectra = pd.read_parquet(spectra_path, columns=["target_id", "fatal_flag_present"])
+        flag_summary = (
+            spectra.assign(fatal_flag_present=spectra["fatal_flag_present"].fillna(False).astype(bool))
+            .groupby("target_id", dropna=False)
+            .agg(
+                flagged_measurements=("fatal_flag_present", "sum"),
+                total_measurements_for_flags=("fatal_flag_present", "size"),
+            )
+            .reset_index()
+        )
+        flag_summary["flagged_fraction"] = (
+            flag_summary["flagged_measurements"] / flag_summary["total_measurements_for_flags"]
+        )
+        df = df.merge(flag_summary, on="target_id", how="left")
+    for col in ("flagged_measurements", "total_measurements_for_flags"):
+        if col in df:
+            df[col] = df[col].fillna(0).astype(int)
+    if "flagged_fraction" in df:
+        df["flagged_fraction"] = df["flagged_fraction"].fillna(0.0)
     return df.head(500).to_dict(orient="records")
 
 
@@ -987,14 +1087,16 @@ function renderRunbar(run) {
   const pct = Number.isFinite(Number(run.field_progress_percent)) ? Number(run.field_progress_percent) : 0;
   const proc = run.process && run.process.running ? 'running' : 'stopped';
   const pid = run.process && run.process.processes && run.process.processes[0] ? run.process.processes[0].pid : '';
+  const perf = run.performance || {};
   const items = [
     ['phase', run.run_phase || ''],
     ['process', pid ? `${proc} ${pid}` : proc],
-    ['fields', `${run.field_shards_with_measurements || 0}/${run.field_total_estimate || '?'}`],
+    ['fields', `${run.fields_completed || 0} done + ${run.live_frames_active || 0} active / ${run.field_total_estimate || '?'}`],
     ['active', run.live_frames_active || 0],
-    ['errors', run.live_frames_error || 0],
+    ['shards', run.field_shards_with_measurements || 0],
+    ['rate', perf.target_rate_per_wall_sec ? `${fmt(perf.target_rate_per_wall_sec)}/s` : '--'],
+    ['core rate', perf.target_rate_per_core_sec ? `${fmt(perf.target_rate_per_core_sec)}/core/s` : '--'],
     ['targets', `${run.live_targets_done || 0} done`],
-    ['points', run.live_spectra_points || 0],
     ['assembly', run.assembly_mtime_iso ? run.assembly_mtime_iso.slice(11,19) : 'pending']
   ];
   document.getElementById('runbar').innerHTML =
@@ -1015,6 +1117,7 @@ function frameHTML(f) {
   const counts = f.target_status_counts || {};
   const band = Number.isFinite(Number(f.cwave_um)) ? `${Number(f.cwave_um).toFixed(3)} um` : 'band pending';
   const progress = Number.isFinite(Number(f.progress_percent)) ? Number(f.progress_percent) : 0;
+  const perf = f.performance || {};
   const done = counts.done || 0;
   const total = f.target_count || Object.values(counts).reduce((a,b) => a + Number(b || 0), 0);
   const elapsed = Number.isFinite(Number(f.elapsed_sec)) ? fmtDuration(Number(f.elapsed_sec)) : '';
@@ -1030,6 +1133,10 @@ function frameHTML(f) {
     <div class="meta">
       <div>worker <span>${escapeHtml(worker)}</span></div>
       <div>elapsed <span>${elapsed}</span></div>
+      <div>rate <span>${Number.isFinite(Number(perf.target_rate_per_sec)) ? fmt(perf.target_rate_per_sec) + '/s' : ''}</span></div>
+      <div>phot <span>${Number.isFinite(Number(perf.photometry_sec)) ? fmt(perf.photometry_sec) + 's' : ''}</span></div>
+      <div>aper <span>${Number.isFinite(Number(perf.aperture_sec)) ? fmt(perf.aperture_sec) + 's' : ''}</span></div>
+      <div>psf <span>${Number.isFinite(Number(perf.psf_sec)) ? fmt(perf.psf_sec) + 's' : ''}</span></div>
       <div>detector <span>D${fmt(f.detector)}</span></div>
       <div>obs <span>${escapeHtml(f.observation_id || '')}</span></div>
       <div>band <span>${band}</span></div>
@@ -1151,7 +1258,7 @@ def _spectra_html() -> str:
     button { cursor: pointer; }
     button:hover { border-color: var(--accent); }
     .row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .toggles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0; }
+    .toggles { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; margin: 8px 0; align-items: end; }
     .toggles label { display: flex; align-items: center; gap: 6px; margin: 0; color: var(--text); }
     .toggles input { width: auto; }
     #targetList { height: calc(100vh - 300px); min-height: 380px; }
@@ -1185,6 +1292,7 @@ def _spectra_html() -> str:
       <option value="measurements">Most measurements</option>
       <option value="snr">Max SNR</option>
       <option value="flux">Median aperture flux</option>
+      <option value="flags">Fewest flags</option>
       <option value="id">Target id</option>
     </select>
     <label for="targetList">Targets</label>
@@ -1198,6 +1306,14 @@ def _spectra_html() -> str:
         <label><input type="checkbox" id="showAperture" checked onchange="redraw()"> Aperture</label>
         <label><input type="checkbox" id="showPsf" checked onchange="redraw()"> PSF</label>
         <label><input type="checkbox" id="robustScale" checked onchange="redraw()"> Robust y</label>
+        <label><input type="checkbox" id="ignoreFlaggedLine" checked onchange="redraw()"> Ignore flagged</label>
+        <label>Curve
+          <select id="curveMode" onchange="redraw()">
+            <option value="spline" selected>Median spline</option>
+            <option value="median">Running median</option>
+            <option value="none">Points only</option>
+          </select>
+        </label>
       </div>
       <svg id="plot" viewBox="0 0 1100 680"></svg>
       <div class="small">Aperture/SAPM is the reference path. PSF is still experimental. Fatal-flagged points are dimmed orange.</div>
@@ -1234,10 +1350,17 @@ function renderTargetList() {
     if (sort === 'id') return String(a.target_id).localeCompare(String(b.target_id));
     if (sort === 'snr') return num(b.max_snr_uJy) - num(a.max_snr_uJy);
     if (sort === 'flux') return Math.abs(num(b.median_flux_uJy)) - Math.abs(num(a.median_flux_uJy));
+    if (sort === 'flags') {
+      const fa = flagRate(a), fb = flagRate(b);
+      if (fa !== fb) return fa - fb;
+      const ca = num(a.flagged_measurements), cb = num(b.flagged_measurements);
+      if (ca !== cb) return ca - cb;
+      return num(b.n_measurements) - num(a.n_measurements);
+    }
     return num(b.n_measurements) - num(a.n_measurements);
   });
   const list = document.getElementById('targetList');
-  list.innerHTML = rows.map(t => `<option value="${escapeHtml(t.target_id)}">${escapeHtml(t.target_id)}  n=${fmt(t.n_measurements)}  ${fmt(t.wavelength_min_um)}-${fmt(t.wavelength_max_um)}um</option>`).join('');
+  list.innerHTML = rows.map(t => `<option value="${escapeHtml(t.target_id)}">${escapeHtml(t.target_id)}  n=${fmt(t.n_measurements)}  flags=${fmt(t.flagged_measurements || 0)}  ${fmt(t.wavelength_min_um)}-${fmt(t.wavelength_max_um)}um</option>`).join('');
   if (current) list.value = current;
 }
 
@@ -1306,8 +1429,15 @@ function drawPlot(rows) {
   grid();
   if (ap.length) {
     const sorted = [...ap].sort((a,b)=>num(a.cwave_um)-num(b.cwave_um));
-    const smooth = smoothRows(sorted, 9);
-    if (smooth.length > 1) add('polyline',{points:smooth.map(r => `${x(r.cwave_um)},${y(r.flux)}`).join(' '),fill:'none',stroke:'#e5eefb','stroke-width':1.8,opacity:.75});
+    const lineRows = document.getElementById('ignoreFlaggedLine').checked ? sorted.filter(r => !r.fatal_flag_present) : sorted;
+    const curveMode = document.getElementById('curveMode').value;
+    if (curveMode === 'median') {
+      const smooth = runningMedianRows(lineRows, 9);
+      if (smooth.length > 1) add('polyline',{points:smooth.map(r => `${x(r.cwave_um)},${y(r.flux)}`).join(' '),fill:'none',stroke:'#e5eefb','stroke-width':1.45,opacity:.72});
+    } else if (curveMode === 'spline') {
+      const curve = medianBinnedRows(lineRows, 72);
+      if (curve.length > 1) add('path',{d:monotonePath(curve, x, y),fill:'none',stroke:'#e5eefb','stroke-width':1.7,opacity:.78});
+    }
     for (const r of sorted) point(x(num(r.cwave_um)), y(num(r.aperture_flux_uJy)), r.fatal_flag_present ? '#f97316' : '#22c55e', r.fatal_flag_present ? .38 : .9, 3.2);
   }
   if (psf.length) {
@@ -1362,18 +1492,80 @@ function makeTable(rows, cols) {
     rows.map(r => '<tr>' + cols.map(c => `<td>${escapeHtml(fmt(r[c]))}</td>`).join('') + '</tr>').join('') + '</tbody></table>';
 }
 
-function smoothRows(rows, width) {
+function runningMedianRows(rows, width) {
   const half = Math.max(1, Math.floor(width/2));
   return rows.map((r, i) => {
-    const vals = rows.slice(Math.max(0, i-half), Math.min(rows.length, i+half+1)).map(x => num(x.aperture_flux_uJy)).sort((a,b)=>a-b);
-    return {cwave_um:num(r.cwave_um), flux:vals[Math.floor(vals.length/2)]};
+    const vals = rows.slice(Math.max(0, i-half), Math.min(rows.length, i+half+1)).map(x => num(x.aperture_flux_uJy)).filter(Number.isFinite).sort((a,b)=>a-b);
+    return {cwave_um:num(r.cwave_um), flux:median(vals)};
   });
+}
+function medianBinnedRows(rows, maxBins) {
+  const clean = rows.map(r => ({x:num(r.cwave_um), y:num(r.aperture_flux_uJy)})).filter(r => Number.isFinite(r.x) && Number.isFinite(r.y));
+  if (clean.length <= 2) return clean.map(r => ({cwave_um:r.x, flux:r.y}));
+  const xmin = Math.min(...clean.map(r => r.x));
+  const xmax = Math.max(...clean.map(r => r.x));
+  const binCount = Math.max(8, Math.min(maxBins, Math.ceil(clean.length / 2)));
+  const bins = Array.from({length: binCount}, () => []);
+  for (const r of clean) {
+    const idx = Math.max(0, Math.min(binCount - 1, Math.floor((r.x - xmin) / Math.max(xmax - xmin, 1e-9) * binCount)));
+    bins[idx].push(r);
+  }
+  return bins.filter(b => b.length).map(b => {
+    const xs = b.map(r => r.x).sort((a,b)=>a-b);
+    const ys = b.map(r => r.y).sort((a,b)=>a-b);
+    return {cwave_um:median(xs), flux:median(ys)};
+  }).sort((a,b)=>a.cwave_um-b.cwave_um);
+}
+function monotonePath(rows, xScale, yScale) {
+  const pts = rows.map(r => ({x:num(r.cwave_um), y:num(r.flux)})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (!pts.length) return '';
+  if (pts.length === 1) return `M ${xScale(pts[0].x)} ${yScale(pts[0].y)}`;
+  const n = pts.length;
+  const dx = [], dy = [], slope = [];
+  for (let i=0; i<n-1; i++) {
+    dx[i] = pts[i+1].x - pts[i].x;
+    dy[i] = pts[i+1].y - pts[i].y;
+    slope[i] = Math.abs(dx[i]) > 1e-12 ? dy[i] / dx[i] : 0;
+  }
+  const m = new Array(n).fill(0);
+  m[0] = slope[0];
+  m[n-1] = slope[n-2];
+  for (let i=1; i<n-1; i++) {
+    if (slope[i-1] * slope[i] <= 0) m[i] = 0;
+    else {
+      const w1 = 2 * dx[i] + dx[i-1];
+      const w2 = dx[i] + 2 * dx[i-1];
+      m[i] = (w1 + w2) / (w1 / slope[i-1] + w2 / slope[i]);
+    }
+  }
+  let d = `M ${xScale(pts[0].x)} ${yScale(pts[0].y)}`;
+  for (let i=0; i<n-1; i++) {
+    const x0 = pts[i].x, x1 = pts[i+1].x;
+    const y0 = pts[i].y, y1 = pts[i+1].y;
+    const delta = (x1 - x0) / 3;
+    const c1x = x0 + delta, c1y = y0 + m[i] * delta;
+    const c2x = x1 - delta, c2y = y1 - m[i+1] * delta;
+    d += ` C ${xScale(c1x)} ${yScale(c1y)}, ${xScale(c2x)} ${yScale(c2y)}, ${xScale(x1)} ${yScale(y1)}`;
+  }
+  return d;
+}
+function median(sorted) {
+  if (!sorted.length) return NaN;
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[mid] : 0.5 * (sorted[mid - 1] + sorted[mid]);
 }
 function quantile(sorted, q) {
   const idx = Math.min(sorted.length-1, Math.max(0, Math.floor(q*(sorted.length-1))));
   return sorted[idx];
 }
 function num(v) { const n = Number(v); return Number.isFinite(n) ? n : NaN; }
+function flagRate(t) {
+  const explicit = num(t.flagged_fraction);
+  if (Number.isFinite(explicit)) return explicit;
+  const flags = num(t.flagged_measurements);
+  const total = num(t.total_measurements_for_flags || t.n_measurements);
+  return Number.isFinite(flags) && Number.isFinite(total) && total > 0 ? flags / total : 0;
+}
 function fmt(v) {
   const n = Number(v);
   if (!Number.isFinite(n)) return v === null || v === undefined ? '' : String(v);

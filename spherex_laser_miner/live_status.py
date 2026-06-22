@@ -49,9 +49,28 @@ CREATE TABLE IF NOT EXISTS spectra_points (
   updated_at REAL,
   PRIMARY KEY (target_id, image_id)
 );
+CREATE TABLE IF NOT EXISTS frame_perf (
+  image_id TEXT PRIMARY KEY,
+  worker_name TEXT,
+  targets_selected INTEGER,
+  targets_measured INTEGER,
+  elapsed_sec REAL,
+  fits_open_sec REAL,
+  calibration_sec REAL,
+  selection_sec REAL,
+  photometry_sec REAL,
+  aperture_sec REAL,
+  calibrated_aperture_sec REAL,
+  psf_sec REAL,
+  status_sec REAL,
+  write_sec REAL,
+  target_rate_per_sec REAL,
+  finished_at REAL
+);
 CREATE INDEX IF NOT EXISTS idx_frames_status_updated ON frames(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_targets_image ON targets(image_id, status);
 CREATE INDEX IF NOT EXISTS idx_spectra_target_wave ON spectra_points(target_id, cwave_um);
+CREATE INDEX IF NOT EXISTS idx_frame_perf_finished ON frame_perf(finished_at);
 """
 
 _DB_LOCK = threading.RLock()
@@ -68,6 +87,8 @@ def reset_live_status(run_dir: Path) -> None:
     try:
         with _DB_LOCK, _connect(path) as con:
             con.executescript(SCHEMA)
+            _migrate(con)
+            con.execute("DELETE FROM frame_perf")
             con.execute("DELETE FROM spectra_points")
             con.execute("DELETE FROM targets")
             con.execute("DELETE FROM frames")
@@ -81,6 +102,7 @@ def init_live_status(run_dir: Path) -> None:
     try:
         with _DB_LOCK, _connect(path) as con:
             con.executescript(SCHEMA)
+            _migrate(con)
     except sqlite3.Error:
         pass
 
@@ -104,6 +126,7 @@ def mark_frame(
     try:
         with _DB_LOCK, _connect(db_path(run_dir)) as con:
             con.executescript(SCHEMA)
+            _migrate(con)
             con.execute(
             """
             INSERT INTO frames (
@@ -149,6 +172,7 @@ def mark_target(run_dir: Path, *, image_id: str, target: dict[str, Any], status:
     try:
         with _DB_LOCK, _connect(db_path(run_dir)) as con:
             con.executescript(SCHEMA)
+            _migrate(con)
             con.execute(
             """
             INSERT INTO targets (
@@ -212,6 +236,64 @@ def mark_target(run_dir: Path, *, image_id: str, target: dict[str, Any], status:
         pass
 
 
+def mark_frame_perf(run_dir: Path, *, image_id: str, perf: dict[str, Any]) -> None:
+    finished_at = time.time()
+    elapsed_sec = _optional_float(perf.get("elapsed_sec")) or 0.0
+    targets_measured = int(perf.get("targets_measured") or 0)
+    target_rate = targets_measured / elapsed_sec if elapsed_sec > 0 else None
+    try:
+        with _DB_LOCK, _connect(db_path(run_dir)) as con:
+            con.executescript(SCHEMA)
+            _migrate(con)
+            con.execute(
+                """
+                INSERT INTO frame_perf (
+                  image_id, worker_name, targets_selected, targets_measured,
+                  elapsed_sec, fits_open_sec, calibration_sec, selection_sec,
+                  photometry_sec, aperture_sec, calibrated_aperture_sec, psf_sec,
+                  status_sec, write_sec, target_rate_per_sec, finished_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(image_id) DO UPDATE SET
+                  worker_name=excluded.worker_name,
+                  targets_selected=excluded.targets_selected,
+                  targets_measured=excluded.targets_measured,
+                  elapsed_sec=excluded.elapsed_sec,
+                  fits_open_sec=excluded.fits_open_sec,
+                  calibration_sec=excluded.calibration_sec,
+                  selection_sec=excluded.selection_sec,
+                  photometry_sec=excluded.photometry_sec,
+                  aperture_sec=excluded.aperture_sec,
+                  calibrated_aperture_sec=excluded.calibrated_aperture_sec,
+                  psf_sec=excluded.psf_sec,
+                  status_sec=excluded.status_sec,
+                  write_sec=excluded.write_sec,
+                  target_rate_per_sec=excluded.target_rate_per_sec,
+                  finished_at=excluded.finished_at
+                """,
+                (
+                    image_id,
+                    perf.get("worker_name"),
+                    int(perf.get("targets_selected") or 0),
+                    targets_measured,
+                    elapsed_sec,
+                    _optional_float(perf.get("fits_open_sec")),
+                    _optional_float(perf.get("calibration_sec")),
+                    _optional_float(perf.get("selection_sec")),
+                    _optional_float(perf.get("photometry_sec")),
+                    _optional_float(perf.get("aperture_sec")),
+                    _optional_float(perf.get("calibrated_aperture_sec")),
+                    _optional_float(perf.get("psf_sec")),
+                    _optional_float(perf.get("status_sec")),
+                    _optional_float(perf.get("write_sec")),
+                    target_rate,
+                    finished_at,
+                ),
+            )
+    except sqlite3.Error:
+        pass
+
+
 def _connect(path: Path) -> sqlite3.Connection:
     con = sqlite3.connect(path, timeout=3)
     con.row_factory = sqlite3.Row
@@ -219,6 +301,13 @@ def _connect(path: Path) -> sqlite3.Connection:
     con.execute("PRAGMA journal_mode=DELETE")
     con.execute("PRAGMA synchronous=NORMAL")
     return con
+
+
+def _migrate(con: sqlite3.Connection) -> None:
+    existing = {row[1] for row in con.execute("PRAGMA table_info(frame_perf)")}
+    for name in ("aperture_sec", "calibrated_aperture_sec", "psf_sec", "status_sec"):
+        if name not in existing:
+            con.execute(f"ALTER TABLE frame_perf ADD COLUMN {name} REAL")
 
 
 def _optional_float(value: object) -> float | None:

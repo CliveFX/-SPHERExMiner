@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
@@ -18,10 +19,10 @@ from spherex_laser_miner.catalog.gaia import query_gaia_for_s_region
 from spherex_laser_miner.catalog.manual_targets import ManualTarget
 from spherex_laser_miner.config import MinerConfig
 from spherex_laser_miner.coordinates import edge_distance_pix, propagate_coordinate, propagate_target
-from spherex_laser_miner.live_status import mark_frame, mark_target, reset_live_status
+from spherex_laser_miner.live_status import mark_frame, mark_frame_perf, mark_target, reset_live_status
 from spherex_laser_miner.photometry.aperture import aperture_measure
 from spherex_laser_miner.photometry.calibrated_aperture import calibrated_aperture_measure
-from spherex_laser_miner.photometry.psf import psf_measure
+from spherex_laser_miner.photometry.psf import psf_measure, psf_not_run
 from spherex_laser_miner.qa import write_smoke_artifacts
 
 
@@ -80,6 +81,19 @@ def run_trial_field_worker(
     selection_rows: list[dict[str, Any]] = []
     measurement_rows: list[dict[str, Any]] = []
     image_id = local_path.stem
+    perf_start = time.perf_counter()
+    perf: dict[str, Any] = {
+        "worker_name": threading.current_thread().name,
+        "fits_open_sec": 0.0,
+        "calibration_sec": 0.0,
+        "selection_sec": 0.0,
+        "photometry_sec": 0.0,
+        "aperture_sec": 0.0,
+        "calibrated_aperture_sec": 0.0,
+        "psf_sec": 0.0,
+        "status_sec": 0.0,
+        "write_sec": 0.0,
+    }
     mark_frame(
         cfg.smoke_run_dir,
         image_id=image_id,
@@ -90,6 +104,7 @@ def run_trial_field_worker(
         observation_id=str(candidate["obs_id"]),
     )
     try:
+        t0 = time.perf_counter()
         with fits.open(local_path, memmap=True) as hdul:
             image_hdu = hdul["IMAGE"]
             image = image_hdu.data
@@ -101,6 +116,9 @@ def run_trial_field_worker(
             spectral_wcs = _make_spectral_wcs(hdul, image_hdu.header)
             obs_mid_mjd = float(trial["obs_mid_mjd"])
             detector = int(trial["detector"])
+            perf["fits_open_sec"] += time.perf_counter() - t0
+
+            t0 = time.perf_counter()
             sapm_data, sapm_header, sapm_path = load_sapm(cfg.cache_root, cfg.release, detector)
             flux_ujy = image_to_ujy_per_pixel(image, image_hdu.header, sapm_data, sapm_header)
             var_ujy2 = (
@@ -108,7 +126,9 @@ def run_trial_field_worker(
                 if variance is not None
                 else None
             )
+            perf["calibration_sec"] += time.perf_counter() - t0
 
+            t0 = time.perf_counter()
             for row in target_rows:
                 ra_epoch, dec_epoch, coord_status = propagate_coordinate(
                     ra_deg=float(row["ra_reference_deg"]),
@@ -138,13 +158,20 @@ def run_trial_field_worker(
                 }
                 selection_rows.append(selection)
                 if selected:
+                    ts = time.perf_counter()
                     mark_target(cfg.smoke_run_dir, image_id=image_id, target=selection, status="queued")
+                    perf["status_sec"] += time.perf_counter() - ts
+            perf["selection_sec"] += time.perf_counter() - t0
 
+            t0 = time.perf_counter()
             for row in [item for item in selection_rows if item["selected_for_photometry"]]:
                 x_pix = float(row["x_pix"])
                 y_pix = float(row["y_pix"])
+                ts = time.perf_counter()
                 mark_target(cfg.smoke_run_dir, image_id=image_id, target=row, status="active")
+                perf["status_sec"] += time.perf_counter() - ts
                 cwave_um, cband_um = _wavelength_at(spectral_wcs, x_pix, y_pix)
+                tp = time.perf_counter()
                 aperture = aperture_measure(
                     image=image,
                     variance=variance,
@@ -157,6 +184,8 @@ def run_trial_field_worker(
                     annulus_outer_pix=cfg.annulus_outer_pix,
                     fatal_flag_bits=cfg.fatal_flag_bits,
                 )
+                perf["aperture_sec"] += time.perf_counter() - tp
+                tp = time.perf_counter()
                 calibrated = calibrated_aperture_measure(
                     flux_ujy=flux_ujy,
                     var_ujy2=var_ujy2,
@@ -168,15 +197,21 @@ def run_trial_field_worker(
                     annulus_outer_pix=cfg.annulus_outer_pix,
                     fatal_flag_bits=cfg.fatal_flag_bits,
                 )
-                psf = psf_measure(
-                    flux_ujy=flux_ujy,
-                    var_ujy2=var_ujy2,
-                    flags=flags,
-                    psf_cube=psf_cube,
-                    x_pix=x_pix,
-                    y_pix=y_pix,
-                    fatal_flag_bits=cfg.fatal_flag_bits,
-                )
+                perf["calibrated_aperture_sec"] += time.perf_counter() - tp
+                tp = time.perf_counter()
+                if cfg.enable_psf_photometry:
+                    psf = psf_measure(
+                        flux_ujy=flux_ujy,
+                        var_ujy2=var_ujy2,
+                        flags=flags,
+                        psf_cube=psf_cube,
+                        x_pix=x_pix,
+                        y_pix=y_pix,
+                        fatal_flag_bits=cfg.fatal_flag_bits,
+                    )
+                else:
+                    psf = psf_not_run()
+                perf["psf_sec"] += time.perf_counter() - tp
                 measurement = {
                     **row,
                     "image_id": image_id,
@@ -201,14 +236,23 @@ def run_trial_field_worker(
                     **psf.to_json_dict(),
                 }
                 measurement_rows.append(measurement)
+                ts = time.perf_counter()
                 mark_target(cfg.smoke_run_dir, image_id=image_id, target=measurement, status="done")
+                perf["status_sec"] += time.perf_counter() - ts
+            perf["photometry_sec"] += time.perf_counter() - t0
     except Exception as exc:
         mark_frame(cfg.smoke_run_dir, image_id=image_id, status="error", error=f"{type(exc).__name__}: {exc}")
         raise
 
+    t0 = time.perf_counter()
     output_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(selection_rows).to_parquet(output_dir / "target_selection.parquet", index=False)
     pd.DataFrame(measurement_rows).to_parquet(output_dir / "measurements.parquet", index=False)
+    perf["write_sec"] += time.perf_counter() - t0
+    perf["targets_selected"] = sum(1 for row in selection_rows if row.get("selected_for_photometry"))
+    perf["targets_measured"] = len(measurement_rows)
+    perf["elapsed_sec"] = time.perf_counter() - perf_start
+    perf["target_rate_per_sec"] = len(measurement_rows) / perf["elapsed_sec"] if perf["elapsed_sec"] > 0 else None
     first_measurement = measurement_rows[0] if measurement_rows else {}
     mark_frame(
         cfg.smoke_run_dir,
@@ -217,6 +261,7 @@ def run_trial_field_worker(
         cwave_um=_optional_float(first_measurement.get("cwave_um")),
         cband_um=_optional_float(first_measurement.get("cband_um")),
     )
+    mark_frame_perf(cfg.smoke_run_dir, image_id=image_id, perf=perf)
     field_job = {
         "job_kind": job_kind,
         "manual_target_id": target.target_id,
@@ -230,6 +275,7 @@ def run_trial_field_worker(
         "targets_considered": len(selection_rows),
         "targets_measured": len(measurement_rows),
         "simp_measured": any(row["target_id"] == target.target_id for row in measurement_rows),
+        "performance": perf,
     }
     (output_dir / "field_job.json").write_text(json.dumps(field_job, indent=2), encoding="utf-8")
     return field_job

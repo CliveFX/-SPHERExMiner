@@ -15,6 +15,7 @@ class MinerConfig(BaseModel):
     release: str = Field(default_factory=lambda: os.getenv("SPHEREX_RELEASE", "qr2"))
     filter_profile: str = Field(default_factory=lambda: os.getenv("FILTER_PROFILE", "broad_debug"))
     photometry_backend: Literal["cpu_numpy"] = "cpu_numpy"
+    enable_psf_photometry: bool = False
     aperture_radius_pix: float = 2.0
     annulus_inner_pix: float = 4.0
     annulus_outer_pix: float = 6.0
