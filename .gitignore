@@ -1,0 +1,47 @@
+# Python/runtime artifacts
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local environment/config
+.env
+.env.*
+
+# Build/dist outputs
+build/
+dist/
+*.whl
+
+# Local logs and run launchers
+*.log
+nohup.out
+
+# Science/cache artifacts should live on /mnt/niroseti, not in Git.
+spherex_cache/
+cache/
+runs/
+raw/
+derived/
+external/
+calibration/
+gaia/
+*.fits
+*.fits.gz
+*.parquet
+*.csv.gz
+*.sqlite
+*.sqlite-*
+
+# Viewer/screenshot scratch
+viewer_cache/
+*.png
+*.jpg
+*.jpeg
+
+# OS/editor
+.DS_Store
+*~

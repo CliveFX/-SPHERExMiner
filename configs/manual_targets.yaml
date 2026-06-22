@@ -1,0 +1,14 @@
+targets:
+  - target_id: simp0136
+    target_type: manual_coordinate
+    object_name: "T2 SIMP J013656.5+093347.3"
+    ra_deg: 24.2412498
+    dec_deg: 9.5630705
+    reference_epoch_yr: 2016.0
+    pmra_masyr: 1238.244
+    pmdec_masyr: -16.156
+    parallax_mas:
+    source_catalog: manual
+    source_catalog_id: simp0136
+    priority_score: 100.0
+    notes: "SPExPI reference brown dwarf target."
