@@ -178,6 +178,13 @@
     <label for="visits">Sub-channel visits <span id="visitsVal"></span></label>
     <input id="visits" type="range" min="1" max="6" step="1" value="3">
 
+    <label for="calibrationMode">Channel calibration</label>
+    <select id="calibrationMode">
+      <option value="wcs" selected>QR2 WCS medians</option>
+      <option value="table">QR2 channel table</option>
+      <option value="approx">Design approximation</option>
+    </select>
+
     <label for="channels">Channels per band <span id="channelsVal"></span></label>
     <input id="channels" type="range" min="8" max="34" step="1" value="17">
 
@@ -197,9 +204,9 @@
     </select>
 
     <div class="note">
-      Supplement-derived defaults: wavelength range `0.744-5.002 um`, six bands with resolving powers
-      `R=39,41,41,35,112,128`, and `CBAND = CWAVE / R`. The response shape here is approximate until
-      we ingest measured response curves.
+      Default channels come from QR2 `spectral_channels` plus per-channel medians from `spectral_wcs`
+      `CWAVE/CBAND`. The response shape is still approximate until the fiducial spectral response
+      functions become visible in the public archive.
     </div>
   </section>
 
@@ -253,10 +260,30 @@ const BANDS = [
 ];
 
 const $ = id => document.getElementById(id);
-const controls = ['lineWave','lineAmp','lineWidth','continuum','slope','noise','visits','channels','responseModel','quality'];
+let calibrationRows = [];
+let calibrationMeta = null;
+let calibrationLoadStatus = 'loading QR2 calibration...';
+const controls = ['lineWave','lineAmp','lineWidth','continuum','slope','noise','visits','calibrationMode','channels','responseModel','quality'];
 for (const id of controls) $(id).addEventListener('input', update);
 $('preset1064').addEventListener('click', () => { $('lineWave').value = 1.064; update(); });
 $('preset1083').addEventListener('click', () => { $('lineWave').value = 1.083; update(); });
+
+fetch('narrowband_calibration_qr2.json', {cache: 'no-store'})
+  .then(r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.json();
+  })
+  .then(data => {
+    calibrationRows = Array.isArray(data.rows) ? data.rows : [];
+    calibrationMeta = data;
+    calibrationLoadStatus = `QR2 calibration loaded: ${calibrationRows.length} channels`;
+    update();
+  })
+  .catch(err => {
+    calibrationLoadStatus = `QR2 calibration unavailable; using design approximation (${err.message})`;
+    $('calibrationMode').value = 'approx';
+    update();
+  });
 
 function fmt(v, n=3) {
   if (!Number.isFinite(v)) return '';
@@ -268,6 +295,9 @@ function bandFor(wave) {
 }
 
 function makeSamples() {
+  const mode = $('calibrationMode').value;
+  if (mode !== 'approx' && calibrationRows.length) return makeCalibratedSamples(mode);
+
   const nChan = Number($('channels').value);
   const visits = Number($('visits').value);
   const quality = $('quality').value;
@@ -293,6 +323,49 @@ function makeSamples() {
           edgeFrac
         });
       }
+    }
+  }
+  return rows.sort((a,b) => a.center - b.center);
+}
+
+function makeCalibratedSamples(mode) {
+  const visits = Number($('visits').value);
+  const quality = $('quality').value;
+  const rows = [];
+  for (const row of calibrationRows) {
+    const band = BANDS[row.detector - 1] || bandFor(row.wavelength_um);
+    const subchannel = Number(row.subchannel);
+    if (quality === 'edge' && (subchannel <= 1 || subchannel >= 17)) continue;
+    if (quality === 'strict' && (subchannel <= 2 || subchannel >= 16)) continue;
+
+    const tableCenter = Number(row.wavelength_um);
+    const tableBandwidth = Number(row.bandwidth_um);
+    const tableR = Number(row.r);
+    const wcsCenter = Number(row.wcs_cwave_median_um);
+    const wcsBandwidth = Number(row.wcs_cband_median_um);
+    const wcsR = Number(row.wcs_r_median);
+    const centerBase = mode === 'wcs' && Number.isFinite(wcsCenter) ? wcsCenter : tableCenter;
+    const cbandBase = mode === 'wcs' && Number.isFinite(wcsBandwidth) ? wcsBandwidth : tableBandwidth;
+    const rBase = mode === 'wcs' && Number.isFinite(wcsR) ? wcsR : tableR;
+    const p05 = mode === 'wcs' && Number.isFinite(Number(row.wcs_cwave_p05_um)) ? Number(row.wcs_cwave_p05_um) : Number(row.wl_min_um);
+    const p95 = mode === 'wcs' && Number.isFinite(Number(row.wcs_cwave_p95_um)) ? Number(row.wcs_cwave_p95_um) : Number(row.wl_max_um);
+
+    for (let v = 0; v < visits; v++) {
+      const frac = visits === 1 ? 0.5 : (v + 0.5) / visits;
+      const center = visits === 1 ? centerBase : p05 + frac * (p95 - p05);
+      rows.push({
+        band: Number(row.detector),
+        color: band.color,
+        center,
+        R: rBase,
+        cband: cbandBase,
+        channel: subchannel,
+        visit: v + 1,
+        edgeFrac: Math.min(subchannel / 17, (18 - subchannel) / 17),
+        wlMin: Number(row.wl_min_um),
+        wlMax: Number(row.wl_max_um),
+        source: mode
+      });
     }
   }
   return rows.sort((a,b) => a.center - b.center);
@@ -359,7 +432,7 @@ function updateLabels() {
   $('slopeVal').textContent = `${Number($('slope').value).toFixed(2)}`;
   $('noiseVal').textContent = `${Math.round(Number($('noise').value)).toLocaleString()} uJy`;
   $('visitsVal').textContent = `${Number($('visits').value)}`;
-  $('channelsVal').textContent = `${Number($('channels').value)}`;
+  $('channelsVal').textContent = $('calibrationMode').value === 'approx' ? `${Number($('channels').value)}` : '17 QR2';
 }
 
 function update() {
@@ -377,15 +450,17 @@ function drawMetrics(rows) {
   const b = bandFor(lineWave);
   const noise = Number($('noise').value);
   const top = [...rows].sort((a,b) => b.response - a.response).slice(0, 12);
+  const best = top[0];
   const templatePower = rows.reduce((acc,r) => acc + (r.line / Math.max(1, noise)) ** 2, 0);
   const hits = rows.filter(r => r.response > 0.25).length;
   const independentBands = new Set(top.filter(r => r.response > 0.05).map(r => r.band)).size;
   const metrics = [
-    ['Band', `D${b.band}`],
-    ['R / CBAND', `${b.R} / ${fmt(lineWave / b.R, 4)} um`],
+    ['Band', best ? `D${best.band}` : `D${b.band}`],
+    ['R / CBAND', best ? `${fmt(best.R, 1)} / ${fmt(best.cband, 4)} um` : `${b.R} / ${fmt(lineWave / b.R, 4)} um`],
     ['Samples', rows.length],
     ['Response hits', hits],
-    ['Ideal MF SNR', fmt(Math.sqrt(templatePower), 1)]
+    ['Ideal MF SNR', fmt(Math.sqrt(templatePower), 1)],
+    ['Calibration', calibrationLoadStatus]
   ];
   $('metrics').innerHTML = metrics.map(([k,v]) => `<div class="metric"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
 }
