@@ -168,6 +168,9 @@
     <label for="injectPeak">Add peak to background</label>
     <input id="injectPeak" type="checkbox" checked>
 
+    <label for="showContinuum">Show continuum</label>
+    <input id="showContinuum" type="checkbox" checked>
+
     <label for="lineWave">Line wavelength <span id="lineWaveVal"></span></label>
     <input id="lineWave" type="range" min="0.744" max="5.002" step="0.001" value="1.064">
 
@@ -276,7 +279,7 @@ let calibrationMeta = null;
 let calibrationLoadStatus = 'loading QR2 calibration...';
 let backgroundSpectra = [];
 let backgroundLoadStatus = 'loading captured spectra...';
-const controls = ['backgroundSpectrum','backgroundOpacity','injectPeak','lineWave','lineAmp','lineWidth','continuum','slope','noise','visits','calibrationMode','channels','responseModel','quality'];
+const controls = ['backgroundSpectrum','backgroundOpacity','injectPeak','showContinuum','lineWave','lineAmp','lineWidth','continuum','slope','noise','visits','calibrationMode','channels','responseModel','quality'];
 for (const id of controls) $(id).addEventListener('input', update);
 $('preset1064').addEventListener('click', () => { $('lineWave').value = 1.064; update(); });
 $('preset1083').addEventListener('click', () => { $('lineWave').value = 1.083; update(); });
@@ -552,11 +555,13 @@ function drawSpectrum(rows) {
   grid(svg, W, H, m, x, y, xmin, xmax, ymin, ymax, 'Flux density (uJy)');
 
   const cont = [];
-  for (let i = 0; i <= 240; i++) {
-    const wave = xmin + i / 240 * (xmax - xmin);
-    cont.push(`${x(wave)},${y(continuumAt(wave))}`);
+  if ($('showContinuum').checked) {
+    for (let i = 0; i <= 240; i++) {
+      const wave = xmin + i / 240 * (xmax - xmin);
+      cont.push(`${x(wave)},${y(continuumAt(wave))}`);
+    }
+    add(svg, 'polyline', {points: cont.join(' '), fill:'none', stroke:'#94a9c2', 'stroke-width':1.2, opacity:.72});
   }
-  add(svg, 'polyline', {points: cont.join(' '), fill:'none', stroke:'#94a9c2', 'stroke-width':1.2, opacity:.72});
 
   if (bgPoints.length) {
     const opacity = Number($('backgroundOpacity').value);
