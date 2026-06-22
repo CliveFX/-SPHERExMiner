@@ -23,6 +23,7 @@ from spherex_laser_miner.coordinates import edge_distance_pix, propagate_coordin
 from spherex_laser_miner.live_status import mark_frame, mark_frame_perf, mark_targets, reset_live_status
 from spherex_laser_miner.photometry.aperture import aperture_measure
 from spherex_laser_miner.photometry.calibrated_aperture import calibrated_aperture_measure
+from spherex_laser_miner.photometry.warp_calibrated import warp_calibrated_aperture_batch
 from spherex_laser_miner.photometry.psf import psf_measure, psf_not_run
 from spherex_laser_miner.qa import write_smoke_artifacts
 
@@ -195,7 +196,26 @@ def run_trial_field_worker(
             ts = time.perf_counter()
             mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=selected_rows, status="active")
             perf["status_sec"] += time.perf_counter() - ts
-            for row in selected_rows:
+            calibrated_batch = None
+            if cfg.photometry_backend == "warp_calibrated" and selected_rows:
+                tp = time.perf_counter()
+                calibrated_batch_result = warp_calibrated_aperture_batch(
+                    flux_ujy=flux_ujy,
+                    var_ujy2=var_ujy2,
+                    flags=flags,
+                    x_pix=np.asarray([float(row["x_pix"]) for row in selected_rows], dtype=float),
+                    y_pix=np.asarray([float(row["y_pix"]) for row in selected_rows], dtype=float),
+                    aperture_radius_pix=cfg.aperture_radius_pix,
+                    annulus_inner_pix=cfg.annulus_inner_pix,
+                    annulus_outer_pix=cfg.annulus_outer_pix,
+                    fatal_flag_bits=cfg.fatal_flag_bits,
+                    devices=cfg.warp_devices,
+                    worker_name=threading.current_thread().name,
+                )
+                perf["calibrated_aperture_sec"] += time.perf_counter() - tp
+                perf["warp_device"] = calibrated_batch_result.device
+                calibrated_batch = calibrated_batch_result.measurements
+            for row_idx, row in enumerate(selected_rows):
                 x_pix = float(row["x_pix"])
                 y_pix = float(row["y_pix"])
                 cwave_um, cband_um = _wavelength_at(spectral_wcs, x_pix, y_pix)
@@ -222,19 +242,22 @@ def run_trial_field_worker(
                     )
                     perf["aperture_sec"] += time.perf_counter() - tp
                     aperture_json = aperture.to_json_dict()
-                tp = time.perf_counter()
-                calibrated = calibrated_aperture_measure(
-                    flux_ujy=flux_ujy,
-                    var_ujy2=var_ujy2,
-                    flags=flags,
-                    x_pix=x_pix,
-                    y_pix=y_pix,
-                    aperture_radius_pix=cfg.aperture_radius_pix,
-                    annulus_inner_pix=cfg.annulus_inner_pix,
-                    annulus_outer_pix=cfg.annulus_outer_pix,
-                    fatal_flag_bits=cfg.fatal_flag_bits,
-                )
-                perf["calibrated_aperture_sec"] += time.perf_counter() - tp
+                if calibrated_batch is not None:
+                    calibrated = calibrated_batch[row_idx]
+                else:
+                    tp = time.perf_counter()
+                    calibrated = calibrated_aperture_measure(
+                        flux_ujy=flux_ujy,
+                        var_ujy2=var_ujy2,
+                        flags=flags,
+                        x_pix=x_pix,
+                        y_pix=y_pix,
+                        aperture_radius_pix=cfg.aperture_radius_pix,
+                        annulus_inner_pix=cfg.annulus_inner_pix,
+                        annulus_outer_pix=cfg.annulus_outer_pix,
+                        fatal_flag_bits=cfg.fatal_flag_bits,
+                    )
+                    perf["calibrated_aperture_sec"] += time.perf_counter() - tp
                 tp = time.perf_counter()
                 if cfg.enable_psf_photometry:
                     psf = psf_measure(

@@ -15,7 +15,8 @@ class MinerConfig(BaseModel):
     run_name: str = Field(default_factory=lambda: os.getenv("SPHEREX_RUN_NAME", "smoke_simp_field"))
     release: str = Field(default_factory=lambda: os.getenv("SPHEREX_RELEASE", "qr2"))
     filter_profile: str = Field(default_factory=lambda: os.getenv("FILTER_PROFILE", "broad_debug"))
-    photometry_backend: Literal["cpu_numpy"] = "cpu_numpy"
+    photometry_backend: Literal["cpu_numpy", "warp_calibrated"] = "cpu_numpy"
+    warp_devices: tuple[str, ...] = ("cuda:0", "cuda:1", "cuda:2")
     enable_psf_photometry: bool = False
     enable_diagnostic_aperture: bool = False
     aperture_radius_pix: float = 2.0

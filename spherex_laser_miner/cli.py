@@ -342,6 +342,8 @@ def run_depth_test(
     gaia_g_min: float = typer.Option(7.0, help="Minimum Gaia G magnitude for fixed depth targets."),
     gaia_g_max: float = typer.Option(10.0, help="Maximum Gaia G magnitude for fixed depth targets."),
     max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
+    photometry_backend: str = typer.Option("cpu_numpy", help="Photometry backend: cpu_numpy or warp_calibrated."),
+    warp_devices: str = typer.Option("cuda:0,cuda:1,cuda:2", help="Comma-separated Warp CUDA devices."),
     enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
     enable_diagnostic_aperture: bool = typer.Option(False, help="Run raw diagnostic aperture QA photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
@@ -357,6 +359,8 @@ def run_depth_test(
         gaia_g_min=gaia_g_min,
         gaia_g_max=gaia_g_max,
         max_field_workers=max_field_workers,
+        photometry_backend=photometry_backend,
+        warp_devices=warp_devices,
         enable_psf=enable_psf,
         enable_diagnostic_aperture=enable_diagnostic_aperture,
         cache_root=cache_root,
@@ -375,6 +379,8 @@ def run_benchmark(
     gaia_g_min: float = typer.Option(12.5, help="Minimum Gaia G magnitude for fixed benchmark targets."),
     gaia_g_max: float = typer.Option(14.0, help="Maximum Gaia G magnitude for fixed benchmark targets."),
     max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
+    photometry_backend: str = typer.Option("cpu_numpy", help="Photometry backend: cpu_numpy or warp_calibrated."),
+    warp_devices: str = typer.Option("cuda:0,cuda:1,cuda:2", help="Comma-separated Warp CUDA devices."),
     enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
     enable_diagnostic_aperture: bool = typer.Option(False, help="Run raw diagnostic aperture QA photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
@@ -392,6 +398,8 @@ def run_benchmark(
         gaia_g_min=gaia_g_min,
         gaia_g_max=gaia_g_max,
         max_field_workers=max_field_workers,
+        photometry_backend=photometry_backend,
+        warp_devices=warp_devices,
         enable_psf=enable_psf,
         enable_diagnostic_aperture=enable_diagnostic_aperture,
         cache_root=cache_root,
@@ -430,6 +438,8 @@ def _run_depth_pipeline(
     gaia_g_min: float,
     gaia_g_max: float,
     max_field_workers: int,
+    photometry_backend: str,
+    warp_devices: str,
     enable_psf: bool,
     enable_diagnostic_aperture: bool,
     cache_root: Path | None,
@@ -439,6 +449,10 @@ def _run_depth_pipeline(
     if run_name is not None:
         cfg.run_name = run_name
     cfg.release = release
+    if photometry_backend not in {"cpu_numpy", "warp_calibrated"}:
+        raise typer.BadParameter("photometry_backend must be cpu_numpy or warp_calibrated")
+    cfg.photometry_backend = photometry_backend
+    cfg.warp_devices = tuple(part.strip() for part in warp_devices.split(",") if part.strip())
     cfg.enable_psf_photometry = enable_psf
     cfg.enable_diagnostic_aperture = enable_diagnostic_aperture
     ensure_cache_dirs(cfg.cache_root)
@@ -490,6 +504,8 @@ def _run_depth_pipeline(
         "gaia_g_max": gaia_g_max,
         "field_job_count": len(jobs),
         "max_field_workers": max_field_workers,
+        "photometry_backend": cfg.photometry_backend,
+        "warp_devices": list(cfg.warp_devices),
         "psf_enabled": enable_psf,
         "diagnostic_aperture_enabled": enable_diagnostic_aperture,
         "assembly": assembly,
