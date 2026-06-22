@@ -168,30 +168,18 @@ def mark_frame(
 
 
 def mark_target(run_dir: Path, *, image_id: str, target: dict[str, Any], status: str) -> None:
+    mark_targets(run_dir, image_id=image_id, targets=[target], status=status)
+
+
+def mark_targets(run_dir: Path, *, image_id: str, targets: list[dict[str, Any]], status: str) -> None:
+    if not targets:
+        return
     now = time.time()
     try:
         with _DB_LOCK, _connect(db_path(run_dir)) as con:
             con.executescript(SCHEMA)
             _migrate(con)
-            con.execute(
-            """
-            INSERT INTO targets (
-              image_id, target_id, target_type, x_pix, y_pix, phot_g_mean_mag,
-              cwave_um, status, aperture_flux_uJy, psf_flux_uJy, fatal_flag_present, updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(image_id, target_id) DO UPDATE SET
-              target_type=COALESCE(excluded.target_type, targets.target_type),
-              x_pix=COALESCE(excluded.x_pix, targets.x_pix),
-              y_pix=COALESCE(excluded.y_pix, targets.y_pix),
-              phot_g_mean_mag=COALESCE(excluded.phot_g_mean_mag, targets.phot_g_mean_mag),
-              cwave_um=COALESCE(excluded.cwave_um, targets.cwave_um),
-              status=excluded.status,
-              aperture_flux_uJy=COALESCE(excluded.aperture_flux_uJy, targets.aperture_flux_uJy),
-              psf_flux_uJy=COALESCE(excluded.psf_flux_uJy, targets.psf_flux_uJy),
-              fatal_flag_present=COALESCE(excluded.fatal_flag_present, targets.fatal_flag_present),
-              updated_at=excluded.updated_at
-            """,
+            target_rows = [
                 (
                     image_id,
                     str(target.get("target_id")),
@@ -205,23 +193,32 @@ def mark_target(run_dir: Path, *, image_id: str, target: dict[str, Any], status:
                     _optional_float(target.get("psf_flux_uJy")),
                     _optional_int(target.get("fatal_flag_present")),
                     now,
-                ),
-            )
-            if status == "done":
-                con.execute(
-                """
-                INSERT INTO spectra_points (
-                  target_id, image_id, cwave_um, aperture_flux_uJy, psf_flux_uJy,
-                  fatal_flag_present, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(target_id, image_id) DO UPDATE SET
-                  cwave_um=excluded.cwave_um,
-                  aperture_flux_uJy=excluded.aperture_flux_uJy,
-                  psf_flux_uJy=excluded.psf_flux_uJy,
-                  fatal_flag_present=excluded.fatal_flag_present,
+                for target in targets
+            ]
+            con.executemany(
+                """
+                INSERT INTO targets (
+                  image_id, target_id, target_type, x_pix, y_pix, phot_g_mean_mag,
+                  cwave_um, status, aperture_flux_uJy, psf_flux_uJy, fatal_flag_present, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(image_id, target_id) DO UPDATE SET
+                  target_type=COALESCE(excluded.target_type, targets.target_type),
+                  x_pix=COALESCE(excluded.x_pix, targets.x_pix),
+                  y_pix=COALESCE(excluded.y_pix, targets.y_pix),
+                  phot_g_mean_mag=COALESCE(excluded.phot_g_mean_mag, targets.phot_g_mean_mag),
+                  cwave_um=COALESCE(excluded.cwave_um, targets.cwave_um),
+                  status=excluded.status,
+                  aperture_flux_uJy=COALESCE(excluded.aperture_flux_uJy, targets.aperture_flux_uJy),
+                  psf_flux_uJy=COALESCE(excluded.psf_flux_uJy, targets.psf_flux_uJy),
+                  fatal_flag_present=COALESCE(excluded.fatal_flag_present, targets.fatal_flag_present),
                   updated_at=excluded.updated_at
                 """,
+                target_rows,
+            )
+            if status == "done":
+                spectra_rows = [
                     (
                         str(target.get("target_id")),
                         image_id,
@@ -230,7 +227,24 @@ def mark_target(run_dir: Path, *, image_id: str, target: dict[str, Any], status:
                         _optional_float(target.get("psf_flux_uJy")),
                         _optional_int(target.get("fatal_flag_present")),
                         now,
-                    ),
+                    )
+                    for target in targets
+                ]
+                con.executemany(
+                    """
+                    INSERT INTO spectra_points (
+                      target_id, image_id, cwave_um, aperture_flux_uJy, psf_flux_uJy,
+                      fatal_flag_present, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(target_id, image_id) DO UPDATE SET
+                      cwave_um=excluded.cwave_um,
+                      aperture_flux_uJy=excluded.aperture_flux_uJy,
+                      psf_flux_uJy=excluded.psf_flux_uJy,
+                      fatal_flag_present=excluded.fatal_flag_present,
+                      updated_at=excluded.updated_at
+                    """,
+                    spectra_rows,
                 )
     except sqlite3.Error:
         pass

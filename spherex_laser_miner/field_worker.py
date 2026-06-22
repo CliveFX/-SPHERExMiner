@@ -20,7 +20,7 @@ from spherex_laser_miner.catalog.gaia import query_gaia_for_s_region
 from spherex_laser_miner.catalog.manual_targets import ManualTarget
 from spherex_laser_miner.config import MinerConfig
 from spherex_laser_miner.coordinates import edge_distance_pix, propagate_coordinates
-from spherex_laser_miner.live_status import mark_frame, mark_frame_perf, mark_target, reset_live_status
+from spherex_laser_miner.live_status import mark_frame, mark_frame_perf, mark_targets, reset_live_status
 from spherex_laser_miner.photometry.aperture import aperture_measure
 from spherex_laser_miner.photometry.calibrated_aperture import calibrated_aperture_measure
 from spherex_laser_miner.photometry.psf import psf_measure, psf_not_run
@@ -185,19 +185,19 @@ def run_trial_field_worker(
                     "rejection_reason": None if selected else "outside_or_edge",
                 }
                 selection_rows.append(selection)
-                if selected:
-                    ts = time.perf_counter()
-                    mark_target(cfg.smoke_run_dir, image_id=image_id, target=selection, status="queued")
-                    perf["status_sec"] += time.perf_counter() - ts
+            selected_rows = [item for item in selection_rows if item["selected_for_photometry"]]
+            ts = time.perf_counter()
+            mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=selected_rows, status="queued")
+            perf["status_sec"] += time.perf_counter() - ts
             perf["selection_sec"] += time.perf_counter() - t0
 
             t0 = time.perf_counter()
-            for row in [item for item in selection_rows if item["selected_for_photometry"]]:
+            ts = time.perf_counter()
+            mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=selected_rows, status="active")
+            perf["status_sec"] += time.perf_counter() - ts
+            for row in selected_rows:
                 x_pix = float(row["x_pix"])
                 y_pix = float(row["y_pix"])
-                ts = time.perf_counter()
-                mark_target(cfg.smoke_run_dir, image_id=image_id, target=row, status="active")
-                perf["status_sec"] += time.perf_counter() - ts
                 cwave_um, cband_um = _wavelength_at(spectral_wcs, x_pix, y_pix)
                 tp = time.perf_counter()
                 aperture = aperture_measure(
@@ -264,9 +264,9 @@ def run_trial_field_worker(
                     **psf.to_json_dict(),
                 }
                 measurement_rows.append(measurement)
-                ts = time.perf_counter()
-                mark_target(cfg.smoke_run_dir, image_id=image_id, target=measurement, status="done")
-                perf["status_sec"] += time.perf_counter() - ts
+            ts = time.perf_counter()
+            mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=measurement_rows, status="done")
+            perf["status_sec"] += time.perf_counter() - ts
             perf["photometry_sec"] += time.perf_counter() - t0
     except Exception as exc:
         mark_frame(cfg.smoke_run_dir, image_id=image_id, status="error", error=f"{type(exc).__name__}: {exc}")
