@@ -69,6 +69,18 @@ def _choose_targets(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
     if args.target_id:
         wanted = {item.strip() for item in args.target_id.split(",") if item.strip()}
         rows = rows[rows["target_id"].astype(str).isin(wanted)]
+    if args.require_wavelength_nm and "cband_um" in rows.columns:
+        line_um = float(args.require_wavelength_nm) / 1000.0
+        line_width_um = float(args.line_width_nm) / 1000.0
+        cwave = pd.to_numeric(rows["cwave_um"], errors="coerce").to_numpy(dtype=float)
+        cband = pd.to_numeric(rows["cband_um"], errors="coerce").to_numpy(dtype=float)
+        fwhm = np.sqrt(np.maximum(cband, 0.0) ** 2 + max(line_width_um, 0.0) ** 2)
+        sigma = fwhm / 2.354820045
+        response = np.zeros(len(rows), dtype=float)
+        good_sigma = np.isfinite(cwave) & np.isfinite(sigma) & (sigma > 0.0)
+        response[good_sigma] = np.exp(-0.5 * ((cwave[good_sigma] - line_um) / sigma[good_sigma]) ** 2)
+        unc = pd.to_numeric(rows["aperture_flux_unc_uJy"], errors="coerce").to_numpy(dtype=float)
+        rows["_required_line_usable"] = np.isfinite(unc) & (unc > 0.0) & (response >= float(args.min_response))
 
     grouped = rows.groupby("target_id", dropna=False)
     target_summary = grouped.agg(
@@ -78,6 +90,9 @@ def _choose_targets(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
         median_unc_uJy=("aperture_flux_unc_uJy", "median"),
         median_flux_uJy=("aperture_flux_uJy", "median"),
         phot_g_mean_mag=("phot_g_mean_mag", "median") if "phot_g_mean_mag" in rows.columns else ("target_id", "size"),
+        usable_required_line_points=("_required_line_usable", "sum")
+        if "_required_line_usable" in rows.columns
+        else ("target_id", "size"),
     ).reset_index()
     target_summary = target_summary[
         target_summary["n_measurements"].ge(args.min_measurements)
@@ -88,6 +103,8 @@ def _choose_targets(df: pd.DataFrame, args: argparse.Namespace) -> pd.DataFrame:
         target_summary = target_summary[
             target_summary["wavelength_min_um"].le(wave_um) & target_summary["wavelength_max_um"].ge(wave_um)
         ]
+        if "usable_required_line_points" in target_summary.columns:
+            target_summary = target_summary[target_summary["usable_required_line_points"].gt(0)]
     target_summary = target_summary.sort_values(["median_unc_uJy", "n_measurements"], ascending=[True, False])
     if args.max_targets:
         target_summary = target_summary.head(args.max_targets)
@@ -197,6 +214,7 @@ def main() -> None:
                 "median_unc_uJy": _finite_float(row["median_unc_uJy"]),
                 "median_flux_uJy": _finite_float(row["median_flux_uJy"]),
                 "phot_g_mean_mag": _finite_float(row.get("phot_g_mean_mag")),
+                "usable_required_line_points": int(row.get("usable_required_line_points") or 0),
             }
             for _, row in targets.iterrows()
         ],
