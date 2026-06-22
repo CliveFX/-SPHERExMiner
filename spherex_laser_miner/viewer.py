@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import html
 import sqlite3
 import subprocess
 import threading
@@ -51,6 +52,8 @@ def _make_handler(run_dir: Path):
                     self._send_html(_live_html())
                 elif path == "/spectra":
                     self._send_html(_spectra_html())
+                elif path == "/frame-point":
+                    self._send_html(_frame_point_html(active_run_dir, params))
                 elif path == "/api/runs":
                     self._send_json(_runs(runs_root, active_run_dir))
                 elif path == "/api/summary":
@@ -726,6 +729,21 @@ def _query_int(params: dict[str, list[str]], name: str, default: int) -> int:
         return default
 
 
+def _query_float(params: dict[str, list[str]], name: str) -> float | None:
+    try:
+        return float((params.get(name) or [""])[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _html_escape(value: object) -> str:
+    return html.escape("" if value is None else str(value), quote=True)
+
+
+def _fmt_optional(value: float | None) -> str:
+    return "" if value is None else f"{value:.3f}"
+
+
 def _spectrum(run_dir: Path, target_id: str) -> dict[str, object]:
     path = run_dir / "spectra" / "target_spectra.parquet"
     if not path.exists():
@@ -830,6 +848,70 @@ def _live_frame_image(run_dir: Path, image_id: str) -> Path:
     fig.savefig(out, dpi=130, format="jpg", facecolor="#020617")
     plt.close(fig)
     return out
+
+
+def _frame_point_html(run_dir: Path, params: dict[str, list[str]]) -> str:
+    image_id = (params.get("image_id") or [""])[0]
+    target_id = (params.get("target_id") or [""])[0]
+    x_pix = _query_float(params, "x_pix")
+    y_pix = _query_float(params, "y_pix")
+    cwave_um = (params.get("cwave_um") or [""])[0]
+    flux = (params.get("flux_uJy") or [""])[0]
+    fits_file = (params.get("fits_file") or [""])[0]
+    input_file_path = (params.get("input_file_path") or [""])[0]
+    image_url = "/api/live/frame/" + urllib.parse.quote(image_id) + ".jpg?run=" + urllib.parse.quote(run_dir.name)
+    cx = x_pix if x_pix is not None else 1024.0
+    cy = 2048.0 - y_pix if y_pix is not None else 1024.0
+    return f"""<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>{_html_escape(target_id)} {_html_escape(image_id)}</title>
+  <style>
+    body {{ margin:0; background:#050b14; color:#e5eefb; font:13px system-ui,sans-serif; }}
+    header {{ padding:12px 16px; border-bottom:1px solid #24364f; background:#0b1424; display:flex; justify-content:space-between; gap:16px; }}
+    h1 {{ margin:0; font-size:16px; color:#7dd3fc; }}
+    main {{ display:grid; grid-template-columns:minmax(600px,1fr) 380px; gap:12px; padding:12px; }}
+    .stage {{ position:relative; background:#020617; border:1px solid #1d5f7a; min-height:70vh; }}
+    .stage img {{ display:block; width:100%; height:auto; }}
+    .stage svg {{ position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }}
+    .ring {{ fill:none; stroke:#facc15; stroke-width:4; vector-effect:non-scaling-stroke; filter:drop-shadow(0 0 8px #facc15); }}
+    .cross {{ stroke:#f97316; stroke-width:2; vector-effect:non-scaling-stroke; }}
+    aside {{ border:1px solid #24364f; background:#0f1b2d; padding:12px; border-radius:6px; overflow-wrap:anywhere; }}
+    .k {{ color:#93a4bb; font-size:11px; text-transform:uppercase; margin-top:10px; }}
+    .v {{ font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }}
+    a {{ color:#7dd3fc; }}
+  </style>
+</head>
+<body>
+<header>
+  <h1>{_html_escape(target_id)} on {_html_escape(image_id)}</h1>
+  <a href="/spectra?run={urllib.parse.quote(run_dir.name)}">Spectra</a>
+</header>
+<main>
+  <div class="stage">
+    <img src="{_html_escape(image_url)}" alt="FITS preview">
+    <svg viewBox="0 0 2048 2048" preserveAspectRatio="none">
+      <circle class="ring" cx="{cx:.3f}" cy="{cy:.3f}" r="34"></circle>
+      <line class="cross" x1="{cx - 48:.3f}" y1="{cy:.3f}" x2="{cx - 18:.3f}" y2="{cy:.3f}"></line>
+      <line class="cross" x1="{cx + 18:.3f}" y1="{cy:.3f}" x2="{cx + 48:.3f}" y2="{cy:.3f}"></line>
+      <line class="cross" x1="{cx:.3f}" y1="{cy - 48:.3f}" x2="{cx:.3f}" y2="{cy - 18:.3f}"></line>
+      <line class="cross" x1="{cx:.3f}" y1="{cy + 18:.3f}" x2="{cx:.3f}" y2="{cy + 48:.3f}"></line>
+    </svg>
+  </div>
+  <aside>
+    <div class="k">Target</div><div class="v">{_html_escape(target_id)}</div>
+    <div class="k">Image ID</div><div class="v">{_html_escape(image_id)}</div>
+    <div class="k">Pixel</div><div class="v">x={_html_escape(_fmt_optional(x_pix))}, y={_html_escape(_fmt_optional(y_pix))}</div>
+    <div class="k">Wavelength</div><div class="v">{_html_escape(cwave_um)} um</div>
+    <div class="k">Flux</div><div class="v">{_html_escape(flux)} uJy</div>
+    <div class="k">FITS</div><div class="v">{_html_escape(fits_file)}</div>
+    <div class="k">Path</div><div class="v">{_html_escape(input_file_path)}</div>
+    <div class="k">JPEG</div><div class="v"><a target="_blank" rel="noopener" href="{_html_escape(image_url)}">open raw preview</a></div>
+  </aside>
+</main>
+</body>
+</html>"""
 
 
 def _safe_name(value: str) -> str:
@@ -984,13 +1066,40 @@ async function loadSpectrum() {
   const targetId = document.getElementById('targetSelect').value;
   const data = await getJSON(`/api/spectrum/${encodeURIComponent(targetId)}` + runQS());
   drawPlot(data.rows || []);
-  document.getElementById('spectrumTable').innerHTML = makeTable((data.rows || []).slice(0, 40), ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','psf_flux_uJy','psf_flux_unc_uJy','psf_fit_status','detector','observation_id']);
+  document.getElementById('spectrumTable').innerHTML = makeTable((data.rows || []).slice(0, 40), ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','psf_flux_uJy','psf_flux_unc_uJy','psf_fit_status','detector','observation_id','image_id']);
 }
 
 function makeTable(rows, cols) {
   if (!rows.length) return '<em>No rows</em>';
   return '<table><thead><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>' +
-    rows.map(r => '<tr>' + cols.map(c => `<td>${fmt(r[c])}</td>`).join('') + '</tr>').join('') + '</tbody></table>';
+    rows.map(r => '<tr>' + cols.map(c => `<td>${cellHTML(r, c)}</td>`).join('') + '</tr>').join('') + '</tbody></table>';
+}
+
+function cellHTML(row, col) {
+  if (col === 'image_id' && row[col]) {
+    const href = framePointHref(row);
+    return `<a href="${href}" target="_blank" rel="noopener" style="color:#0ea5e9">${fmt(row[col])}</a>`;
+  }
+  return fmt(row[col]);
+}
+
+function fileName(path) {
+  if (!path) return '';
+  return String(path).split('/').pop();
+}
+
+function framePointHref(row) {
+  const p = new URLSearchParams();
+  if (activeRun) p.set('run', activeRun);
+  p.set('image_id', row.image_id || '');
+  p.set('target_id', row.target_id || document.getElementById('targetSelect')?.value || '');
+  p.set('x_pix', row.x_pix || '');
+  p.set('y_pix', row.y_pix || '');
+  p.set('cwave_um', row.cwave_um || '');
+  p.set('flux_uJy', row.aperture_flux_uJy || '');
+  p.set('fits_file', row.fits_file || fileName(row.input_file_path) || '');
+  p.set('input_file_path', row.input_file_path || '');
+  return '/frame-point?' + p.toString();
 }
 
 function fmt(v) {
@@ -1453,10 +1562,7 @@ def _spectra_html() -> str:
 </header>
 <main>
   <section>
-    <div class="row">
-      <button onclick="selectTarget('simp0136')">SIMP</button>
-      <button onclick="refreshAll()">Refresh</button>
-    </div>
+    <button onclick="refreshAll()">Refresh</button>
     <label for="runSelect">Run</label>
     <select id="runSelect" onchange="switchRun()"></select>
     <label for="filter">Filter targets</label>
@@ -1735,7 +1841,29 @@ function fileName(path) {
 function makeTable(rows, cols) {
   if (!rows.length) return '<div class="small">No rows</div>';
   return '<table><thead><tr>' + cols.map(c => `<th>${c}</th>`).join('') + '</tr></thead><tbody>' +
-    rows.map(r => '<tr>' + cols.map(c => `<td>${escapeHtml(fmt(r[c]))}</td>`).join('') + '</tr>').join('') + '</tbody></table>';
+    rows.map(r => '<tr>' + cols.map(c => `<td>${cellHTML(r, c)}</td>`).join('') + '</tr>').join('') + '</tbody></table>';
+}
+
+function cellHTML(row, col) {
+  if (col === 'image_id' && row[col]) {
+    const href = framePointHref(row);
+    return `<a href="${href}" target="_blank" rel="noopener" style="color:#7dd3fc">${escapeHtml(fmt(row[col]))}</a>`;
+  }
+  return escapeHtml(fmt(row[col]));
+}
+
+function framePointHref(row) {
+  const p = new URLSearchParams();
+  if (activeRun) p.set('run', activeRun);
+  p.set('image_id', row.image_id || '');
+  p.set('target_id', row.target_id || current || '');
+  p.set('x_pix', row.x_pix || '');
+  p.set('y_pix', row.y_pix || '');
+  p.set('cwave_um', row.cwave_um || '');
+  p.set('flux_uJy', row.aperture_flux_uJy || '');
+  p.set('fits_file', row.fits_file || fileName(row.input_file_path) || '');
+  p.set('input_file_path', row.input_file_path || '');
+  return '/frame-point?' + p.toString();
 }
 
 function runningMedianRows(rows, width) {
