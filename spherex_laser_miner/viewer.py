@@ -318,6 +318,10 @@ def _simple_status(run_dir: Path) -> dict[str, object]:
             "events": [],
             "overall": overall,
         }
+    if summary and not has_coarse_fields:
+        evaluation = _evaluation_status(run_dir, summary)
+        if evaluation is not None:
+            return evaluation
     field_values = list(dict(summary.get("fields") or {}).items())
     fields = []
     for image_id, field in field_values:
@@ -332,6 +336,7 @@ def _simple_status(run_dir: Path) -> dict[str, object]:
     )
     summary_out = dict(summary)
     summary_out.pop("fields", None)
+    _refresh_elapsed(summary_out)
     return {
         "run_dir": str(run_dir),
         "run_name": run_dir.name,
@@ -340,6 +345,71 @@ def _simple_status(run_dir: Path) -> dict[str, object]:
         "fields": fields[:250],
         "events": tail_events(run_dir, limit=120),
     }
+
+
+def _evaluation_status(run_dir: Path, summary: dict[str, object]) -> dict[str, object] | None:
+    candidates = _read_json(run_dir / "candidate_fields.json")
+    trials = _read_json(run_dir / "simp_field_trials.partial.json")
+    if not isinstance(trials, list):
+        trials = _read_json(run_dir / "simp_field_trials.json")
+    if not isinstance(candidates, list) and not isinstance(trials, list):
+        return None
+    candidate_count = len(candidates) if isinstance(candidates, list) else None
+    trial_rows = trials if isinstance(trials, list) else []
+    rows = []
+    for trial in trial_rows[-250:]:
+        if not isinstance(trial, dict):
+            continue
+        candidate = dict(trial.get("candidate") or {})
+        image_id = Path(str(trial.get("local_path") or candidate.get("access_url") or "")).stem
+        rows.append(
+            {
+                "image_id": image_id,
+                "status": trial.get("status", "evaluated"),
+                "detector": trial.get("detector") or candidate.get("detector"),
+                "observation_id": candidate.get("obs_id"),
+                "edge_distance_pix": trial.get("edge_distance_pix"),
+                "download_status": trial.get("download_status"),
+                "error": trial.get("error"),
+            }
+        )
+    summary_out = dict(summary)
+    summary_out.pop("fields", None)
+    _refresh_elapsed(summary_out)
+    done = len(trial_rows)
+    total = candidate_count or int(summary_out.get("total_fields") or done or 0)
+    summary_out.update(
+        {
+            "run_phase": "evaluating_fields",
+            "total_fields": total,
+            "done": done,
+            "active": 1 if total and done < total else 0,
+            "queued": max(0, total - done) if total else None,
+            "error": sum(1 for row in trial_rows if isinstance(row, dict) and row.get("status") == "failed"),
+            "measurements_per_sec": None,
+        }
+    )
+    return {
+        "run_dir": str(run_dir),
+        "run_name": run_dir.name,
+        "mode": "evaluating",
+        "summary": summary_out,
+        "fields": list(reversed(rows)),
+        "events": tail_events(run_dir, limit=120),
+    }
+
+
+def _refresh_elapsed(summary: dict[str, object]) -> None:
+    if summary.get("finished_at") is not None:
+        return
+    try:
+        started = float(summary.get("started_at") or 0.0)
+    except Exception:
+        started = 0.0
+    if started > 0:
+        now = time.time()
+        summary["updated_at"] = max(float(summary.get("updated_at") or started), now)
+        summary["elapsed_sec"] = max(0.0, now - started)
 
 
 def _job_perf_summary(run_dir: Path) -> dict[str, object]:
@@ -1903,7 +1973,8 @@ def _injections_html() -> str:
     .recovered { color:var(--green); }
     .missed { color:var(--red); }
     .candidate { color:var(--amber); }
-    #plot { width:100%; height:620px; background:rgba(3,8,18,.95); border:1px solid #17617d; border-radius:6px; box-shadow:0 0 28px rgba(54,231,255,.13), inset 0 0 24px rgba(255,79,216,.035); }
+    #plot { width:100%; height:420px; background:rgba(3,8,18,.95); border:1px solid #17617d; border-radius:6px; box-shadow:0 0 28px rgba(54,231,255,.13), inset 0 0 24px rgba(255,79,216,.035); }
+    #injectionPlot { width:100%; height:240px; background:rgba(3,8,18,.95); border:1px solid #17617d; border-radius:6px; box-shadow:0 0 28px rgba(255,79,216,.10), inset 0 0 24px rgba(54,231,255,.03); }
     .small { color:var(--muted); font-size:12px; }
     .mono { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
     .tabs { display:flex; gap:8px; margin-bottom:8px; }
@@ -1943,8 +2014,12 @@ def _injections_html() -> str:
   <div>
     <section>
       <div class="tiles" id="summaryTiles"></div>
-      <svg id="plot" viewBox="0 0 1160 620"></svg>
-      <div class="small">Solid magenta line is the selected injected wavelength. Amber dashed lines are scorer candidates for the same target. Orange points are fatal-flagged measurements.</div>
+      <svg id="plot" viewBox="0 0 1160 420"></svg>
+      <div class="small">Solid magenta line is the selected injected wavelength. Amber dashed lines are scorer candidates for the same target. Orange points are fatal-flagged measurements and are excluded from curves and plot scaling.</div>
+    </section>
+    <section style="margin-top:12px">
+      <div class="small" style="margin-bottom:6px">Synthetic injected response only, not added to measured spectrum</div>
+      <svg id="injectionPlot" viewBox="0 0 1160 240"></svg>
     </section>
     <section style="margin-top:12px">
       <div class="tabs">
@@ -2045,6 +2120,7 @@ function renderDetail() {
   if (!detail || detail.error) {
     document.getElementById('summaryTiles').innerHTML = '<div class="tile"><div class="v">No injection selected</div></div>';
     document.getElementById('plot').innerHTML = '';
+    document.getElementById('injectionPlot').innerHTML = '';
     document.getElementById('detailTable').innerHTML = '';
     return;
   }
@@ -2065,6 +2141,7 @@ function renderDetail() {
   ];
   document.getElementById('summaryTiles').innerHTML = tiles.map(([k,v]) => `<div class="tile"><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div></div>`).join('');
   drawPlot(detail.spectrum?.rows || [], inj, cand, detail.target_injections || detail.spectrum?.target_injections || []);
+  drawInjectionPlot(detail.spectrum?.rows || [], inj, detail.target_injections || detail.spectrum?.target_injections || []);
   renderTable();
 }
 function setTableMode(mode) { tableMode = mode; renderTable(); }
@@ -2074,7 +2151,7 @@ function renderTable() {
     document.getElementById('detailTable').innerHTML = makeTable(detail.target_injections || [], ['recovered','line_family','injected_line_nm','find_me_snr','recovered_snr','line_flux_uJy','max_frame_flux_uJy','frames_written','injection_id']);
   } else if (tableMode === 'points') {
     const pts = [...(detail.spectrum?.rows || [])].sort((a,b)=>num(a.cwave_um)-num(b.cwave_um));
-    document.getElementById('detailTable').innerHTML = makeTable(pts.slice(0,420), ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','fatal_flag_present','detector','image_id','input_file_path']);
+    document.getElementById('detailTable').innerHTML = makeTable(pts.slice(0,420), ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','psf_flux_uJy','psf_flux_unc_uJy','psf_fit_status','fatal_flag_present','detector','image_id','input_file_path']);
   } else {
     document.getElementById('detailTable').innerHTML = makeTable(detail.target_candidates || [], ['selected_injection_match','candidate_line_nm','line_family','matched_snr','matched_flux_uJy','matched_flux_unc_uJy','n_supporting_points','n_flagged_nearby','best_frame_ids']);
   }
@@ -2082,78 +2159,98 @@ function renderTable() {
 function drawPlot(points, inj, candidates, targetInjections) {
   const svg = document.getElementById('plot');
   svg.innerHTML = '';
-  const W=1160,H=620,main={l:100,r:30,t:26,b:212},bump={l:100,r:30,t:470,b:58};
+  const W=1160,H=420,main={l:100,r:30,t:26,b:70};
   const injections = targetInjections && targetInjections.length ? targetInjections : [inj].filter(Boolean);
-  const clean = points.map(p => ({x:num(p.cwave_um), y:num(p.aperture_flux_uJy), unc:num(p.aperture_flux_unc_uJy), flag:!!p.fatal_flag_present, image_id:p.image_id, cband:num(p.cband_um)})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
-  if (!clean.length) { add('text',{x:W/2,y:H/2,fill:'#86a4bf','text-anchor':'middle'},'No spectrum points'); return; }
+  const ap = points.map(p => ({x:num(p.cwave_um), y:num(p.aperture_flux_uJy), unc:num(p.aperture_flux_unc_uJy), flag:!!p.fatal_flag_present, image_id:p.image_id, cband:num(p.cband_um)})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+  const psf = points.map(p => ({x:num(p.cwave_um), y:num(p.psf_flux_uJy), unc:num(p.psf_flux_unc_uJy), flag:!!p.fatal_flag_present, image_id:p.image_id, cband:num(p.cband_um), status:p.psf_fit_status})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+  const allFlux = ap.concat(psf);
+  if (!allFlux.length) { add('text',{x:W/2,y:H/2,fill:'#86a4bf','text-anchor':'middle'},'No spectrum points'); return; }
   const xmin=0.72,xmax=5.05;
-  const inRange = clean.filter(p => p.x>=xmin && p.x<=xmax).map(p=>p.y).sort((a,b)=>a-b);
+  const apGood = ap.filter(p => !p.flag);
+  const psfGood = psf.filter(p => !p.flag);
+  const scaleFlux = (apGood.concat(psfGood).length ? apGood.concat(psfGood) : allFlux);
+  const inRange = scaleFlux.filter(p => p.x>=xmin && p.x<=xmax).map(p=>p.y).sort((a,b)=>a-b);
   let ymin = quantile(inRange, .02), ymax = quantile(inRange, .98);
   const pad=(ymax-ymin || 1)*.12; ymin-=pad; ymax+=pad;
   const xs = v => main.l + (v-xmin)/(xmax-xmin)*(W-main.l-main.r);
-  const ys = v => main.b - (v-ymin)/(ymax-ymin || 1)*(main.b-main.t);
-  for (let v=1; v<=5; v++) { line(xs(v),main.t,xs(v),main.b,'#1f3a5f',.55); text(xs(v),main.b+20,String(v),'#86a4bf','middle'); }
+  const ys = v => H-main.b - (v-ymin)/(ymax-ymin || 1)*(H-main.b-main.t);
+  for (let v=1; v<=5; v++) { line(xs(v),main.t,xs(v),H-main.b,'#1f3a5f',.55); text(xs(v),H-main.b+20,String(v),'#86a4bf','middle'); }
   for (let i=0; i<5; i++) {
     const val = ymin + (ymax-ymin)*(1-i/4);
-    const yy = main.t+i*(main.b-main.t)/4;
+    const yy = main.t+i*(H-main.b-main.t)/4;
     line(main.l,yy,W-main.r,yy,'#1f3a5f',.5);
     text(main.l-9,yy+4,fmt(val),'#86a4bf','end');
   }
-  line(main.l,main.b,W-main.r,main.b,'#86a4bf',1); line(main.l,main.t,main.l,main.b,'#86a4bf',1);
-  const smooth = medianBinned(clean, 80);
-  if (smooth.length > 1) add('path',{d:pathFrom(smooth,xs,ys),fill:'none',stroke:'#e7f6ff','stroke-width':1.45,opacity:.72});
-  for (const p of clean) point(xs(p.x), ys(p.y), p.flag ? '#ff8a3d' : '#25f38c', p.flag ? .35 : .82, p.flag ? 2.7 : 3.1, `${fmt(p.x)}um ${fmt(p.y)}uJy\\n${p.image_id || ''}`);
+  line(main.l,H-main.b,W-main.r,H-main.b,'#86a4bf',1); line(main.l,main.t,main.l,H-main.b,'#86a4bf',1);
+  const apSmooth = apGood.length ? medianBinned(apGood, 80) : [];
+  const psfSmooth = psfGood.length ? medianBinned(psfGood, 80) : [];
+  if (apSmooth.length > 1) add('path',{d:pathFrom(apSmooth,xs,ys),fill:'none',stroke:'#25f38c','stroke-width':1.35,opacity:.75});
+  if (psfSmooth.length > 1) add('path',{d:pathFrom(psfSmooth,xs,ys),fill:'none',stroke:'#c084fc','stroke-width':1.35,opacity:.78});
+  for (const p of ap) point(xs(p.x), ys(p.y), p.flag ? '#ff8a3d' : '#25f38c', p.flag ? .30 : .75, p.flag ? 2.4 : 2.8, `aperture ${fmt(p.x)}um ${fmt(p.y)}uJy\\n${p.image_id || ''}`);
+  for (const p of psf) diamond(xs(p.x), ys(p.y), p.flag ? '#ff8a3d' : '#c084fc', p.flag ? .30 : .72, `psf ${fmt(p.x)}um ${fmt(p.y)}uJy\\n${p.status || ''}\\n${p.image_id || ''}`);
   for (const sig of injections) {
     const lineNm = num(sig.injected_line_nm || sig.nominal_line_nm), lineUm = lineNm/1000;
     if (!Number.isFinite(lineUm)) continue;
     const selected = String(sig.injection_id || '') === String(inj.injection_id || '');
     const color = selected ? '#ff4fd8' : '#36e7ff';
     const xx = xs(lineUm);
-    line(xx,main.t,xx,main.b,color,selected ? .95 : .45,selected ? 2.4 : 1.2);
+    line(xx,main.t,xx,H-main.b,color,selected ? .95 : .45,selected ? 2.4 : 1.2);
     text(xx+5,main.t+(selected ? 18 : 34),`${fmt(lineNm)} nm ${selected ? 'selected' : 'injected'}`,color,'start');
   }
   for (const c of candidates || []) {
     const cu = num(c.candidate_line_nm)/1000;
     if (!Number.isFinite(cu)) continue;
     const color = c.selected_injection_match ? '#ffb84a' : '#36e7ff';
-    dashed(xs(cu),main.t,xs(cu),main.b,color,.55);
-    text(xs(cu)+4,main.b-12,`${fmt(c.candidate_line_nm)} SNR ${fmt(c.matched_snr)}`,color,'start');
+    dashed(xs(cu),main.t,xs(cu),H-main.b,color,.55);
+    text(xs(cu)+4,H-main.b-12,`${fmt(c.candidate_line_nm)} SNR ${fmt(c.matched_snr)}`,color,'start');
   }
-  drawInjectionStrip();
-  point(W-288,22,'#25f38c',.85,3.2); text(W-276,26,'aperture uJy','#e7f6ff','start');
-  point(W-196,22,'#ff8a3d',.45,3.2); text(W-184,26,'flagged','#e7f6ff','start');
-  line(W-122,22,W-98,22,'#ff4fd8',1,2.2); text(W-92,26,'injected line','#e7f6ff','start');
+  point(W-372,22,'#25f38c',.85,3.2); text(W-360,26,'aperture','#e7f6ff','start');
+  diamond(W-282,22,'#c084fc',.85,'psf'); text(W-270,26,'psf','#e7f6ff','start');
+  point(W-220,22,'#ff8a3d',.45,3.2); text(W-208,26,'flagged','#e7f6ff','start');
+  line(W-138,22,W-114,22,'#ff4fd8',1,2.2); text(W-108,26,'injected line','#e7f6ff','start');
   dashed(W-292,44,W-268,44,'#ffb84a',.8); text(W-262,48,'candidate match','#e7f6ff','start');
-  text(W/2,H-10,'wavelength (um)','#86a4bf','middle');
-  text(13,(main.t+main.b)/2,'measured aperture flux (uJy)','#86a4bf','middle','rotate(-90 13 '+((main.t+main.b)/2)+')');
-  text(13,(bump.t+bump.b)/2,'synthetic injected flux (uJy)','#86a4bf','middle','rotate(-90 13 '+((bump.t+bump.b)/2)+')');
-  function drawInjectionStrip() {
-    const series = injections.map((sig, idx) => {
-      const lineNm = num(sig.injected_line_nm || sig.nominal_line_nm), lineUm = lineNm/1000;
-      const widthUm = Math.max(1e-6, num(sig.line_width_nm || 0.1)/1000);
-      const flux = num(sig.line_flux_uJy);
-      const color = String(sig.injection_id || '') === String(inj.injection_id || '') ? '#ff4fd8' : (idx % 2 ? '#36e7ff' : '#facc15');
-      const pts = clean.map(p => ({x:p.x, y:flux*responseAt(p.x, p.cband, lineUm, widthUm)})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y) && p.x>=xmin && p.x<=xmax);
-      return {sig,lineNm,lineUm,color,pts};
-    }).filter(s => s.pts.length);
-    const maxY = Math.max(1, ...series.flatMap(s => s.pts.map(p => p.y)).filter(Number.isFinite));
-    const bx = v => bump.l + (v-xmin)/(xmax-xmin)*(W-bump.l-bump.r);
-    const by = v => bump.b - (v/Math.max(maxY,1))*(bump.b-bump.t);
-    for (let v=1; v<=5; v++) { line(bx(v),bump.t,bx(v),bump.b,'#1f3a5f',.45); text(bx(v),bump.b+20,String(v),'#86a4bf','middle'); }
-    for (let i=0; i<4; i++) {
-      const val = maxY*(1-i/3);
-      const yy = bump.t+i*(bump.b-bump.t)/3;
-      line(bump.l,yy,W-bump.r,yy,'#1f3a5f',.45);
-      text(bump.l-9,yy+4,fmt(val),'#86a4bf','end');
-    }
-    line(bump.l,bump.b,W-bump.r,bump.b,'#86a4bf',1); line(bump.l,bump.t,bump.l,bump.b,'#86a4bf',1);
-    for (const s of series) {
-      if (s.pts.length > 1) add('path',{d:pathFrom(s.pts,bx,by),fill:'none',stroke:s.color,'stroke-width':1.9,opacity:.85});
-      const xx = bx(s.lineUm);
-      if (Number.isFinite(xx)) line(xx,bump.t,xx,bump.b,s.color,.55,1.2);
-    }
-    text(bump.l,bump.t-10,'injected response only, not added to measured spectrum','#93c5fd','start');
+  text(W/2,H-12,'wavelength (um)','#86a4bf','middle');
+  text(13,(main.t+H-main.b)/2,'measured flux (uJy)','#86a4bf','middle','rotate(-90 13 '+((main.t+H-main.b)/2)+')');
+  function add(name, attrs, label) { const el=document.createElementNS('http://www.w3.org/2000/svg',name); for (const [k,v] of Object.entries(attrs)) el.setAttribute(k,v); if (label!==undefined && name==='text') el.textContent=label; else if (label!==undefined) { const t=document.createElementNS('http://www.w3.org/2000/svg','title'); t.textContent=label; el.appendChild(t); } svg.appendChild(el); return el; }
+  function line(x1,y1,x2,y2,color,op,w=1){ add('line',{x1,y1,x2,y2,stroke:color,opacity:op,'stroke-width':w}); }
+  function dashed(x1,y1,x2,y2,color,op){ add('line',{x1,y1,x2,y2,stroke:color,opacity:op,'stroke-width':1.5,'stroke-dasharray':'5 5'}); }
+  function point(cx,cy,color,op,r,label){ if(Number.isFinite(cx)&&Number.isFinite(cy)) add('circle',{cx,cy,r,fill:color,opacity:op},label); }
+  function diamond(cx,cy,color,op,label){ if(Number.isFinite(cx)&&Number.isFinite(cy)) add('path',{d:`M ${cx-4} ${cy} L ${cx} ${cy-4} L ${cx+4} ${cy} L ${cx} ${cy+4} Z`,fill:color,opacity:op},label); }
+  function text(x,y,s,color,anchor,transform){ const attrs={x,y,fill:color,'text-anchor':anchor||'start'}; if(transform) attrs.transform=transform; add('text',attrs,s); }
+}
+function drawInjectionPlot(points, inj, targetInjections) {
+  const svg = document.getElementById('injectionPlot');
+  svg.innerHTML = '';
+  const W=1160,H=240,m={l:100,r:30,t:24,b:50},xmin=0.72,xmax=5.05;
+  const injections = targetInjections && targetInjections.length ? targetInjections : [inj].filter(Boolean);
+  const waveRows = points.map(p => ({x:num(p.cwave_um), cband:num(p.cband_um)})).filter(p => Number.isFinite(p.x));
+  if (!waveRows.length) { add('text',{x:W/2,y:H/2,fill:'#86a4bf','text-anchor':'middle'},'No wavelength samples'); return; }
+  const series = injections.map((sig, idx) => {
+    const lineNm = num(sig.injected_line_nm || sig.nominal_line_nm), lineUm = lineNm/1000;
+    const widthUm = Math.max(1e-6, num(sig.line_width_nm || 0.1)/1000);
+    const flux = num(sig.line_flux_uJy);
+    const color = String(sig.injection_id || '') === String(inj.injection_id || '') ? '#ff4fd8' : (idx % 2 ? '#36e7ff' : '#facc15');
+    const pts = waveRows.map(p => ({x:p.x, y:flux*responseAt(p.x, p.cband, lineUm, widthUm)})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y) && p.x>=xmin && p.x<=xmax);
+    return {sig,lineNm,lineUm,color,pts};
+  }).filter(s => s.pts.length);
+  const maxY = Math.max(1, ...series.flatMap(s => s.pts.map(p => p.y)).filter(Number.isFinite));
+  const xs = v => m.l + (v-xmin)/(xmax-xmin)*(W-m.l-m.r);
+  const ys = v => H-m.b - (v/Math.max(maxY,1))*(H-m.b-m.t);
+  for (let v=1; v<=5; v++) { line(xs(v),m.t,xs(v),H-m.b,'#1f3a5f',.45); text(xs(v),H-m.b+20,String(v),'#86a4bf','middle'); }
+  for (let i=0; i<4; i++) {
+    const val = maxY*(1-i/3);
+    const yy = m.t+i*(H-m.b-m.t)/3;
+    line(m.l,yy,W-m.r,yy,'#1f3a5f',.45);
+    text(m.l-9,yy+4,fmt(val),'#86a4bf','end');
   }
+  line(m.l,H-m.b,W-m.r,H-m.b,'#86a4bf',1); line(m.l,m.t,m.l,H-m.b,'#86a4bf',1);
+  for (const s of series) {
+    if (s.pts.length > 1) add('path',{d:pathFrom(s.pts,xs,ys),fill:'none',stroke:s.color,'stroke-width':1.9,opacity:.85});
+    const xx = xs(s.lineUm);
+    if (Number.isFinite(xx)) line(xx,m.t,xx,H-m.b,s.color,.55,1.2);
+  }
+  text(W/2,H-8,'wavelength (um)','#86a4bf','middle');
+  text(13,(m.t+H-m.b)/2,'synthetic flux (uJy)','#86a4bf','middle','rotate(-90 13 '+((m.t+H-m.b)/2)+')');
   function responseAt(cwaveUm, cbandUm, lineUm, lineWidthUm) {
     if (!Number.isFinite(cwaveUm) || !Number.isFinite(lineUm)) return NaN;
     const band = Number.isFinite(cbandUm) && cbandUm > 0 ? cbandUm : 0.04;
@@ -2162,8 +2259,6 @@ function drawPlot(points, inj, candidates, targetInjections) {
   }
   function add(name, attrs, label) { const el=document.createElementNS('http://www.w3.org/2000/svg',name); for (const [k,v] of Object.entries(attrs)) el.setAttribute(k,v); if (label!==undefined && name==='text') el.textContent=label; else if (label!==undefined) { const t=document.createElementNS('http://www.w3.org/2000/svg','title'); t.textContent=label; el.appendChild(t); } svg.appendChild(el); return el; }
   function line(x1,y1,x2,y2,color,op,w=1){ add('line',{x1,y1,x2,y2,stroke:color,opacity:op,'stroke-width':w}); }
-  function dashed(x1,y1,x2,y2,color,op){ add('line',{x1,y1,x2,y2,stroke:color,opacity:op,'stroke-width':1.5,'stroke-dasharray':'5 5'}); }
-  function point(cx,cy,color,op,r,label){ if(Number.isFinite(cx)&&Number.isFinite(cy)) add('circle',{cx,cy,r,fill:color,opacity:op},label); }
   function text(x,y,s,color,anchor,transform){ const attrs={x,y,fill:color,'text-anchor':anchor||'start'}; if(transform) attrs.transform=transform; add('text',attrs,s); }
 }
 function medianBinned(rows, maxBins) {
