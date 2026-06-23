@@ -1086,6 +1086,56 @@ def _blind_summary_path(path: Path | None) -> Path | None:
     return summary if summary.exists() else None
 
 
+def _blind_flux_dir_from_joint(path: Path | None, flux_kind: str) -> Path | None:
+    if path is None:
+        return None
+    name = path.parent.name
+    candidates = []
+    if "_joint_" in name:
+        candidates.append(path.parent.parent / name.replace("_joint_", f"_{flux_kind}_"))
+    if "joint" in name:
+        candidates.append(path.parent.parent / name.replace("joint", flux_kind))
+    candidates.extend(sorted(path.parent.parent.glob(f"blind_classifier*{flux_kind}*/")))
+    return next((candidate for candidate in candidates if (candidate / "blind_matched_filter_candidates.parquet").exists()), None)
+
+
+def _blind_line_scores_for_target(joint_path: Path | None, target_id: str) -> dict[str, list[dict[str, object]]]:
+    out: dict[str, list[dict[str, object]]] = {"aperture": [], "psf": []}
+    if not target_id:
+        return out
+    wanted = [
+        "candidate_line_nm",
+        "matched_snr",
+        "matched_flux_uJy",
+        "matched_flux_unc_uJy",
+        "n_supporting_points",
+        "n_flagged_nearby",
+        "local_continuum_uJy",
+        "best_frame_ids",
+        "detectors",
+        "candidate_status",
+    ]
+    for flux_kind in ("aperture", "psf"):
+        flux_dir = _blind_flux_dir_from_joint(joint_path, flux_kind)
+        if flux_dir is None:
+            continue
+        path = flux_dir / "blind_matched_filter_candidates.parquet"
+        try:
+            df = pd.read_parquet(path)
+        except Exception:
+            continue
+        if df.empty or "target_id" not in df:
+            continue
+        rows = df[df["target_id"].astype(str).eq(str(target_id))].copy()
+        if rows.empty:
+            continue
+        if "candidate_line_nm" in rows:
+            rows = rows.sort_values("candidate_line_nm", na_position="last")
+        cols = [col for col in wanted if col in rows]
+        out[flux_kind] = rows[cols].head(2500).to_dict(orient="records")
+    return out
+
+
 def _blind_candidates(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
     scope = (params.get("scope") or ["auto"])[0]
     path = _blind_joint_path(run_dir, scope)
@@ -1147,7 +1197,8 @@ def _blind_candidate_detail(run_dir: Path, candidate_id: str) -> dict[str, objec
     candidate = row_df.iloc[0].to_dict()
     target_id = str(candidate.get("target_id") or "")
     spectrum = _spectrum(run_dir, target_id)
-    return {"candidate": candidate, "spectrum": spectrum, "source_path": str(path)}
+    line_scores = _blind_line_scores_for_target(path, target_id)
+    return {"candidate": candidate, "spectrum": spectrum, "line_scores": line_scores, "source_path": str(path)}
 
 
 def _injections(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
@@ -2910,6 +2961,7 @@ def _blind_candidates_html() -> str:
     .tile .k { color:var(--muted); font-size:11px; text-transform:uppercase; }
     .tile .v { font-size:15px; margin-top:3px; }
     #plot { width:100%; height:620px; background:rgba(3,8,18,.95); border:1px solid #17617d; border-radius:6px; box-shadow:0 0 28px rgba(54,231,255,.13), inset 0 0 24px rgba(255,79,216,.035); }
+    #linePlot { width:100%; height:320px; background:rgba(3,8,18,.95); border:1px solid #17617d; border-radius:6px; margin-top:10px; }
     #candidateList { max-height:calc(100vh - 240px); overflow:auto; }
     a { color:#93c5fd; }
   </style>
@@ -2938,6 +2990,7 @@ def _blind_candidates_html() -> str:
     <section>
       <div class="tiles" id="tiles"></div>
       <svg id="plot" viewBox="0 0 1100 620"></svg>
+      <svg id="linePlot" viewBox="0 0 1100 320"></svg>
       <div id="detail" class="small mono"></div>
     </section>
   </div>
@@ -2987,6 +3040,7 @@ function draw(){
   ].map(([k,v])=>`<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
   document.getElementById('detail').innerHTML=`<p><a href="/spectra?run=${encodeURIComponent(activeRun)}&target=${encodeURIComponent(cand.target_id||'')}">open target spectra</a></p><pre>${esc(JSON.stringify(cand,null,2))}</pre>`;
   drawPlot(rows,cand);
+  drawLinePlot(detail?.line_scores||{}, cand);
 }
 function drawPlot(rows,cand){
   const svg=document.getElementById('plot'); svg.innerHTML=''; const W=1100,H=620,m={l:92,r:28,t:28,b:54};
@@ -3006,6 +3060,49 @@ function drawPlot(rows,cand){
   function line(x1,y1,x2,y2,c,o,w=1){ add('line',{x1,y1,x2,y2,stroke:c,opacity:o,'stroke-width':w}); }
   function rect(x,y,w,h,c,o){ add('rect',{x,y,width:w,height:h,fill:c,opacity:o}); }
   function circle(cx,cy,r,c,o){ if(Number.isFinite(cx)&&Number.isFinite(cy)) add('circle',{cx,cy,r,fill:c,opacity:o}); }
+  function text(x,y,s,c,a){ const el=add('text',{x,y,fill:c,'text-anchor':a}); el.textContent=s; }
+}
+function drawLinePlot(scores,cand){
+  const svg=document.getElementById('linePlot'); svg.innerHTML=''; const W=1100,H=320,m={l:92,r:28,t:26,b:46};
+  const series=[
+    {name:'aperture', color:'#22c55e', rows:(scores.aperture||[])},
+    {name:'psf', color:'#c084fc', rows:(scores.psf||[])}
+  ];
+  const pts=[];
+  for(const s of series){
+    for(const r of s.rows){
+      const x=num(r.candidate_line_nm)/1000, y=num(r.matched_snr);
+      if(Number.isFinite(x)&&Number.isFinite(y)) pts.push({x,y,s,r});
+    }
+  }
+  if(!pts.length){ text(W/2,H/2,'No saved blind line score rows for this target','#90a4b8','middle'); return; }
+  const xsAll=pts.map(p=>p.x).sort((a,b)=>a-b), ysAll=pts.map(p=>p.y).sort((a,b)=>a-b);
+  const xmin=Math.max(.7, q(xsAll,.01)-.03), xmax=Math.min(5.05, q(xsAll,.99)+.03);
+  let ymin=Math.min(0, q(ysAll,.02)), ymax=q(ysAll,.98); const pad=(ymax-ymin||1)*.12; ymin-=pad; ymax+=pad;
+  const xs=v=>m.l+(v-xmin)/(xmax-xmin||1)*(W-m.l-m.r), ys=v=>H-m.b-(v-ymin)/(ymax-ymin||1)*(H-m.t-m.b);
+  for(let v=Math.ceil(xmin*2)/2; v<=xmax+.001; v+=.5){ line(xs(v),m.t,xs(v),H-m.b,'#21405b',.55); text(xs(v),H-18,fmt(v),'#90a4b8','middle'); }
+  for(let i=0;i<5;i++){ const yy=m.t+i*(H-m.t-m.b)/4; const val=ymin+(ymax-ymin)*(1-i/4); line(m.l,yy,W-m.r,yy,'#21405b',.55); text(m.l-8,yy+4,fmt(val),'#90a4b8','end'); }
+  line(m.l,H-m.b,W-m.r,H-m.b,'#90a4b8',1); line(m.l,m.t,m.l,H-m.b,'#90a4b8',1);
+  const lo=num(cand.line_min_nm)/1000, hi=num(cand.line_max_nm)/1000, peak=num(cand.peak_line_nm)/1000;
+  if(Number.isFinite(lo)&&Number.isFinite(hi)){ rect(xs(lo),m.t,Math.max(1,xs(hi)-xs(lo)),H-m.t-m.b,'#ff4fd8',.08); }
+  for(const s of series){
+    const rows=s.rows.map(r=>({x:num(r.candidate_line_nm)/1000,y:num(r.matched_snr),support:num(r.n_supporting_points),flags:num(r.n_flagged_nearby)})).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);
+    let d='';
+    for(const p of rows){ const xx=xs(p.x), yy=ys(p.y); d += d ? ` L ${xx} ${yy}` : `M ${xx} ${yy}`; }
+    if(d) path(d,s.color,.9,1.7);
+    for(const p of rows){ circle(xs(p.x),ys(p.y),p.flags>0?2.7:2.1,s.color,p.support>=2?.75:.35); }
+  }
+  if(Number.isFinite(peak)){ line(xs(peak),m.t,xs(peak),H-m.b,'#ff4fd8',.95,2); text(xs(peak)+5,m.t+16,fmt(cand.peak_line_nm)+' nm','#ff9dea','start'); }
+  text(m.l,18,'blind matched-filter line scores','#e5eefb','start');
+  text(W/2,H-4,'candidate wavelength (um)','#90a4b8','middle');
+  text(18,H/2,'SNR','#90a4b8','middle');
+  line(W-210,24,W-180,24,'#22c55e',1,2); text(W-172,28,'aperture','#e5eefb','start');
+  line(W-110,24,W-80,24,'#c084fc',1,2); text(W-72,28,'PSF','#e5eefb','start');
+  function add(n,a){ const el=document.createElementNS('http://www.w3.org/2000/svg',n); for(const[k,v]of Object.entries(a)) el.setAttribute(k,v); svg.appendChild(el); return el; }
+  function line(x1,y1,x2,y2,c,o,w=1){ add('line',{x1,y1,x2,y2,stroke:c,opacity:o,'stroke-width':w}); }
+  function rect(x,y,w,h,c,o){ add('rect',{x,y,width:w,height:h,fill:c,opacity:o}); }
+  function circle(cx,cy,r,c,o){ if(Number.isFinite(cx)&&Number.isFinite(cy)) add('circle',{cx,cy,r,fill:c,opacity:o}); }
+  function path(d,c,o,w){ add('path',{d,fill:'none',stroke:c,opacity:o,'stroke-width':w}); }
   function text(x,y,s,c,a){ const el=add('text',{x,y,fill:c,'text-anchor':a}); el.textContent=s; }
 }
 function val(id){ return document.getElementById(id).value; }
