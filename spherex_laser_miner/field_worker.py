@@ -19,6 +19,7 @@ from spherex_laser_miner.calibration import image_to_ujy_per_pixel, load_sapm, v
 from spherex_laser_miner.catalog.gaia import query_gaia_for_s_region
 from spherex_laser_miner.catalog.manual_targets import ManualTarget
 from spherex_laser_miner.config import MinerConfig
+from spherex_laser_miner.coarse_status import append_status_event, reset_coarse_status
 from spherex_laser_miner.coordinates import edge_distance_pix, propagate_coordinates
 from spherex_laser_miner.live_status import mark_frame, mark_frame_perf, mark_targets, reset_live_status
 from spherex_laser_miner.photometry.aperture import aperture_measure
@@ -98,15 +99,16 @@ def run_trial_field_worker(
         "status_sec": 0.0,
         "write_sec": 0.0,
     }
-    mark_frame(
-        cfg.smoke_run_dir,
-        image_id=image_id,
-        status="active",
-        worker_name=threading.current_thread().name,
-        input_file_path=str(local_path),
-        detector=int(trial["detector"]),
-        observation_id=str(candidate["obs_id"]),
-    )
+    if cfg.status_mode == "live":
+        mark_frame(
+            cfg.smoke_run_dir,
+            image_id=image_id,
+            status="active",
+            worker_name=threading.current_thread().name,
+            input_file_path=str(local_path),
+            detector=int(trial["detector"]),
+            observation_id=str(candidate["obs_id"]),
+        )
     try:
         t0 = time.perf_counter()
         with fits.open(local_path, memmap=True) as hdul:
@@ -189,15 +191,17 @@ def run_trial_field_worker(
                 }
                 selection_rows.append(selection)
             selected_rows = [item for item in selection_rows if item["selected_for_photometry"]]
-            ts = time.perf_counter()
-            mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=selected_rows, status="queued")
-            perf["status_sec"] += time.perf_counter() - ts
+            if cfg.status_mode == "live":
+                ts = time.perf_counter()
+                mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=selected_rows, status="queued")
+                perf["status_sec"] += time.perf_counter() - ts
             perf["selection_sec"] += time.perf_counter() - t0
 
             t0 = time.perf_counter()
-            ts = time.perf_counter()
-            mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=selected_rows, status="active")
-            perf["status_sec"] += time.perf_counter() - ts
+            if cfg.status_mode == "live":
+                ts = time.perf_counter()
+                mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=selected_rows, status="active")
+                perf["status_sec"] += time.perf_counter() - ts
             calibrated_batch = None
             if cfg.photometry_backend == "warp_calibrated" and selected_rows:
                 tp = time.perf_counter()
@@ -302,12 +306,14 @@ def run_trial_field_worker(
                     **psf.to_json_dict(),
                 }
                 measurement_rows.append(measurement)
-            ts = time.perf_counter()
-            mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=measurement_rows, status="done")
-            perf["status_sec"] += time.perf_counter() - ts
+            if cfg.status_mode == "live":
+                ts = time.perf_counter()
+                mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=measurement_rows, status="done")
+                perf["status_sec"] += time.perf_counter() - ts
             perf["photometry_sec"] += time.perf_counter() - t0
     except Exception as exc:
-        mark_frame(cfg.smoke_run_dir, image_id=image_id, status="error", error=f"{type(exc).__name__}: {exc}")
+        if cfg.status_mode == "live":
+            mark_frame(cfg.smoke_run_dir, image_id=image_id, status="error", error=f"{type(exc).__name__}: {exc}")
         raise
 
     t0 = time.perf_counter()
@@ -320,14 +326,15 @@ def run_trial_field_worker(
     perf["elapsed_sec"] = time.perf_counter() - perf_start
     perf["target_rate_per_sec"] = len(measurement_rows) / perf["elapsed_sec"] if perf["elapsed_sec"] > 0 else None
     first_measurement = measurement_rows[0] if measurement_rows else {}
-    mark_frame(
-        cfg.smoke_run_dir,
-        image_id=image_id,
-        status="done",
-        cwave_um=_optional_float(first_measurement.get("cwave_um")),
-        cband_um=_optional_float(first_measurement.get("cband_um")),
-    )
-    mark_frame_perf(cfg.smoke_run_dir, image_id=image_id, perf=perf)
+    if cfg.status_mode == "live":
+        mark_frame(
+            cfg.smoke_run_dir,
+            image_id=image_id,
+            status="done",
+            cwave_um=_optional_float(first_measurement.get("cwave_um")),
+            cband_um=_optional_float(first_measurement.get("cband_um")),
+        )
+        mark_frame_perf(cfg.smoke_run_dir, image_id=image_id, perf=perf)
     field_job = {
         "job_kind": job_kind,
         "manual_target_id": target.target_id,
@@ -360,9 +367,12 @@ def run_multi_trial_field_workers(
     gaia_g_min: float = 8.0,
     gaia_g_max: float = 19.0,
     path_overrides: dict[str, str] | None = None,
+    max_field_retries: int = 0,
 ) -> list[dict[str, object]]:
-    reset_live_status(cfg.smoke_run_dir)
+    if cfg.status_mode == "live":
+        reset_live_status(cfg.smoke_run_dir)
     shard_root = cfg.smoke_run_dir / "field_shards"
+    (cfg.smoke_run_dir / "field_errors.json").unlink(missing_ok=True)
     selected_trials = []
     for trial in trials:
         if trial.get("status") != "measured":
@@ -372,10 +382,24 @@ def run_multi_trial_field_workers(
         selected_trials.append(trial)
 
     jobs: list[dict[str, object]] = []
+    failed_jobs: list[dict[str, object]] = []
+    worker_count = max(1, min(int(max_field_workers), len(selected_trials) or 1))
+    if cfg.status_mode == "jsonl":
+        reset_coarse_status(cfg.smoke_run_dir, total_fields=len(selected_trials), worker_count=worker_count)
 
-    def run_one(trial: dict[str, object]) -> dict[str, object]:
+    def run_one_attempt(trial: dict[str, object], attempt: int) -> dict[str, object]:
         image_id = Path(str(trial["local_path"])).stem
         shard_dir = shard_root / f"image_id={image_id}"
+        if cfg.status_mode == "jsonl":
+            append_status_event(
+                cfg.smoke_run_dir,
+                "field_start",
+                image_id=image_id,
+                attempt=attempt,
+                worker_name=threading.current_thread().name,
+                detector=int(trial["detector"]),
+                observation_id=str(dict(trial.get("candidate") or {}).get("obs_id")),
+            )
         return run_trial_field_worker(
             target=target,
             cfg=cfg,
@@ -389,16 +413,82 @@ def run_multi_trial_field_workers(
             path_overrides=path_overrides,
         )
 
-    worker_count = max(1, min(int(max_field_workers), len(selected_trials) or 1))
+    def run_one(trial: dict[str, object]) -> dict[str, object]:
+        image_id = Path(str(trial["local_path"])).stem
+        last_exc: Exception | None = None
+        for attempt in range(1, max(1, int(max_field_retries) + 1) + 1):
+            start = time.perf_counter()
+            try:
+                job = run_one_attempt(trial, attempt)
+                if cfg.status_mode == "jsonl":
+                    perf = dict(job.get("performance") or {})
+                    append_status_event(
+                        cfg.smoke_run_dir,
+                        "field_done",
+                        image_id=image_id,
+                        attempt=attempt,
+                        elapsed_sec=perf.get("elapsed_sec", time.perf_counter() - start),
+                        targets_measured=job.get("targets_measured"),
+                        measurements=job.get("targets_measured"),
+                        worker_name=threading.current_thread().name,
+                        warp_device=perf.get("warp_device"),
+                    )
+                return job
+            except Exception as exc:
+                last_exc = exc
+                error = f"{type(exc).__name__}: {exc}"
+                if attempt <= int(max_field_retries):
+                    if cfg.status_mode == "jsonl":
+                        append_status_event(
+                            cfg.smoke_run_dir,
+                            "field_retry",
+                            image_id=image_id,
+                            attempt=attempt,
+                            error=error,
+                            worker_name=threading.current_thread().name,
+                        )
+                    time.sleep(min(2.0 * attempt, 10.0))
+                    continue
+                if cfg.status_mode == "jsonl":
+                    append_status_event(
+                        cfg.smoke_run_dir,
+                        "field_error",
+                        image_id=image_id,
+                        attempt=attempt,
+                        elapsed_sec=time.perf_counter() - start,
+                        error=error,
+                        worker_name=threading.current_thread().name,
+                    )
+                raise
+        raise RuntimeError(f"Unreachable retry loop for {image_id}: {last_exc}")
+
     if worker_count == 1:
-        jobs = [run_one(trial) for trial in selected_trials]
+        for trial in selected_trials:
+            try:
+                jobs.append(run_one(trial))
+            except Exception as exc:
+                failed_jobs.append({"image_id": Path(str(trial["local_path"])).stem, "error": f"{type(exc).__name__}: {exc}"})
     else:
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="field-worker") as executor:
-            futures = [executor.submit(run_one, trial) for trial in selected_trials]
+            futures = {executor.submit(run_one, trial): trial for trial in selected_trials}
             for future in as_completed(futures):
-                jobs.append(future.result())
+                trial = futures[future]
+                try:
+                    jobs.append(future.result())
+                except Exception as exc:
+                    failed_jobs.append({"image_id": Path(str(trial["local_path"])).stem, "error": f"{type(exc).__name__}: {exc}"})
     jobs.sort(key=lambda job: str(job.get("image_id", "")))
     (cfg.smoke_run_dir / "field_jobs.json").write_text(json.dumps(jobs, indent=2), encoding="utf-8")
+    if failed_jobs:
+        (cfg.smoke_run_dir / "field_errors.json").write_text(json.dumps(failed_jobs, indent=2), encoding="utf-8")
+    if cfg.status_mode == "jsonl":
+        append_status_event(
+            cfg.smoke_run_dir,
+            "run_done",
+            done=len(jobs),
+            errors=len(failed_jobs),
+            total_fields=len(selected_trials),
+        )
     return jobs
 
 

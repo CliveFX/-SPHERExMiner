@@ -344,6 +344,8 @@ def run_depth_test(
     max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
     photometry_backend: str = typer.Option("cpu_numpy", help="Photometry backend: cpu_numpy or warp_calibrated."),
     warp_devices: str = typer.Option("cuda:0,cuda:1,cuda:2", help="Comma-separated Warp CUDA devices."),
+    status_mode: str = typer.Option("live", help="Status backend: live, jsonl, or off."),
+    max_field_retries: int = typer.Option(0, min=0, help="Retry failed fields this many times."),
     enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
     enable_diagnostic_aperture: bool = typer.Option(False, help="Run raw diagnostic aperture QA photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
@@ -362,6 +364,8 @@ def run_depth_test(
         max_field_workers=max_field_workers,
         photometry_backend=photometry_backend,
         warp_devices=warp_devices,
+        status_mode=status_mode,
+        max_field_retries=max_field_retries,
         enable_psf=enable_psf,
         enable_diagnostic_aperture=enable_diagnostic_aperture,
         cache_root=cache_root,
@@ -383,6 +387,8 @@ def run_benchmark(
     max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
     photometry_backend: str = typer.Option("cpu_numpy", help="Photometry backend: cpu_numpy or warp_calibrated."),
     warp_devices: str = typer.Option("cuda:0,cuda:1,cuda:2", help="Comma-separated Warp CUDA devices."),
+    status_mode: str = typer.Option("live", help="Status backend: live, jsonl, or off."),
+    max_field_retries: int = typer.Option(0, min=0, help="Retry failed fields this many times."),
     enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
     enable_diagnostic_aperture: bool = typer.Option(False, help="Run raw diagnostic aperture QA photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
@@ -403,6 +409,8 @@ def run_benchmark(
         max_field_workers=max_field_workers,
         photometry_backend=photometry_backend,
         warp_devices=warp_devices,
+        status_mode=status_mode,
+        max_field_retries=max_field_retries,
         enable_psf=enable_psf,
         enable_diagnostic_aperture=enable_diagnostic_aperture,
         cache_root=cache_root,
@@ -444,6 +452,8 @@ def _run_depth_pipeline(
     max_field_workers: int,
     photometry_backend: str,
     warp_devices: str,
+    status_mode: str,
+    max_field_retries: int,
     enable_psf: bool,
     enable_diagnostic_aperture: bool,
     cache_root: Path | None,
@@ -456,7 +466,10 @@ def _run_depth_pipeline(
     cfg.release = release
     if photometry_backend not in {"cpu_numpy", "warp_calibrated"}:
         raise typer.BadParameter("photometry_backend must be cpu_numpy or warp_calibrated")
+    if status_mode not in {"live", "jsonl", "off"}:
+        raise typer.BadParameter("status_mode must be live, jsonl, or off")
     cfg.photometry_backend = photometry_backend
+    cfg.status_mode = status_mode
     cfg.warp_devices = tuple(part.strip() for part in warp_devices.split(",") if part.strip())
     cfg.enable_psf_photometry = enable_psf
     cfg.enable_diagnostic_aperture = enable_diagnostic_aperture
@@ -499,7 +512,10 @@ def _run_depth_pipeline(
         gaia_g_min=gaia_g_min,
         gaia_g_max=gaia_g_max,
         path_overrides=path_override_map,
+        max_field_retries=max_field_retries,
     )
+    error_path = cfg.smoke_run_dir / "field_errors.json"
+    field_errors = _read_json_file(error_path) if error_path.exists() else []
     assembly = assemble_spectra_from_jobs(cfg.smoke_run_dir, jobs)
     summary = {
         "target": target,
@@ -513,6 +529,9 @@ def _run_depth_pipeline(
         "max_field_workers": max_field_workers,
         "photometry_backend": cfg.photometry_backend,
         "warp_devices": list(cfg.warp_devices),
+        "status_mode": cfg.status_mode,
+        "max_field_retries": max_field_retries,
+        "field_error_count": len(field_errors) if isinstance(field_errors, list) else 0,
         "psf_enabled": enable_psf,
         "diagnostic_aperture_enabled": enable_diagnostic_aperture,
         "path_overrides_path": str(path_overrides) if path_overrides is not None else None,
@@ -557,6 +576,10 @@ def _load_path_overrides(path: Path | None) -> dict[str, str]:
     if not isinstance(data, dict):
         raise typer.BadParameter("Path override JSON must be an object mapping original path to replacement path")
     return {str(key): str(value) for key, value in data.items()}
+
+
+def _read_json_file(path: Path) -> object:
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _check_imports() -> dict[str, bool]:

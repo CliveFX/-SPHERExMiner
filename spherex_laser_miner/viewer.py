@@ -21,6 +21,7 @@ import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 
+from spherex_laser_miner.coarse_status import read_coarse_summary, tail_events
 from spherex_laser_miner.live_status import db_path, init_live_status
 
 
@@ -50,6 +51,8 @@ def _make_handler(run_dir: Path):
                     self._send_html(_index_html())
                 elif path == "/live":
                     self._send_html(_live_html())
+                elif path == "/simple-status":
+                    self._send_html(_simple_status_html())
                 elif path == "/spectra":
                     self._send_html(_spectra_html())
                 elif path == "/injections":
@@ -62,6 +65,8 @@ def _make_handler(run_dir: Path):
                     self._send_json(_summary(active_run_dir))
                 elif path == "/api/live/status":
                     self._send_json(_live_status(active_run_dir))
+                elif path == "/api/simple-status":
+                    self._send_json(_simple_status(active_run_dir))
                 elif path == "/api/run/status":
                     self._send_json(_overall_run_status(active_run_dir))
                 elif path == "/api/fields":
@@ -373,6 +378,60 @@ def _overall_run_status(run_dir: Path) -> dict[str, object]:
         "assembly_mtime": spectra_mtime,
         "assembly_mtime_iso": _format_time(spectra_mtime),
         "run_phase": _infer_run_phase(process, active_fields, spectra_mtime, len(measurement_files), total_fields),
+    }
+
+
+def _simple_status(run_dir: Path) -> dict[str, object]:
+    summary = read_coarse_summary(run_dir)
+    if not summary:
+        overall = _overall_run_status(run_dir)
+        fields = _completed_live_frames_from_jobs(run_dir, limit=96)
+        return {
+            "run_dir": str(run_dir),
+            "run_name": run_dir.name,
+            "mode": "fallback",
+            "summary": {
+                "total_fields": overall.get("field_total_estimate"),
+                "queued": None,
+                "active": overall.get("live_frames_active"),
+                "done": overall.get("fields_completed"),
+                "error": overall.get("live_frames_error"),
+                "retry": None,
+                "measurements": overall.get("assembly", {}).get("measurement_rows")
+                if isinstance(overall.get("assembly"), dict)
+                else None,
+                "measurements_per_sec": dict(overall.get("performance") or {}).get("target_rate_per_wall_sec"),
+                "elapsed_sec": dict(overall.get("performance") or {}).get("wall_elapsed_sec"),
+                "worker_count": dict(overall.get("performance") or {}).get("workers_seen"),
+                "started_at": None,
+                "updated_at": None,
+                "finished_at": None,
+                "last_event": None,
+                "recent_events": [],
+            },
+            "fields": fields,
+            "events": [],
+            "overall": overall,
+        }
+    field_values = list(dict(summary.get("fields") or {}).items())
+    fields = []
+    for image_id, field in field_values:
+        row = dict(field)
+        row["image_id"] = image_id
+        fields.append(row)
+    fields.sort(
+        key=lambda row: (
+            {"active": 0, "retry": 1, "error": 2, "done": 3}.get(str(row.get("status")), 4),
+            -float(row.get("started_at") or row.get("finished_at") or 0),
+        )
+    )
+    return {
+        "run_dir": str(run_dir),
+        "run_name": run_dir.name,
+        "mode": "jsonl",
+        "summary": summary,
+        "fields": fields[:250],
+        "events": tail_events(run_dir, limit=120),
     }
 
 
@@ -1431,6 +1490,159 @@ function smoothRows(rows, width) {
     return {cwave_um:r.cwave_um, flux:vals[Math.floor(vals.length/2)]};
   });
 }
+init().catch(e => alert(e.stack || e));
+</script>
+</body>
+</html>"""
+
+
+def _simple_status_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SPHEREx Simple Status</title>
+  <style>
+    :root { --bg:#04070d; --panel:#07111f; --line:#164e63; --text:#dffcff; --muted:#7dd3fc; --cyan:#22d3ee; --green:#22c55e; --amber:#f59e0b; --red:#fb7185; --grey:#94a3b8; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:#04070d; color:var(--text); font:13px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing:0; }
+    header { position:sticky; top:0; z-index:2; display:flex; justify-content:space-between; align-items:center; gap:16px; padding:12px 16px; border-bottom:1px solid var(--line); background:rgba(4,7,13,.96); }
+    h1 { margin:0; color:var(--cyan); font-size:18px; }
+    a { color:var(--cyan); text-decoration:none; }
+    select, button { color:var(--text); background:#020617; border:1px solid var(--line); border-radius:4px; padding:7px 9px; }
+    main { padding:12px; display:grid; gap:12px; }
+    .cards { display:grid; grid-template-columns:repeat(8, minmax(110px, 1fr)); gap:8px; }
+    .card, section { border:1px solid var(--line); background:rgba(7,17,31,.92); border-radius:6px; }
+    .card { padding:10px; min-width:0; }
+    .k { color:var(--muted); text-transform:uppercase; font-size:10px; }
+    .v { margin-top:4px; font:20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow:hidden; text-overflow:ellipsis; }
+    .progress { height:12px; border:1px solid var(--line); background:#020617; border-radius:999px; overflow:hidden; }
+    .progress div { height:100%; width:0; background:linear-gradient(90deg, var(--cyan), var(--green)); }
+    .split { display:grid; grid-template-columns:minmax(600px, 1fr) minmax(420px, .55fr); gap:12px; }
+    section { padding:10px; min-width:0; }
+    h2 { margin:0 0 8px; font-size:13px; color:var(--cyan); }
+    table { width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed; }
+    th, td { padding:5px 6px; border-bottom:1px solid rgba(22,78,99,.55); text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    th { color:var(--muted); font-weight:600; }
+    .active { color:var(--amber); }
+    .done { color:var(--green); }
+    .error { color:var(--red); }
+    .retry { color:var(--amber); }
+    .muted { color:var(--grey); }
+    .mono { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    @media (max-width: 1100px) { .cards { grid-template-columns:repeat(2, 1fr); } .split { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>SPHEREx Simple Status</h1>
+  <div>
+    <select id="runSelect" onchange="switchRun()"></select>
+    <button onclick="refresh()">Refresh</button>
+    <a id="spectraLink" href="/spectra">Spectra</a>
+    <a id="liveLink" href="/live">Live</a>
+  </div>
+</header>
+<main>
+  <div class="cards">
+    <div class="card"><div class="k">Total</div><div id="total" class="v">-</div></div>
+    <div class="card"><div class="k">Done</div><div id="done" class="v done">-</div></div>
+    <div class="card"><div class="k">Active</div><div id="active" class="v active">-</div></div>
+    <div class="card"><div class="k">Queued</div><div id="queued" class="v muted">-</div></div>
+    <div class="card"><div class="k">Retries</div><div id="retry" class="v retry">-</div></div>
+    <div class="card"><div class="k">Errors</div><div id="error" class="v error">-</div></div>
+    <div class="card"><div class="k">Measurements/s</div><div id="rate" class="v">-</div></div>
+    <div class="card"><div class="k">Workers</div><div id="workers" class="v">-</div></div>
+  </div>
+  <div class="progress"><div id="bar"></div></div>
+  <div class="split">
+    <section>
+      <h2>Fields</h2>
+      <div id="fields"></div>
+    </section>
+    <section>
+      <h2>Recent Events</h2>
+      <div id="events"></div>
+    </section>
+  </div>
+</main>
+<script>
+let activeRun = new URLSearchParams(location.search).get('run') || '';
+let timer = null;
+
+function runQS(extra) {
+  const p = new URLSearchParams(extra || '');
+  if (activeRun) p.set('run', activeRun);
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
+
+async function getJSON(url) {
+  const r = await fetch(url, {cache:'no-store'});
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+
+async function init() {
+  const runs = await getJSON('/api/runs' + runQS());
+  const rs = document.getElementById('runSelect');
+  if (!activeRun && runs.length) activeRun = runs[0].name;
+  rs.innerHTML = runs.map(r => `<option value="${esc(r.name)}">${esc(r.name)}</option>`).join('');
+  rs.value = activeRun;
+  updateLinks();
+  await refresh();
+  timer = setInterval(refresh, 2000);
+}
+
+function switchRun() {
+  activeRun = document.getElementById('runSelect').value;
+  updateLinks();
+  history.replaceState(null, '', '/simple-status' + runQS());
+  refresh();
+}
+
+function updateLinks() {
+  document.getElementById('spectraLink').href = '/spectra' + runQS();
+  document.getElementById('liveLink').href = '/live' + runQS();
+}
+
+async function refresh() {
+  const data = await getJSON('/api/simple-status' + runQS('ts=' + Date.now()));
+  const s = data.summary || {};
+  setText('total', fmtInt(s.total_fields));
+  setText('done', fmtInt(s.done));
+  setText('active', fmtInt(s.active));
+  setText('queued', fmtInt(s.queued));
+  setText('retry', fmtInt(s.retry));
+  setText('error', fmtInt(s.error));
+  setText('rate', fmtFloat(s.measurements_per_sec, 2));
+  setText('workers', fmtInt(s.worker_count));
+  const total = Number(s.total_fields || 0), done = Number(s.done || 0), err = Number(s.error || 0);
+  document.getElementById('bar').style.width = total ? Math.min(100, 100 * (done + err) / total).toFixed(1) + '%' : '0%';
+  document.getElementById('fields').innerHTML = table(data.fields || [], ['image_id','status','attempt','worker_name','targets_measured','elapsed_sec','error']);
+  document.getElementById('events').innerHTML = table((data.events || []).slice().reverse().slice(0, 80), ['time','event','image_id','attempt','worker_name','error']);
+}
+
+function setText(id, value) { document.getElementById(id).textContent = value; }
+function fmtInt(v) { return Number.isFinite(Number(v)) ? Number(v).toLocaleString() : '-'; }
+function fmtFloat(v, digits) { return Number.isFinite(Number(v)) ? Number(v).toFixed(digits) : '-'; }
+function fmt(v, col) {
+  if (v === null || v === undefined) return '';
+  if (col === 'time' || col.endsWith('_at')) return Number.isFinite(Number(v)) ? new Date(Number(v) * 1000).toLocaleTimeString() : '';
+  if (typeof v === 'number') return Math.abs(v) > 100 ? v.toFixed(1) : v.toFixed(3);
+  return String(v);
+}
+function cls(row) { return ['active','done','error','retry'].includes(String(row.status || row.event)) ? String(row.status || row.event) : ''; }
+function table(rows, cols) {
+  if (!rows.length) return '<div class="muted">No rows yet</div>';
+  return '<table><thead><tr>' + cols.map(c => `<th>${esc(c)}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map(r => `<tr class="${cls(r)}">` + cols.map(c => `<td title="${esc(fmt(r[c], c))}">${esc(fmt(r[c], c))}</td>`).join('') + '</tr>').join('') +
+    '</tbody></table>';
+}
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+
 init().catch(e => alert(e.stack || e));
 </script>
 </body>
