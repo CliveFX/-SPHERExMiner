@@ -55,6 +55,8 @@ def _make_handler(run_dir: Path):
                     self._send_html(_spectra_html())
                 elif path == "/injections":
                     self._send_html(_injections_html())
+                elif path == "/blind-candidates":
+                    self._send_html(_blind_candidates_html())
                 elif path == "/recovery-summary":
                     self._send_html(_recovery_summary_html())
                 elif path == "/frame-point":
@@ -87,11 +89,16 @@ def _make_handler(run_dir: Path):
                     self._send_json(_spectrum(active_run_dir, target_id))
                 elif path == "/api/injections":
                     self._send_json(_injections(active_run_dir, params))
+                elif path == "/api/blind-candidates":
+                    self._send_json(_blind_candidates(active_run_dir, params))
                 elif path == "/api/recovery-summary":
                     self._send_json(_recovery_summary(runs_root, params))
                 elif path.startswith("/api/injection/"):
                     injection_id = urllib.parse.unquote(path.removeprefix("/api/injection/"))
                     self._send_json(_injection_detail(active_run_dir, injection_id))
+                elif path.startswith("/api/blind-candidate/"):
+                    candidate_id = urllib.parse.unquote(path.removeprefix("/api/blind-candidate/"))
+                    self._send_json(_blind_candidate_detail(active_run_dir, candidate_id))
                 elif path.startswith("/api/fits/"):
                     idx = int(path.split("/")[3])
                     self._send_json(_fits_info(active_run_dir, idx))
@@ -1049,6 +1056,98 @@ def _false_positive_injection_rows(run_dir: Path) -> pd.DataFrame:
 def _false_positive_id(target_id: str, line_family: str, line_nm: float | None) -> str:
     line_text = "nan" if line_nm is None else f"{line_nm:g}"
     return "false_positive::" + "::".join([target_id, line_family, line_text])
+
+
+def _blind_joint_path(run_dir: Path, scope: str = "auto") -> Path | None:
+    candidates: list[Path] = []
+    if scope in {"auto", "paired", "paired_delta"}:
+        candidates.extend(
+            [
+                run_dir / "blind_classifier_paired_delta_joint_warp" / "blind_joint_candidates.parquet",
+                run_dir / "blind_classifier_paired_delta_joint_warp_full" / "blind_joint_candidates.parquet",
+                run_dir / "blind_classifier_joint_warp_full" / "blind_joint_candidates.parquet",
+            ]
+        )
+    if scope in {"auto", "raw", "injected"}:
+        candidates.extend(
+            [
+                run_dir / "blind_classifier_joint_warp" / "blind_joint_candidates.parquet",
+                run_dir / "blind_classifier_joint_warp_full" / "blind_joint_candidates.parquet",
+            ]
+        )
+    candidates.extend(sorted(run_dir.glob("blind_classifier*joint*/blind_joint_candidates.parquet")))
+    return next((path for path in candidates if path.exists()), None)
+
+
+def _blind_summary_path(path: Path | None) -> Path | None:
+    if path is None:
+        return None
+    summary = path.with_name("blind_joint_summary.json")
+    return summary if summary.exists() else None
+
+
+def _blind_candidates(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    scope = (params.get("scope") or ["auto"])[0]
+    path = _blind_joint_path(run_dir, scope)
+    if path is None:
+        return {"rows": [], "total": 0, "limit": 0, "offset": 0, "summary": {"error": "no blind joint candidates found"}}
+    df = pd.read_parquet(path)
+    if df.empty:
+        return {"rows": [], "total": 0, "limit": 0, "offset": 0, "summary": {"path": str(path)}}
+    q = (params.get("q") or [""])[0].strip().lower()
+    tier = (params.get("tier") or ["all"])[0]
+    if tier != "all" and "tier" in df:
+        df = df[df["tier"].astype(str).eq(tier)]
+    if q:
+        mask = pd.Series(False, index=df.index)
+        for col in ("joint_candidate_id", "target_id", "tier", "detectors", "best_frame_ids"):
+            if col in df:
+                mask |= df[col].astype(str).str.lower().str.contains(q, regex=False)
+        df = df[mask]
+    sort = (params.get("sort") or ["rank"])[0]
+    sort_cols = {
+        "rank": ["rank_score"],
+        "snr": ["psf_peak_snr", "aperture_peak_snr", "rank_score"],
+        "wave": ["peak_line_nm"],
+        "support": ["psf_support", "aperture_support", "rank_score"],
+        "flags": ["flagged_points_sum", "rank_score"],
+        "target": ["target_id", "peak_line_nm"],
+    }.get(sort, ["rank_score"])
+    present = [col for col in sort_cols if col in df]
+    if present:
+        ascending = [col in {"peak_line_nm", "flagged_points_sum", "target_id"} for col in present]
+        df = df.sort_values(present, ascending=ascending, na_position="last", kind="mergesort")
+    total = int(len(df))
+    limit = min(1000, max(25, _query_int(params, "limit", 300)))
+    offset = max(0, _query_int(params, "offset", 0))
+    rows = df.iloc[offset : offset + limit].to_dict(orient="records")
+    summary_path = _blind_summary_path(path)
+    summary = _read_json(summary_path) if summary_path else {}
+    if not isinstance(summary, dict):
+        summary = {}
+    summary.update(
+        {
+            "run_dir": str(run_dir),
+            "path": str(path),
+            "total_after_filter": total,
+            "tier_counts_after_filter": df["tier"].value_counts().sort_index().to_dict() if "tier" in df else {},
+        }
+    )
+    return {"rows": rows, "total": total, "limit": limit, "offset": offset, "summary": summary}
+
+
+def _blind_candidate_detail(run_dir: Path, candidate_id: str) -> dict[str, object]:
+    path = _blind_joint_path(run_dir)
+    if path is None:
+        return {"joint_candidate_id": candidate_id, "error": "no blind joint candidates found"}
+    df = pd.read_parquet(path)
+    row_df = df[df.get("joint_candidate_id", pd.Series(dtype=str)).astype(str).eq(candidate_id)] if not df.empty else pd.DataFrame()
+    if row_df.empty:
+        return {"joint_candidate_id": candidate_id, "error": "not found"}
+    candidate = row_df.iloc[0].to_dict()
+    target_id = str(candidate.get("target_id") or "")
+    spectrum = _spectrum(run_dir, target_id)
+    return {"candidate": candidate, "spectrum": spectrum, "source_path": str(path)}
 
 
 def _injections(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
@@ -2771,6 +2870,151 @@ function fmt(v){ const n=Number(v); if(!Number.isFinite(n)) return v === null ||
 function escapeHtml(v){ return String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function escapeAttr(v){ return String(v ?? '').replace(/[\\\\']/g,'_').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 refreshAll().catch(e => document.body.insertAdjacentHTML('beforeend','<pre style="color:#ff8a9b">'+escapeHtml(e.stack || String(e))+'</pre>'));
+</script>
+</body>
+</html>"""
+
+
+def _blind_candidates_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SPHEREx Blind Candidates</title>
+  <style>
+    :root { --bg:#070d18; --panel:#0d1728; --line:#21405b; --text:#e5eefb; --muted:#90a4b8; --cyan:#36e7ff; --pink:#ff4fd8; --green:#22c55e; --amber:#facc15; --red:#fb7185; --psf:#c084fc; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--text); font:13px system-ui,sans-serif; background:linear-gradient(90deg,rgba(54,231,255,.05) 1px,transparent 1px),linear-gradient(rgba(255,79,216,.04) 1px,transparent 1px),var(--bg); background-size:42px 42px; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); background:rgba(8,15,29,.94); box-shadow:0 0 24px rgba(54,231,255,.12); }
+    h1 { margin:0; color:var(--cyan); font-size:18px; text-shadow:0 0 16px rgba(54,231,255,.45); }
+    main { display:grid; grid-template-columns:560px minmax(720px,1fr); gap:12px; padding:12px; }
+    section { background:rgba(13,23,40,.93); border:1px solid var(--line); border-radius:6px; padding:10px; min-width:0; box-shadow:inset 0 0 20px rgba(54,231,255,.035),0 0 20px rgba(0,0,0,.35); }
+    label { color:var(--muted); display:block; margin:8px 0 4px; font-size:12px; }
+    select,input,button { width:100%; background:#06101d; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:8px; }
+    button { cursor:pointer; }
+    button:hover { border-color:var(--cyan); }
+    .grid { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th,td { border-bottom:1px solid var(--line); padding:5px; text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:180px; }
+    th { color:#7dd3fc; }
+    tr { cursor:pointer; }
+    tr:hover, tr.selected { background:rgba(54,231,255,.08); }
+    .tierA { color:var(--green); font-weight:700; }
+    .tierB { color:var(--amber); font-weight:700; }
+    .tierC,.tierD { color:var(--red); font-weight:700; }
+    .small { color:var(--muted); font-size:12px; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    .tiles { display:grid; grid-template-columns:repeat(6,minmax(100px,1fr)); gap:8px; margin-bottom:10px; }
+    .tile { border:1px solid var(--line); background:#091527; padding:8px; border-radius:4px; }
+    .tile .k { color:var(--muted); font-size:11px; text-transform:uppercase; }
+    .tile .v { font-size:15px; margin-top:3px; }
+    #plot { width:100%; height:620px; background:rgba(3,8,18,.95); border:1px solid #17617d; border-radius:6px; box-shadow:0 0 28px rgba(54,231,255,.13), inset 0 0 24px rgba(255,79,216,.035); }
+    #candidateList { max-height:calc(100vh - 240px); overflow:auto; }
+    a { color:#93c5fd; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>SPHEREx Blind Candidate Browser</h1>
+  <div class="small"><a href="/spectra">Spectra</a> · <a href="/injections">Injections</a> · <a href="/recovery-summary">Recovery</a></div>
+</header>
+<main>
+  <section>
+    <button onclick="refreshAll()">Refresh</button>
+    <label>Run</label><select id="runSelect" onchange="switchRun()"></select>
+    <div class="grid">
+      <div><label>Tier</label><select id="tier" onchange="fetchCandidates(0)"><option value="all">All</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></div>
+      <div><label>Sort</label><select id="sort" onchange="fetchCandidates(0)"><option value="rank">Rank</option><option value="snr">SNR</option><option value="wave">Wave</option><option value="support">Support</option><option value="flags">Flags</option><option value="target">Target</option></select></div>
+      <div><label>Scope</label><select id="scope" onchange="fetchCandidates(0)"><option value="auto">Auto</option><option value="paired">Paired</option><option value="raw">Raw</option></select></div>
+      <div><label>Limit</label><select id="limit" onchange="fetchCandidates(0)"><option>100</option><option selected>300</option><option>1000</option></select></div>
+    </div>
+    <label>Filter</label><input id="query" placeholder="target, detector, frame..." oninput="scheduleFetch()">
+    <div class="row" style="margin-top:8px"><button onclick="page(-1)">Prev</button><button onclick="page(1)">Next</button></div>
+    <div id="pageInfo" class="small"></div>
+    <div id="candidateList"></div>
+  </section>
+  <div>
+    <section>
+      <div class="tiles" id="tiles"></div>
+      <svg id="plot" viewBox="0 0 1100 620"></svg>
+      <div id="detail" class="small mono"></div>
+    </section>
+  </div>
+</main>
+<script>
+let activeRun = new URLSearchParams(window.location.search).get('run') || '';
+let rows = [], offset = 0, total = 0, limit = 300, selectedId = null, detail = null, timer = null;
+async function getJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); return await r.json(); }
+function runQS(extra){ const p=new URLSearchParams(extra||''); if(activeRun) p.set('run', activeRun); const s=p.toString(); return s?'?'+s:''; }
+async function refreshAll(){
+  const runs=await getJSON('/api/runs'+runQS());
+  if(!activeRun && runs.length) activeRun=runs[0].name;
+  const rs=document.getElementById('runSelect');
+  rs.innerHTML=runs.map(r=>`<option value="${esc(r.name)}">${esc(r.name)} ${r.has_spectra?'['+(r.measurement_rows||0)+' rows]':''}</option>`).join('');
+  rs.value=activeRun;
+  await fetchCandidates(0);
+}
+function switchRun(){ activeRun=document.getElementById('runSelect').value; selectedId=null; detail=null; fetchCandidates(0); }
+function scheduleFetch(){ clearTimeout(timer); timer=setTimeout(()=>fetchCandidates(0),180); }
+async function fetchCandidates(nextOffset){
+  offset=Math.max(0,nextOffset||0);
+  limit=Number(document.getElementById('limit').value)||300;
+  const p=`limit=${limit}&offset=${offset}&tier=${encodeURIComponent(val('tier'))}&sort=${encodeURIComponent(val('sort'))}&scope=${encodeURIComponent(val('scope'))}&q=${encodeURIComponent(document.getElementById('query').value.trim())}`;
+  const data=await getJSON('/api/blind-candidates'+runQS(p));
+  rows=data.rows||[]; total=data.total||0; offset=data.offset||0; renderList(data.summary||{});
+  if(rows.length && (!selectedId || !rows.some(r=>r.joint_candidate_id===selectedId))) selectCandidate(rows[0].joint_candidate_id);
+}
+function page(dir){ fetchCandidates(Math.max(0, offset + dir*limit)); }
+function renderList(summary){
+  const start=total?offset+1:0, end=Math.min(total, offset+rows.length);
+  document.getElementById('pageInfo').textContent=`${start}-${end} of ${total} · ${summary.path||''}`;
+  const cols=['tier','rank_score','peak_line_nm','aperture_peak_snr','psf_peak_snr','aperture_support','psf_support','flagged_points_sum','target_id'];
+  document.getElementById('candidateList').innerHTML='<table><thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>'+
+    rows.map(r=>`<tr class="${r.joint_candidate_id===selectedId?'selected':''}" onclick="selectCandidate('${attr(r.joint_candidate_id)}')">`+
+      cols.map(c=>`<td class="${c==='tier'?'tier'+esc(r[c]):''}" title="${esc(fmt(r[c]))}">${esc(fmt(r[c]))}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
+}
+async function selectCandidate(id){
+  selectedId=id;
+  renderList({path:''});
+  detail=await getJSON('/api/blind-candidate/'+encodeURIComponent(id)+runQS());
+  draw();
+}
+function draw(){
+  const cand=detail?.candidate||{}; const spec=detail?.spectrum||{}; const rows=spec.rows||[];
+  document.getElementById('tiles').innerHTML=[
+    ['Tier',cand.tier],['Rank',fmt(cand.rank_score)],['Wave',fmt(cand.peak_line_nm)+' nm'],['AP SNR',fmt(cand.aperture_peak_snr)],['PSF SNR',fmt(cand.psf_peak_snr)],['Support',`${fmt(cand.aperture_support)}/${fmt(cand.psf_support)}`]
+  ].map(([k,v])=>`<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
+  document.getElementById('detail').innerHTML=`<p><a href="/spectra?run=${encodeURIComponent(activeRun)}&target=${encodeURIComponent(cand.target_id||'')}">open target spectra</a></p><pre>${esc(JSON.stringify(cand,null,2))}</pre>`;
+  drawPlot(rows,cand);
+}
+function drawPlot(rows,cand){
+  const svg=document.getElementById('plot'); svg.innerHTML=''; const W=1100,H=620,m={l:92,r:28,t:28,b:54};
+  const pts=[]; for(const r of rows){ const x=num(r.cwave_um), ap=num(r.aperture_flux_uJy), psf=num(r.psf_flux_uJy); if(Number.isFinite(x)&&Number.isFinite(ap)) pts.push({x,y:ap,k:'ap',flag:r.fatal_flag_present}); if(Number.isFinite(x)&&Number.isFinite(psf)) pts.push({x,y:psf,k:'psf',flag:r.fatal_flag_present}); }
+  if(!pts.length){ text(W/2,H/2,'No spectrum rows','#90a4b8','middle'); return; }
+  const xmin=.7,xmax=5.05; const ys=pts.map(p=>p.y).filter(Number.isFinite).sort((a,b)=>a-b); let ymin=q(ys,.02), ymax=q(ys,.98); const pad=(ymax-ymin||1)*.1; ymin-=pad; ymax+=pad;
+  const xs=v=>m.l+(v-xmin)/(xmax-xmin)*(W-m.l-m.r), yscl=v=>H-m.b-(v-ymin)/(ymax-ymin||1)*(H-m.t-m.b);
+  for(let v=1;v<=5;v++){ line(xs(v),m.t,xs(v),H-m.b,'#21405b',.55); text(xs(v),H-18,String(v),'#90a4b8','middle'); }
+  for(let i=0;i<5;i++){ const yy=m.t+i*(H-m.t-m.b)/4; const val=ymin+(ymax-ymin)*(1-i/4); line(m.l,yy,W-m.r,yy,'#21405b',.55); text(m.l-8,yy+4,fmt(val),'#90a4b8','end'); }
+  line(m.l,H-m.b,W-m.r,H-m.b,'#90a4b8',1); line(m.l,m.t,m.l,H-m.b,'#90a4b8',1);
+  for(const p of pts){ const color=p.flag?'#fb7185':(p.k==='psf'?'#c084fc':'#22c55e'); circle(xs(p.x),yscl(p.y),p.k==='psf'?3.2:2.8,color,p.flag ? .35 : .8); }
+  const c=num(cand.peak_line_nm)/1000, lo=num(cand.line_min_nm)/1000, hi=num(cand.line_max_nm)/1000;
+  if(Number.isFinite(lo)&&Number.isFinite(hi)){ rect(xs(lo),m.t,Math.max(1,xs(hi)-xs(lo)),H-m.t-m.b,'#ff4fd8',.08); }
+  if(Number.isFinite(c)){ line(xs(c),m.t,xs(c),H-m.b,'#ff4fd8',.95,2); text(xs(c)+5,m.t+16,fmt(cand.peak_line_nm)+' nm','#ff9dea','start'); }
+  text(m.l,18,`${cand.target_id||''}`,'#e5eefb','start'); text(W/2,H-4,'wavelength (um)','#90a4b8','middle');
+  function add(n,a){ const el=document.createElementNS('http://www.w3.org/2000/svg',n); for(const[k,v]of Object.entries(a)) el.setAttribute(k,v); svg.appendChild(el); return el; }
+  function line(x1,y1,x2,y2,c,o,w=1){ add('line',{x1,y1,x2,y2,stroke:c,opacity:o,'stroke-width':w}); }
+  function rect(x,y,w,h,c,o){ add('rect',{x,y,width:w,height:h,fill:c,opacity:o}); }
+  function circle(cx,cy,r,c,o){ if(Number.isFinite(cx)&&Number.isFinite(cy)) add('circle',{cx,cy,r,fill:c,opacity:o}); }
+  function text(x,y,s,c,a){ const el=add('text',{x,y,fill:c,'text-anchor':a}); el.textContent=s; }
+}
+function val(id){ return document.getElementById(id).value; }
+function num(v){ const n=Number(v); return Number.isFinite(n)?n:NaN; }
+function q(a,p){ if(!a.length) return 0; const i=Math.max(0,Math.min(a.length-1,Math.floor(p*(a.length-1)))); return a[i]; }
+function fmt(v){ if(v===null||v===undefined||v==='') return ''; const n=Number(v); return Number.isFinite(n)?(Math.abs(n)>=100?n.toFixed(1):n.toFixed(3)).replace(/\\.0+$/,''):String(v); }
+function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function attr(s){ return esc(s).replace(/`/g,'&#96;'); }
+refreshAll();
 </script>
 </body>
 </html>"""

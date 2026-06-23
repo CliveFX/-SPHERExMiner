@@ -170,6 +170,106 @@ def _false_positive_review(injected_run: Path, output_path: Path, viewer_base_ur
     return review
 
 
+def _blind_flux_kinds(value: str) -> list[str]:
+    if value == "both":
+        return ["aperture", "psf"]
+    return [value]
+
+
+def _run_blind_raw(
+    *,
+    py: str,
+    run_dir: Path,
+    output_dir: Path,
+    flux_kind: str,
+    args: argparse.Namespace,
+    log_path: Path,
+    env: dict[str, str],
+) -> None:
+    cmd = [
+        py,
+        "tools/warp_blind_scan.py",
+        "--run-dir",
+        str(run_dir),
+        "--output-dir",
+        str(output_dir),
+        "--grid-step-nm",
+        str(args.blind_grid_step_nm),
+        "--flux-kind",
+        flux_kind,
+        "--min-snr",
+        str(args.blind_min_snr),
+        "--min-supporting-points",
+        str(args.blind_min_supporting_points),
+        "--device",
+        args.blind_warp_device,
+    ]
+    _run(cmd, log_path=log_path, env=env, dry_run=args.dry_run)
+
+
+def _run_blind_paired(
+    *,
+    py: str,
+    baseline_run: Path,
+    injected_run: Path,
+    output_dir: Path,
+    flux_kind: str,
+    args: argparse.Namespace,
+    log_path: Path,
+    env: dict[str, str],
+) -> None:
+    cmd = [
+        py,
+        "tools/warp_blind_scan.py",
+        "--baseline-run-dir",
+        str(baseline_run),
+        "--injected-run-dir",
+        str(injected_run),
+        "--output-dir",
+        str(output_dir),
+        "--grid-step-nm",
+        str(args.blind_grid_step_nm),
+        "--flux-kind",
+        flux_kind,
+        "--min-snr",
+        str(args.blind_min_snr),
+        "--min-supporting-points",
+        str(args.blind_min_supporting_points),
+        "--device",
+        args.blind_warp_device,
+    ]
+    _run(cmd, log_path=log_path, env=env, dry_run=args.dry_run)
+
+
+def _run_blind_joint(
+    *,
+    py: str,
+    aperture_dir: Path,
+    psf_dir: Path,
+    output_dir: Path,
+    args: argparse.Namespace,
+    log_path: Path,
+    env: dict[str, str],
+) -> None:
+    _run(
+        [
+            py,
+            "tools/rank_blind_candidates.py",
+            "--aperture-dir",
+            str(aperture_dir),
+            "--psf-dir",
+            str(psf_dir),
+            "--output-dir",
+            str(output_dir),
+            "--match-tolerance-nm",
+            str(args.blind_joint_tolerance_nm),
+        ],
+        log_path=log_path,
+        env=env,
+        dry_run=args.dry_run,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run baseline, injected, paired-delta recovery campaigns for visible June sky anchors."
@@ -196,6 +296,13 @@ def main() -> None:
     parser.add_argument("--max-line-flux-uJy", type=float)
     parser.add_argument("--min-snr", type=float, default=5.0)
     parser.add_argument("--wavelength-tolerance-nm", type=float, default=10.0)
+    parser.add_argument("--blind-scan", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--blind-grid-step-nm", type=float, default=5.0)
+    parser.add_argument("--blind-min-snr", type=float, default=5.0)
+    parser.add_argument("--blind-min-supporting-points", type=int, default=2)
+    parser.add_argument("--blind-flux-kind", choices=["aperture", "psf", "both"], default="both")
+    parser.add_argument("--blind-warp-device", default="cuda:0")
+    parser.add_argument("--blind-joint-tolerance-nm", type=float, default=10.0)
     parser.add_argument("--viewer-base-url", default="http://127.0.0.1:8765")
     parser.add_argument("--force", action="store_true", help="Rerun stages even when expected outputs exist.")
     parser.add_argument("--dry-run", action="store_true")
@@ -280,6 +387,32 @@ def main() -> None:
                 env=env,
                 dry_run=args.dry_run,
             )
+
+        if args.blind_scan:
+            for flux_kind in _blind_flux_kinds(args.blind_flux_kind):
+                baseline_blind_dir = baseline_run / f"blind_classifier_{flux_kind}_warp"
+                if args.force or not _done(baseline_blind_dir / "blind_candidate_clusters.parquet"):
+                    _run_blind_raw(
+                        py=py,
+                        run_dir=baseline_run,
+                        output_dir=baseline_blind_dir,
+                        flux_kind=flux_kind,
+                        args=args,
+                        log_path=campaign_root / "logs" / f"{target_id}_blind_baseline_{flux_kind}.log",
+                        env=env,
+                    )
+            if args.blind_flux_kind == "both":
+                baseline_joint_dir = baseline_run / "blind_classifier_joint_warp"
+                if args.force or not _done(baseline_joint_dir / "blind_joint_candidates.parquet"):
+                    _run_blind_joint(
+                        py=py,
+                        aperture_dir=baseline_run / "blind_classifier_aperture_warp",
+                        psf_dir=baseline_run / "blind_classifier_psf_warp",
+                        output_dir=baseline_joint_dir,
+                        args=args,
+                        log_path=campaign_root / "logs" / f"{target_id}_blind_baseline_joint.log",
+                        env=env,
+                    )
 
         if args.force or not _done(plan_path):
             plan_cmd = [
@@ -382,6 +515,47 @@ def main() -> None:
                 dry_run=args.dry_run,
             )
 
+        if args.blind_scan:
+            for flux_kind in _blind_flux_kinds(args.blind_flux_kind):
+                injected_blind_dir = injected_run / f"blind_classifier_{flux_kind}_warp"
+                paired_blind_dir = injected_run / f"blind_classifier_paired_delta_{flux_kind}_warp"
+                if args.force or not _done(injected_blind_dir / "blind_candidate_clusters.parquet"):
+                    _run_blind_raw(
+                        py=py,
+                        run_dir=injected_run,
+                        output_dir=injected_blind_dir,
+                        flux_kind=flux_kind,
+                        args=args,
+                        log_path=campaign_root / "logs" / f"{target_id}_blind_injected_{flux_kind}.log",
+                        env=env,
+                    )
+                if args.force or not _done(paired_blind_dir / "blind_candidate_clusters.parquet"):
+                    _run_blind_paired(
+                        py=py,
+                        baseline_run=baseline_run,
+                        injected_run=injected_run,
+                        output_dir=paired_blind_dir,
+                        flux_kind=flux_kind,
+                        args=args,
+                        log_path=campaign_root / "logs" / f"{target_id}_blind_paired_delta_{flux_kind}.log",
+                        env=env,
+                    )
+            if args.blind_flux_kind == "both":
+                for scope, parent in (("injected", injected_run), ("paired_delta", injected_run)):
+                    aperture_dir = parent / ("blind_classifier_aperture_warp" if scope == "injected" else "blind_classifier_paired_delta_aperture_warp")
+                    psf_dir = parent / ("blind_classifier_psf_warp" if scope == "injected" else "blind_classifier_paired_delta_psf_warp")
+                    joint_dir = parent / ("blind_classifier_joint_warp" if scope == "injected" else "blind_classifier_paired_delta_joint_warp")
+                    if args.force or not _done(joint_dir / "blind_joint_candidates.parquet"):
+                        _run_blind_joint(
+                            py=py,
+                            aperture_dir=aperture_dir,
+                            psf_dir=psf_dir,
+                            output_dir=joint_dir,
+                            args=args,
+                            log_path=campaign_root / "logs" / f"{target_id}_blind_{scope}_joint.log",
+                            env=env,
+                        )
+
         if args.force or not _done(classifier_dir / "matched_filter_candidates.parquet"):
             _run(
                 [
@@ -436,6 +610,9 @@ def main() -> None:
                 "injection_plan": str(plan_path),
                 "injection_manifest": str(manifest_path),
                 "recovery_summary": str(recovery_dir / "recovery_summary.json"),
+                "baseline_blind_joint_summary": str(baseline_run / "blind_classifier_joint_warp" / "blind_joint_summary.json"),
+                "injected_blind_joint_summary": str(injected_run / "blind_classifier_joint_warp" / "blind_joint_summary.json"),
+                "paired_blind_joint_summary": str(injected_run / "blind_classifier_paired_delta_joint_warp" / "blind_joint_summary.json"),
                 "false_positive_review": str(review_path),
                 "review_url": review.get("review_url"),
             }
