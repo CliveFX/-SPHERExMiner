@@ -292,7 +292,7 @@ def _false_positive_rows(path: Path, run_name: str, campaign: str, target: str, 
         target_id = str(row.get("target_id") or "")
         spectra_url = f"/spectra?run={urllib.parse.quote(run_name)}&target={urllib.parse.quote(target_id)}"
         review_url = f"/injections?run={urllib.parse.quote(run_name)}&status=false_positive&q={urllib.parse.quote(target_id)}"
-        blind_url = f"/blind-candidates?run={urllib.parse.quote(run_name)}&scope=paired&target={urllib.parse.quote(target_id)}"
+        blind_url = f"/blind-candidates?run={urllib.parse.quote(run_name)}&scope=paired&tier=all&target={urllib.parse.quote(target_id)}"
         out = dict(row)
         out.update(
             {
@@ -3162,10 +3162,11 @@ function fmt(v){ if(v===null||v===undefined||v==='') return ''; const n=Number(v
 function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function attr(s){ return esc(s).replace(/`/g,'&#96;'); }
 function applyInitialFilters(){
+  const defaults = {tier:'all', sort:'rank', scope:'auto', limit:'300'};
   for(const id of ['tier','sort','scope','limit']){
-    const value = initialParams.get(id);
+    const value = initialParams.get(id) || defaults[id];
     const el = document.getElementById(id);
-    if(value && el && [...el.options].some(o=>o.value===value || o.text===value)) el.value = value;
+    if(el && [...el.options].some(o=>o.value===value || o.text===value)) el.value = value;
   }
   document.getElementById('query').value = initialParams.get('q') || activeTargetFilter || '';
 }
