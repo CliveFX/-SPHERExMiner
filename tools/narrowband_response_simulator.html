@@ -312,7 +312,12 @@ fetch('simulator_background_spectra.json', {cache: 'no-store'})
   })
   .then(data => {
     backgroundSpectra = Array.isArray(data.targets) ? data.targets : [];
-    backgroundLoadStatus = `captured spectra loaded: ${backgroundSpectra.length}`;
+    const allPoints = backgroundSpectra.flatMap(t => Array.isArray(t.points) ? t.points : []);
+    const hasScienceWidths = allPoints.length > 0
+      && allPoints.every(p => Number.isFinite(Number(p.cband)) && p.wavelength_source === 'spectral_wcs_CWAVE_CBAND');
+    backgroundLoadStatus = hasScienceWidths
+      ? `captured spectra loaded: ${backgroundSpectra.length} (CWAVE/CBAND)`
+      : `captured spectra loaded: ${backgroundSpectra.length} (legacy widths)`;
     const select = $('backgroundSpectrum');
     select.innerHTML = [
       '<option value="">None</option>',
@@ -350,6 +355,10 @@ function selectedBackground() {
 function responseForMeasurementPoint(point) {
   const lineWave = Number($('lineWave').value);
   const lineWidthUm = Number($('lineWidth').value) / 1000;
+  const pointCband = Number(point.cband);
+  if (Number.isFinite(pointCband) && pointCband > 0) {
+    return responseAt({center: Number(point.wave), cband: pointCband}, lineWave, lineWidthUm);
+  }
   const detector = Number(point.detector) || bandFor(Number(point.wave)).band;
   const calibration = calibrationRows.find(row => Number(row.detector) === detector && Number(point.wave) >= Number(row.wl_min_um) && Number(point.wave) <= Number(row.wl_max_um));
   const cband = calibration
@@ -590,6 +599,8 @@ function drawSpectrum(rows) {
         fill:BANDS[(Number(p.detector) || 1) - 1]?.color || '#38bdf8',
         opacity:Math.min(0.85, opacity + 0.18)
       });
+      svg.lastChild.appendChild(document.createElementNS('http://www.w3.org/2000/svg', 'title')).textContent =
+        `${fmt(Number(p.wave), 4)} um, CBAND ${fmt(Number(p.cband), 4)} um, ${p.wavelength_source || 'legacy width'}`;
     }
     if (injectPeak) {
       const injected = [...injectedBgPoints].sort((a,b) => Number(a.wave) - Number(b.wave));

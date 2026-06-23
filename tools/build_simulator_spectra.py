@@ -40,11 +40,15 @@ def main() -> None:
         "phot_g_mean_mag",
         "bp_rp",
         "cwave_um",
+        "cband_um",
         "aperture_flux_uJy",
         "aperture_flux_unc_uJy",
         "fatal_flag_present",
         "detector",
         "edge_distance_pix",
+        "wavelength_source",
+        "wavelength_calibration_collection",
+        "wavelength_detector",
     ]
     df = pd.read_parquet(spectra_path)
     try:
@@ -94,9 +98,13 @@ def main() -> None:
         points = [
             {
                 "wave": round(float(row.cwave_um), 6),
+                "cband": round(float(row.cband_um), 6),
                 "flux": round(float(row.aperture_flux_uJy), 3),
                 "unc": round(float(row.aperture_flux_unc_uJy), 3),
                 "detector": int(row.detector),
+                "wavelength_source": str(row.wavelength_source),
+                "wavelength_calibration_collection": str(row.wavelength_calibration_collection),
+                "wavelength_detector": int(row.wavelength_detector),
                 "edge": round(float(row.edge_distance_pix), 3),
             }
             for row in ok.itertuples(index=False)
@@ -125,7 +133,8 @@ def main() -> None:
 
     payload = {
         "source_run": str(run_dir),
-        "description": "Selected clean high-coverage spectra from the UCS0972 f500 GPU run.",
+        "description": "Selected clean high-coverage spectra with science-grade spectral_wcs CWAVE/CBAND wavelengths.",
+        "wavelength_source": "spectral_wcs_CWAVE_CBAND",
         "targets": payload_targets,
     }
     out_path = Path(__file__).with_name("simulator_background_spectra.json")
