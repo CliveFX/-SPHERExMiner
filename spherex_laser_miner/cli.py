@@ -17,6 +17,7 @@ from spherex_laser_miner.catalog.local_gaia_lite import (
 )
 from spherex_laser_miner.catalog.manual_targets import get_manual_target, load_manual_targets
 from spherex_laser_miner.config import load_config
+from spherex_laser_miner.coarse_status import append_status_event, reset_coarse_status
 from spherex_laser_miner.field_eval import evaluate_target_fields
 from spherex_laser_miner.field_worker import (
     build_fixed_target_rows_from_trial,
@@ -474,17 +475,34 @@ def _run_depth_pipeline(
     cfg.enable_psf_photometry = enable_psf
     cfg.enable_diagnostic_aperture = enable_diagnostic_aperture
     ensure_cache_dirs(cfg.cache_root)
+    if cfg.status_mode == "jsonl":
+        reset_coarse_status(cfg.smoke_run_dir, worker_count=max_field_workers)
+        append_status_event(
+            cfg.smoke_run_dir,
+            "pipeline_start",
+            target=target,
+            limit_fields=limit_fields,
+            max_gaia_sources=max_gaia_sources,
+            gaia_g_min=gaia_g_min,
+            gaia_g_max=gaia_g_max,
+            photometry_backend=photometry_backend,
+        )
     manual_target = get_manual_target(cfg.manual_targets_path, target)
-    trials = evaluate_target_fields(
-        target=manual_target,
-        cfg=cfg,
-        limit_fields=limit_fields,
-        redownload=redownload,
-        max_eval_workers=max_field_workers,
-    )
-    measured_trials = [trial for trial in trials if trial.get("status") == "measured"]
-    if not measured_trials:
-        raise typer.BadParameter("No measured parent fields available for depth run.")
+    try:
+        trials = evaluate_target_fields(
+            target=manual_target,
+            cfg=cfg,
+            limit_fields=limit_fields,
+            redownload=redownload,
+            max_eval_workers=max_field_workers,
+        )
+        measured_trials = [trial for trial in trials if trial.get("status") == "measured"]
+        if not measured_trials:
+            raise typer.BadParameter("No measured parent fields available for depth run.")
+    except Exception as exc:
+        if cfg.status_mode == "jsonl":
+            append_status_event(cfg.smoke_run_dir, "run_error", error=f"{type(exc).__name__}: {exc}")
+        raise
     path_override_map = _load_path_overrides(path_overrides)
     best_trial = max(
         measured_trials,
