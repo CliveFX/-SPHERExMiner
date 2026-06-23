@@ -17,6 +17,7 @@ class CalibratedApertureMeasurement:
     background_uJy_per_pix: float
     background_unc_uJy_per_pix: float
     n_bad_aperture_pixels_calibrated: int
+    flags_summary: int
     calibrated_aperture_status: str
 
     def to_json_dict(self) -> dict[str, object]:
@@ -87,6 +88,7 @@ def calibrated_aperture_measure(
         n_bad_aperture_pixels_calibrated=count_bad_aperture_flags(
             flags, x_pix, y_pix, aperture_radius_pix, fatal_flag_bits
         ),
+        flags_summary=summarize_aperture_flags(flags, x_pix, y_pix, aperture_radius_pix),
         calibrated_aperture_status="ok",
     )
 
@@ -117,6 +119,24 @@ def count_bad_aperture_flags(
     return int(np.count_nonzero((ap_flags & mask_value) != 0))
 
 
+def summarize_aperture_flags(
+    flags: np.ndarray | None,
+    x_pix: float,
+    y_pix: float,
+    radius_pix: float,
+) -> int:
+    if flags is None:
+        return 0
+    aperture = CircularAperture((x_pix, y_pix), r=float(radius_pix))
+    ap_mask = aperture.to_mask(method="center").to_image(flags.shape)
+    if ap_mask is None:
+        return 0
+    summary = 0
+    for value in np.asarray(flags)[ap_mask > 0]:
+        summary |= int(value)
+    return int(summary)
+
+
 def _bad(status: str) -> CalibratedApertureMeasurement:
     return CalibratedApertureMeasurement(
         aperture_flux_uJy=float("nan"),
@@ -126,5 +146,6 @@ def _bad(status: str) -> CalibratedApertureMeasurement:
         background_uJy_per_pix=float("nan"),
         background_unc_uJy_per_pix=float("nan"),
         n_bad_aperture_pixels_calibrated=0,
+        flags_summary=0,
         calibrated_aperture_status=status,
     )

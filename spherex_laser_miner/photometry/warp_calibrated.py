@@ -50,6 +50,7 @@ if wp is not None:
         out_bkg_std: wp.array(dtype=wp.float32),
         out_area: wp.array(dtype=wp.float32),
         out_bad: wp.array(dtype=wp.int32),
+        out_flags_summary: wp.array(dtype=wp.uint32),
         out_status: wp.array(dtype=wp.int32),
     ):
         tid = wp.tid()
@@ -61,6 +62,7 @@ if wp is not None:
         ap_var_sum = float(0.0)
         ap_area = float(0.0)
         bad_ap = int(0)
+        flags_summary = wp.uint32(0)
         ann_count = int(0)
         ann_values = wp.zeros(shape=ANNULUS_MAX_PIX, dtype=wp.float32)
         ann_active = wp.zeros(shape=ANNULUS_MAX_PIX, dtype=wp.int32)
@@ -78,8 +80,10 @@ if wp is not None:
                     ddy_center = float(iy) - y0
                     rr_center = wp.sqrt(ddx_center * ddx_center + ddy_center * ddy_center)
 
-                    if rr_center <= aperture_radius_pix and not good:
-                        bad_ap += 1
+                    if rr_center <= aperture_radius_pix:
+                        flags_summary = flags_summary | flags[flat]
+                        if not good:
+                            bad_ap += 1
 
                     if rr_center > annulus_inner_pix and rr_center <= annulus_outer_pix and good:
                         if ann_count < ANNULUS_MAX_PIX:
@@ -111,6 +115,7 @@ if wp is not None:
             out_bkg_std[tid] = 0.0
             out_area[tid] = ap_area
             out_bad[tid] = bad_ap
+            out_flags_summary[tid] = flags_summary
             out_status[tid] = 1
             return
 
@@ -131,6 +136,7 @@ if wp is not None:
                 out_bkg_std[tid] = 0.0
                 out_area[tid] = ap_area
                 out_bad[tid] = bad_ap
+                out_flags_summary[tid] = flags_summary
                 out_status[tid] = 1
                 return
             for i in range(ANNULUS_MAX_PIX):
@@ -182,6 +188,7 @@ if wp is not None:
         out_bkg_std[tid] = ann_std
         out_area[tid] = ap_area
         out_bad[tid] = bad_ap
+        out_flags_summary[tid] = flags_summary
         out_status[tid] = 0
 
 
@@ -229,6 +236,7 @@ def warp_calibrated_aperture_batch(
     out_bkg_std = wp.empty(n, dtype=wp.float32, device=device)
     out_area = wp.empty(n, dtype=wp.float32, device=device)
     out_bad = wp.empty(n, dtype=wp.int32, device=device)
+    out_flags_summary = wp.empty(n, dtype=wp.uint32, device=device)
     out_status = wp.empty(n, dtype=wp.int32, device=device)
     wp.launch(
         _weighted_calibrated_aperture_kernel,
@@ -251,6 +259,7 @@ def warp_calibrated_aperture_batch(
             out_bkg_std,
             out_area,
             out_bad,
+            out_flags_summary,
             out_status,
         ],
         device=device,
@@ -262,6 +271,7 @@ def warp_calibrated_aperture_batch(
     bkg_std = out_bkg_std.numpy().astype(float)
     area = out_area.numpy().astype(float)
     bad = out_bad.numpy().astype(int)
+    flags_summary = out_flags_summary.numpy().astype(int)
     status = out_status.numpy().astype(int)
     measurements = [
         CalibratedApertureMeasurement(
@@ -272,6 +282,7 @@ def warp_calibrated_aperture_batch(
             background_uJy_per_pix=float(bkg[i]) if status[i] == 0 else float("nan"),
             background_unc_uJy_per_pix=float(bkg_std[i]) if status[i] == 0 else float("nan"),
             n_bad_aperture_pixels_calibrated=int(bad[i]),
+            flags_summary=int(flags_summary[i]),
             calibrated_aperture_status="ok" if status[i] == 0 else "bad_background",
         )
         for i in range(n)

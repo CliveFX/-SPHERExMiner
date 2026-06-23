@@ -32,7 +32,8 @@ from spherex_laser_miner.live_status import mark_frame, mark_frame_perf, mark_ta
 from spherex_laser_miner.photometry.aperture import aperture_measure
 from spherex_laser_miner.photometry.calibrated_aperture import calibrated_aperture_measure
 from spherex_laser_miner.photometry.warp_calibrated import warp_calibrated_aperture_batch
-from spherex_laser_miner.photometry.psf import psf_measure, psf_not_run
+from spherex_laser_miner.photometry.psf import PsfMeasurement, psf_measure, psf_not_run
+from spherex_laser_miner.photometry.psf_forced import fit_psf_warp_grid_batch, select_warp_device
 from spherex_laser_miner.qa import write_smoke_artifacts
 
 
@@ -239,6 +240,30 @@ def run_trial_field_worker(
                 perf["calibrated_aperture_sec"] += time.perf_counter() - tp
                 perf["warp_device"] = calibrated_batch_result.device
                 calibrated_batch = calibrated_batch_result.measurements
+            psf_batch = None
+            if cfg.enable_psf_photometry and cfg.psf_photometry_backend == "warp_grid" and selected_rows:
+                tp = time.perf_counter()
+                psf_device = select_warp_device(cfg.warp_devices, threading.current_thread().name)
+                psf_batch_result = fit_psf_warp_grid_batch(
+                    hdul=hdul,
+                    flux_ujy=flux_ujy,
+                    var_ujy2=var_ujy2,
+                    flags=flags,
+                    x_pix=np.asarray([float(row["x_pix"]) for row in selected_rows], dtype=float),
+                    y_pix=np.asarray([float(row["y_pix"]) for row in selected_rows], dtype=float),
+                    fatal_flag_bits=cfg.fatal_flag_bits,
+                    kernel_radius_native=cfg.psf_kernel_radius_native,
+                    half_range_pix=cfg.psf_grid_half_range_pix,
+                    step_pix=cfg.psf_grid_step_pix,
+                    metric=cfg.psf_grid_metric,
+                    kernel_build_mode=cfg.psf_kernel_build_mode,
+                    device=psf_device,
+                )
+                perf["psf_sec"] += time.perf_counter() - tp
+                perf["psf_warp_device"] = psf_batch_result.device
+                perf["psf_backend"] = cfg.psf_photometry_backend
+                perf["psf_kernel_build_mode"] = cfg.psf_kernel_build_mode
+                psf_batch = [_psf_fit_result_to_measurement(result) for result in psf_batch_result.rows]
             for row_idx, row in enumerate(selected_rows):
                 x_pix = float(row["x_pix"])
                 y_pix = float(row["y_pix"])
@@ -284,7 +309,9 @@ def run_trial_field_worker(
                     )
                     perf["calibrated_aperture_sec"] += time.perf_counter() - tp
                 tp = time.perf_counter()
-                if cfg.enable_psf_photometry:
+                if psf_batch is not None:
+                    psf = psf_batch[row_idx]
+                elif cfg.enable_psf_photometry:
                     psf = psf_measure(
                         flux_ujy=flux_ujy,
                         var_ujy2=var_ujy2,
@@ -316,6 +343,11 @@ def run_trial_field_worker(
                     "sapm_file_path": str(sapm_path),
                     "image_unit": str(image_hdu.header.get("BUNIT", "")),
                     "photometry_backend": cfg.photometry_backend,
+                    "psf_photometry_backend": cfg.psf_photometry_backend if cfg.enable_psf_photometry else "disabled",
+                    "psf_kernel_build_mode": cfg.psf_kernel_build_mode if cfg.enable_psf_photometry else None,
+                    "psf_grid_half_range_pix": cfg.psf_grid_half_range_pix if cfg.enable_psf_photometry else None,
+                    "psf_grid_step_pix": cfg.psf_grid_step_pix if cfg.enable_psf_photometry else None,
+                    "psf_grid_metric": cfg.psf_grid_metric if cfg.enable_psf_photometry else None,
                     "diagnostic_aperture_enabled": cfg.enable_diagnostic_aperture,
                     "input_file_path": str(local_path),
                     "original_input_file_path": str(original_local_path),
@@ -587,6 +619,25 @@ def _combined_targets(target: ManualTarget, gaia: pd.DataFrame) -> list[dict[str
             }
         )
     return rows
+
+
+def _psf_fit_result_to_measurement(result: Any) -> PsfMeasurement:
+    status = str(getattr(result, "status", "unknown"))
+    model = f"warp_grid_{getattr(result, 'backend', 'unknown')}"
+    return PsfMeasurement(
+        psf_flux_uJy=float(getattr(result, "flux_uJy", np.nan)),
+        psf_flux_unc_uJy=float(getattr(result, "flux_unc_uJy", np.nan)),
+        psf_flux_unit="uJy",
+        psf_fit_status=status,
+        psf_chi2=float(getattr(result, "chi2", np.nan)),
+        psf_dof=int(getattr(result, "dof", 0) or 0),
+        psf_n_valid=int(getattr(result, "n_valid", 0) or 0),
+        psf_model_id=model,
+        psf_sector=getattr(result, "sector", None),
+        psf_background_uJy_per_pix=float(getattr(result, "background_uJy_per_pix", np.nan)),
+        centroid_dx_pix=float(getattr(result, "x_fit", np.nan) - getattr(result, "x_init", np.nan)),
+        centroid_dy_pix=float(getattr(result, "y_fit", np.nan) - getattr(result, "y_init", np.nan)),
+    )
 
 
 def _best_trial(trials: list[dict[str, object]]) -> dict[str, object] | None:

@@ -64,7 +64,10 @@ def read_coarse_summary(run_dir: Path, *, event_limit: int = 80) -> dict[str, An
     else:
         summary = {}
     if "recent_events" not in summary:
-        summary["recent_events"] = tail_events(run_dir, limit=event_limit)
+        recent_events = tail_events(run_dir, limit=event_limit)
+        if not summary and not recent_events:
+            return {}
+        summary["recent_events"] = recent_events
     return summary
 
 

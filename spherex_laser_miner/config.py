@@ -16,6 +16,12 @@ class MinerConfig(BaseModel):
     release: str = Field(default_factory=lambda: os.getenv("SPHEREX_RELEASE", "qr2"))
     filter_profile: str = Field(default_factory=lambda: os.getenv("FILTER_PROFILE", "broad_debug"))
     photometry_backend: Literal["cpu_numpy", "warp_calibrated"] = "cpu_numpy"
+    psf_photometry_backend: Literal["cpu_single", "warp_grid"] = "cpu_single"
+    psf_kernel_build_mode: Literal["cpu_scipy", "gpu_bilinear", "gpu_spline"] = "gpu_spline"
+    psf_grid_half_range_pix: float = 1.0
+    psf_grid_step_pix: float = 0.5
+    psf_grid_metric: Literal["snr", "chi2"] = "snr"
+    psf_kernel_radius_native: int = 5
     status_mode: Literal["live", "jsonl", "off"] = "live"
     warp_devices: tuple[str, ...] = ("cuda:0", "cuda:1", "cuda:2")
     enable_psf_photometry: bool = False

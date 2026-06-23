@@ -45,6 +45,12 @@ def _continuum_delta(
     return median, robust_rms, int(values.size)
 
 
+def _flux_columns(flux_kind: str) -> tuple[str, str]:
+    if flux_kind == "psf":
+        return "psf_flux_uJy", "psf_flux_unc_uJy"
+    return "aperture_flux_uJy", "aperture_flux_unc_uJy"
+
+
 def _load_pair(args: argparse.Namespace) -> pd.DataFrame:
     base_path = args.baseline_spectra or (args.baseline_run_dir / "spectra" / "target_spectra.parquet")
     inj_path = args.injected_spectra or (args.injected_run_dir / "spectra" / "target_spectra.parquet")
@@ -53,13 +59,14 @@ def _load_pair(args: argparse.Namespace) -> pd.DataFrame:
     if not inj_path.exists():
         raise SystemExit(f"Missing injected spectra parquet: {inj_path}")
 
+    flux_col, unc_col = _flux_columns(args.flux_kind)
     columns = [
         "target_id",
         "image_id",
         "cwave_um",
         "cband_um",
-        "aperture_flux_uJy",
-        "aperture_flux_unc_uJy",
+        flux_col,
+        unc_col,
         "fatal_flag_present",
         "detector",
         "observation_id",
@@ -76,7 +83,7 @@ def _load_pair(args: argparse.Namespace) -> pd.DataFrame:
         raise SystemExit(str(exc)) from exc
     base = base[[col for col in columns if col in base.columns]].copy()
     inj = inj[[col for col in columns if col in inj.columns]].copy()
-    required = {"target_id", "image_id", "cwave_um", "cband_um", "aperture_flux_uJy", "aperture_flux_unc_uJy"}
+    required = {"target_id", "image_id", "cwave_um", "cband_um", flux_col, unc_col}
     missing_base = sorted(required - set(base.columns))
     missing_inj = sorted(required - set(inj.columns))
     if missing_base:
@@ -94,11 +101,11 @@ def _load_pair(args: argparse.Namespace) -> pd.DataFrame:
     paired["cwave_um"] = pd.to_numeric(paired["cwave_um_inj"], errors="coerce")
     paired["cband_um"] = pd.to_numeric(paired["cband_um_inj"], errors="coerce")
     paired["delta_flux_uJy"] = (
-        pd.to_numeric(paired["aperture_flux_uJy_inj"], errors="coerce")
-        - pd.to_numeric(paired["aperture_flux_uJy_base"], errors="coerce")
+        pd.to_numeric(paired[f"{flux_col}_inj"], errors="coerce")
+        - pd.to_numeric(paired[f"{flux_col}_base"], errors="coerce")
     )
-    inj_unc = pd.to_numeric(paired["aperture_flux_unc_uJy_inj"], errors="coerce")
-    base_unc = pd.to_numeric(paired["aperture_flux_unc_uJy_base"], errors="coerce")
+    inj_unc = pd.to_numeric(paired[f"{unc_col}_inj"], errors="coerce")
+    base_unc = pd.to_numeric(paired[f"{unc_col}_base"], errors="coerce")
     if args.uncertainty_mode == "injected":
         paired["delta_flux_unc_uJy"] = inj_unc
     elif args.uncertainty_mode == "baseline":
@@ -197,6 +204,7 @@ def _score_one_target(
                 "candidate_status": "candidate" if matched_snr >= args.min_snr else "below_threshold",
                 "score_mode": "paired_delta",
                 "uncertainty_mode": args.uncertainty_mode,
+                "flux_kind": args.flux_kind,
             }
         )
     return out
@@ -214,6 +222,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--ignore-flagged", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--uncertainty-mode", choices=["quadrature", "injected", "baseline"], default="quadrature")
+    parser.add_argument("--flux-kind", choices=["aperture", "psf"], default="aperture")
     parser.add_argument("--min-points", type=int, default=8)
     parser.add_argument("--min-supporting-points", type=int, default=1)
     parser.add_argument("--min-template-response", type=float, default=1e-3)
@@ -269,6 +278,7 @@ def main() -> None:
         "min_snr": args.min_snr,
         "ignore_flagged": args.ignore_flagged,
         "uncertainty_mode": args.uncertainty_mode,
+        "flux_kind": args.flux_kind,
         "paired_path": str(paired_path),
         "scores_path": str(scores_path),
         "candidates_path": str(candidates_path),

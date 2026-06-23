@@ -348,6 +348,11 @@ def run_depth_test(
     status_mode: str = typer.Option("live", help="Status backend: live, jsonl, or off."),
     max_field_retries: int = typer.Option(0, min=0, help="Retry failed fields this many times."),
     enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
+    psf_photometry_backend: str = typer.Option("cpu_single", help="PSF backend: cpu_single or warp_grid."),
+    psf_kernel_build_mode: str = typer.Option("gpu_spline", help="PSF kernel build mode: cpu_scipy, gpu_bilinear, or gpu_spline."),
+    psf_grid_half_range_pix: float = typer.Option(1.0, help="Half-width of PSF local grid search, in pixels."),
+    psf_grid_step_pix: float = typer.Option(0.5, help="Step size of PSF local grid search, in pixels."),
+    psf_grid_metric: str = typer.Option("snr", help="PSF grid metric: snr or chi2."),
     enable_diagnostic_aperture: bool = typer.Option(False, help="Run raw diagnostic aperture QA photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
@@ -370,6 +375,11 @@ def run_depth_test(
         status_mode=status_mode,
         max_field_retries=max_field_retries,
         enable_psf=enable_psf,
+        psf_photometry_backend=psf_photometry_backend,
+        psf_kernel_build_mode=psf_kernel_build_mode,
+        psf_grid_half_range_pix=psf_grid_half_range_pix,
+        psf_grid_step_pix=psf_grid_step_pix,
+        psf_grid_metric=psf_grid_metric,
         enable_diagnostic_aperture=enable_diagnostic_aperture,
         cache_root=cache_root,
         redownload=redownload,
@@ -395,6 +405,11 @@ def run_benchmark(
     status_mode: str = typer.Option("live", help="Status backend: live, jsonl, or off."),
     max_field_retries: int = typer.Option(0, min=0, help="Retry failed fields this many times."),
     enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
+    psf_photometry_backend: str = typer.Option("cpu_single", help="PSF backend: cpu_single or warp_grid."),
+    psf_kernel_build_mode: str = typer.Option("gpu_spline", help="PSF kernel build mode: cpu_scipy, gpu_bilinear, or gpu_spline."),
+    psf_grid_half_range_pix: float = typer.Option(1.0, help="Half-width of PSF local grid search, in pixels."),
+    psf_grid_step_pix: float = typer.Option(0.5, help="Step size of PSF local grid search, in pixels."),
+    psf_grid_metric: str = typer.Option("snr", help="PSF grid metric: snr or chi2."),
     enable_diagnostic_aperture: bool = typer.Option(False, help="Run raw diagnostic aperture QA photometry."),
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
@@ -419,6 +434,11 @@ def run_benchmark(
         status_mode=status_mode,
         max_field_retries=max_field_retries,
         enable_psf=enable_psf,
+        psf_photometry_backend=psf_photometry_backend,
+        psf_kernel_build_mode=psf_kernel_build_mode,
+        psf_grid_half_range_pix=psf_grid_half_range_pix,
+        psf_grid_step_pix=psf_grid_step_pix,
+        psf_grid_metric=psf_grid_metric,
         enable_diagnostic_aperture=enable_diagnostic_aperture,
         cache_root=cache_root,
         redownload=redownload,
@@ -464,9 +484,14 @@ def _run_depth_pipeline(
     status_mode: str,
     max_field_retries: int,
     enable_psf: bool,
-    enable_diagnostic_aperture: bool,
-    cache_root: Path | None,
-    redownload: bool,
+    psf_photometry_backend: str = "cpu_single",
+    psf_kernel_build_mode: str = "gpu_spline",
+    psf_grid_half_range_pix: float = 1.0,
+    psf_grid_step_pix: float = 0.5,
+    psf_grid_metric: str = "snr",
+    enable_diagnostic_aperture: bool = False,
+    cache_root: Path | None = None,
+    redownload: bool = False,
     path_overrides: Path | None = None,
     fixed_targets_path: Path | None = None,
     field_launch_stagger_sec: float = 0.0,
@@ -477,14 +502,29 @@ def _run_depth_pipeline(
     cfg.release = release
     if photometry_backend not in {"cpu_numpy", "warp_calibrated"}:
         raise typer.BadParameter("photometry_backend must be cpu_numpy or warp_calibrated")
+    if psf_photometry_backend not in {"cpu_single", "warp_grid"}:
+        raise typer.BadParameter("psf_photometry_backend must be cpu_single or warp_grid")
+    if psf_kernel_build_mode not in {"cpu_scipy", "gpu_bilinear", "gpu_spline"}:
+        raise typer.BadParameter("psf_kernel_build_mode must be cpu_scipy, gpu_bilinear, or gpu_spline")
+    if psf_grid_metric not in {"snr", "chi2"}:
+        raise typer.BadParameter("psf_grid_metric must be snr or chi2")
     if status_mode not in {"live", "jsonl", "off"}:
         raise typer.BadParameter("status_mode must be live, jsonl, or off")
     cfg.photometry_backend = photometry_backend
     cfg.status_mode = status_mode
     cfg.warp_devices = tuple(part.strip() for part in warp_devices.split(",") if part.strip())
     cfg.enable_psf_photometry = enable_psf
+    cfg.psf_photometry_backend = psf_photometry_backend
+    cfg.psf_kernel_build_mode = psf_kernel_build_mode
+    cfg.psf_grid_half_range_pix = float(psf_grid_half_range_pix)
+    cfg.psf_grid_step_pix = float(psf_grid_step_pix)
+    cfg.psf_grid_metric = psf_grid_metric
     cfg.enable_diagnostic_aperture = enable_diagnostic_aperture
     ensure_cache_dirs(cfg.cache_root)
+    if cfg.photometry_backend == "warp_calibrated" or (
+        cfg.enable_psf_photometry and cfg.psf_photometry_backend == "warp_grid"
+    ):
+        _prewarm_warp_modules(cfg.warp_devices, cfg.photometry_backend, cfg.enable_psf_photometry, cfg.psf_photometry_backend)
     if cfg.status_mode == "jsonl":
         reset_coarse_status(cfg.smoke_run_dir, worker_count=max_field_workers)
         append_status_event(
@@ -496,6 +536,11 @@ def _run_depth_pipeline(
             gaia_g_min=gaia_g_min,
             gaia_g_max=gaia_g_max,
             photometry_backend=photometry_backend,
+            psf_photometry_backend=psf_photometry_backend,
+            psf_kernel_build_mode=psf_kernel_build_mode,
+            psf_grid_half_range_pix=psf_grid_half_range_pix,
+            psf_grid_step_pix=psf_grid_step_pix,
+            psf_grid_metric=psf_grid_metric,
             field_launch_stagger_sec=field_launch_stagger_sec,
         )
     manual_target = get_manual_target(cfg.manual_targets_path, target)
@@ -566,6 +611,11 @@ def _run_depth_pipeline(
         "max_field_retries": max_field_retries,
         "field_error_count": len(field_errors) if isinstance(field_errors, list) else 0,
         "psf_enabled": enable_psf,
+        "psf_photometry_backend": cfg.psf_photometry_backend if enable_psf else "disabled",
+        "psf_kernel_build_mode": cfg.psf_kernel_build_mode if enable_psf else None,
+        "psf_grid_half_range_pix": cfg.psf_grid_half_range_pix if enable_psf else None,
+        "psf_grid_step_pix": cfg.psf_grid_step_pix if enable_psf else None,
+        "psf_grid_metric": cfg.psf_grid_metric if enable_psf else None,
         "diagnostic_aperture_enabled": enable_diagnostic_aperture,
         "path_overrides_path": str(path_overrides) if path_overrides is not None else None,
         "path_override_count": len(path_override_map),
@@ -576,6 +626,26 @@ def _run_depth_pipeline(
     }
     (cfg.smoke_run_dir / "run_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
     return summary
+
+
+def _prewarm_warp_modules(
+    devices: tuple[str, ...],
+    photometry_backend: str,
+    enable_psf: bool,
+    psf_photometry_backend: str,
+) -> None:
+    try:
+        import warp as wp
+
+        from spherex_laser_miner.photometry import psf_forced, warp_calibrated
+    except Exception:
+        return
+    wp.init()
+    for device in devices:
+        if photometry_backend == "warp_calibrated":
+            wp.load_module(warp_calibrated, device=device, max_workers=0)
+        if enable_psf and psf_photometry_backend == "warp_grid":
+            wp.load_module(psf_forced, device=device, max_workers=0)
 
 
 @app.command()

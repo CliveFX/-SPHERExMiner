@@ -37,6 +37,7 @@ gpu = [
 
 [project.scripts]
 spherex-mine = "spherex_laser_miner.cli:app"
+spherex-mine-gpu-psf = "spherex_laser_miner.gpu_psf_cli:app"
 
 [tool.setuptools.packages.find]
 include = ["spherex_laser_miner*"]

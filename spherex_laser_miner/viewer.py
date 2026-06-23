@@ -383,7 +383,9 @@ def _overall_run_status(run_dir: Path) -> dict[str, object]:
 
 def _simple_status(run_dir: Path) -> dict[str, object]:
     summary = read_coarse_summary(run_dir)
-    if not summary:
+    has_coarse_fields = bool(dict(summary.get("fields") or {})) if summary else False
+    has_coarse_events = bool(summary.get("recent_events")) if summary else False
+    if not summary or not has_coarse_fields and not has_coarse_events:
         overall = _overall_run_status(run_dir)
         fields = _completed_live_frames_from_jobs(run_dir, limit=96)
         return {
@@ -990,7 +992,7 @@ def _injection_detail(run_dir: Path, injection_id: str) -> dict[str, object]:
         return {"injection_id": injection_id, "error": "not found"}
     injection = row_df.iloc[0].to_dict()
     target_id = str(injection.get("target_id"))
-    target_injections = recovery[recovery["target_id"].astype(str).eq(target_id)].to_dict(orient="records") if "target_id" in recovery else []
+    target_injections = _target_injections(run_dir, target_id)
     candidates = _matched_candidates_table(run_dir)
     target_candidates = pd.DataFrame()
     if not candidates.empty and "target_id" in candidates:
@@ -1076,16 +1078,33 @@ def _maybe_float(value: object) -> float | None:
     return out if np.isfinite(out) else None
 
 
+def _target_injections(run_dir: Path, target_id: str) -> list[dict[str, object]]:
+    recovery = _recovery_table(run_dir)
+    if recovery.empty or "target_id" not in recovery:
+        return []
+    rows = recovery[recovery["target_id"].astype(str).eq(str(target_id))].copy()
+    if rows.empty:
+        return []
+    sort_cols = [col for col in ("injected_line_nm", "find_me_snr", "injection_id") if col in rows]
+    if sort_cols:
+        rows = rows.sort_values(sort_cols, na_position="last", kind="mergesort")
+    return rows.to_dict(orient="records")
+
+
 def _spectrum(run_dir: Path, target_id: str) -> dict[str, object]:
     path = run_dir / "spectra" / "target_spectra.parquet"
     if not path.exists():
-        return {"target_id": target_id, "rows": []}
+        return {"target_id": target_id, "rows": [], "target_injections": _target_injections(run_dir, target_id)}
     df = pd.read_parquet(path)
     rows = df[df["target_id"] == target_id].sort_values("cwave_um")
     if "input_file_path" in rows.columns:
         rows = rows.copy()
         rows["fits_file"] = rows["input_file_path"].map(lambda value: Path(str(value)).name if pd.notna(value) else None)
-    return {"target_id": target_id, "rows": rows.to_dict(orient="records")}
+    return {
+        "target_id": target_id,
+        "rows": rows.to_dict(orient="records"),
+        "target_injections": _target_injections(run_dir, target_id),
+    }
 
 
 def _fits_info(run_dir: Path, idx: int) -> dict[str, object]:
@@ -2192,7 +2211,7 @@ function renderDetail() {
     ['Candidate status', inj.candidate_status || '']
   ];
   document.getElementById('summaryTiles').innerHTML = tiles.map(([k,v]) => `<div class="tile"><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div></div>`).join('');
-  drawPlot(detail.spectrum?.rows || [], inj, cand);
+  drawPlot(detail.spectrum?.rows || [], inj, cand, detail.target_injections || detail.spectrum?.target_injections || []);
   renderTable();
 }
 function setTableMode(mode) { tableMode = mode; renderTable(); }
@@ -2207,39 +2226,87 @@ function renderTable() {
     document.getElementById('detailTable').innerHTML = makeTable(detail.target_candidates || [], ['selected_injection_match','candidate_line_nm','line_family','matched_snr','matched_flux_uJy','matched_flux_unc_uJy','n_supporting_points','n_flagged_nearby','best_frame_ids']);
   }
 }
-function drawPlot(points, inj, candidates) {
+function drawPlot(points, inj, candidates, targetInjections) {
   const svg = document.getElementById('plot');
   svg.innerHTML = '';
-  const W=1160,H=620,m={l:74,r:28,t:26,b:54};
-  const clean = points.map(p => ({x:num(p.cwave_um), y:num(p.aperture_flux_uJy), unc:num(p.aperture_flux_unc_uJy), flag:!!p.fatal_flag_present, image_id:p.image_id})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+  const W=1160,H=620,main={l:100,r:30,t:26,b:212},bump={l:100,r:30,t:470,b:58};
+  const injections = targetInjections && targetInjections.length ? targetInjections : [inj].filter(Boolean);
+  const clean = points.map(p => ({x:num(p.cwave_um), y:num(p.aperture_flux_uJy), unc:num(p.aperture_flux_unc_uJy), flag:!!p.fatal_flag_present, image_id:p.image_id, cband:num(p.cband_um)})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
   if (!clean.length) { add('text',{x:W/2,y:H/2,fill:'#86a4bf','text-anchor':'middle'},'No spectrum points'); return; }
   const xmin=0.72,xmax=5.05;
   const inRange = clean.filter(p => p.x>=xmin && p.x<=xmax).map(p=>p.y).sort((a,b)=>a-b);
   let ymin = quantile(inRange, .02), ymax = quantile(inRange, .98);
   const pad=(ymax-ymin || 1)*.12; ymin-=pad; ymax+=pad;
-  const xs = v => m.l + (v-xmin)/(xmax-xmin)*(W-m.l-m.r);
-  const ys = v => H-m.b - (v-ymin)/(ymax-ymin || 1)*(H-m.t-m.b);
-  for (let v=1; v<=5; v++) { line(xs(v),m.t,xs(v),H-m.b,'#1f3a5f',.55); text(xs(v),H-22,String(v),'#86a4bf','middle'); }
-  for (let i=0; i<5; i++) line(m.l,m.t+i*(H-m.t-m.b)/4,W-m.r,m.t+i*(H-m.t-m.b)/4,'#1f3a5f',.5);
-  line(m.l,H-m.b,W-m.r,H-m.b,'#86a4bf',1); line(m.l,m.t,m.l,H-m.b,'#86a4bf',1);
+  const xs = v => main.l + (v-xmin)/(xmax-xmin)*(W-main.l-main.r);
+  const ys = v => main.b - (v-ymin)/(ymax-ymin || 1)*(main.b-main.t);
+  for (let v=1; v<=5; v++) { line(xs(v),main.t,xs(v),main.b,'#1f3a5f',.55); text(xs(v),main.b+20,String(v),'#86a4bf','middle'); }
+  for (let i=0; i<5; i++) {
+    const val = ymin + (ymax-ymin)*(1-i/4);
+    const yy = main.t+i*(main.b-main.t)/4;
+    line(main.l,yy,W-main.r,yy,'#1f3a5f',.5);
+    text(main.l-9,yy+4,fmt(val),'#86a4bf','end');
+  }
+  line(main.l,main.b,W-main.r,main.b,'#86a4bf',1); line(main.l,main.t,main.l,main.b,'#86a4bf',1);
   const smooth = medianBinned(clean, 80);
   if (smooth.length > 1) add('path',{d:pathFrom(smooth,xs,ys),fill:'none',stroke:'#e7f6ff','stroke-width':1.45,opacity:.72});
   for (const p of clean) point(xs(p.x), ys(p.y), p.flag ? '#ff8a3d' : '#25f38c', p.flag ? .35 : .82, p.flag ? 2.7 : 3.1, `${fmt(p.x)}um ${fmt(p.y)}uJy\\n${p.image_id || ''}`);
-  const lineNm = num(inj.injected_line_nm || inj.nominal_line_nm), lineUm = lineNm/1000;
-  if (Number.isFinite(lineUm)) {
+  for (const sig of injections) {
+    const lineNm = num(sig.injected_line_nm || sig.nominal_line_nm), lineUm = lineNm/1000;
+    if (!Number.isFinite(lineUm)) continue;
+    const selected = String(sig.injection_id || '') === String(inj.injection_id || '');
+    const color = selected ? '#ff4fd8' : '#36e7ff';
     const xx = xs(lineUm);
-    line(xx,m.t,xx,H-m.b,'#ff4fd8',1,2.5);
-    text(xx+5,m.t+18,`${fmt(lineNm)} nm injected`,'#ff9dea','start');
+    line(xx,main.t,xx,main.b,color,selected ? .95 : .45,selected ? 2.4 : 1.2);
+    text(xx+5,main.t+(selected ? 18 : 34),`${fmt(lineNm)} nm ${selected ? 'selected' : 'injected'}`,color,'start');
   }
   for (const c of candidates || []) {
     const cu = num(c.candidate_line_nm)/1000;
     if (!Number.isFinite(cu)) continue;
     const color = c.selected_injection_match ? '#ffb84a' : '#36e7ff';
-    dashed(xs(cu),m.t,xs(cu),H-m.b,color,.55);
-    text(xs(cu)+4,H-m.b-12,`${fmt(c.candidate_line_nm)} SNR ${fmt(c.matched_snr)}`,color,'start');
+    dashed(xs(cu),main.t,xs(cu),main.b,color,.55);
+    text(xs(cu)+4,main.b-12,`${fmt(c.candidate_line_nm)} SNR ${fmt(c.matched_snr)}`,color,'start');
   }
-  text(W/2,H-7,'wavelength (um)','#86a4bf','middle');
-  text(16,H/2,'aperture flux (uJy)','#86a4bf','middle','rotate(-90 16 '+(H/2)+')');
+  drawInjectionStrip();
+  point(W-288,22,'#25f38c',.85,3.2); text(W-276,26,'aperture uJy','#e7f6ff','start');
+  point(W-196,22,'#ff8a3d',.45,3.2); text(W-184,26,'flagged','#e7f6ff','start');
+  line(W-122,22,W-98,22,'#ff4fd8',1,2.2); text(W-92,26,'injected line','#e7f6ff','start');
+  dashed(W-292,44,W-268,44,'#ffb84a',.8); text(W-262,48,'candidate match','#e7f6ff','start');
+  text(W/2,H-10,'wavelength (um)','#86a4bf','middle');
+  text(13,(main.t+main.b)/2,'measured aperture flux (uJy)','#86a4bf','middle','rotate(-90 13 '+((main.t+main.b)/2)+')');
+  text(13,(bump.t+bump.b)/2,'synthetic injected flux (uJy)','#86a4bf','middle','rotate(-90 13 '+((bump.t+bump.b)/2)+')');
+  function drawInjectionStrip() {
+    const series = injections.map((sig, idx) => {
+      const lineNm = num(sig.injected_line_nm || sig.nominal_line_nm), lineUm = lineNm/1000;
+      const widthUm = Math.max(1e-6, num(sig.line_width_nm || 0.1)/1000);
+      const flux = num(sig.line_flux_uJy);
+      const color = String(sig.injection_id || '') === String(inj.injection_id || '') ? '#ff4fd8' : (idx % 2 ? '#36e7ff' : '#facc15');
+      const pts = clean.map(p => ({x:p.x, y:flux*responseAt(p.x, p.cband, lineUm, widthUm)})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y) && p.x>=xmin && p.x<=xmax);
+      return {sig,lineNm,lineUm,color,pts};
+    }).filter(s => s.pts.length);
+    const maxY = Math.max(1, ...series.flatMap(s => s.pts.map(p => p.y)).filter(Number.isFinite));
+    const bx = v => bump.l + (v-xmin)/(xmax-xmin)*(W-bump.l-bump.r);
+    const by = v => bump.b - (v/Math.max(maxY,1))*(bump.b-bump.t);
+    for (let v=1; v<=5; v++) { line(bx(v),bump.t,bx(v),bump.b,'#1f3a5f',.45); text(bx(v),bump.b+20,String(v),'#86a4bf','middle'); }
+    for (let i=0; i<4; i++) {
+      const val = maxY*(1-i/3);
+      const yy = bump.t+i*(bump.b-bump.t)/3;
+      line(bump.l,yy,W-bump.r,yy,'#1f3a5f',.45);
+      text(bump.l-9,yy+4,fmt(val),'#86a4bf','end');
+    }
+    line(bump.l,bump.b,W-bump.r,bump.b,'#86a4bf',1); line(bump.l,bump.t,bump.l,bump.b,'#86a4bf',1);
+    for (const s of series) {
+      if (s.pts.length > 1) add('path',{d:pathFrom(s.pts,bx,by),fill:'none',stroke:s.color,'stroke-width':1.9,opacity:.85});
+      const xx = bx(s.lineUm);
+      if (Number.isFinite(xx)) line(xx,bump.t,xx,bump.b,s.color,.55,1.2);
+    }
+    text(bump.l,bump.t-10,'injected response only, not added to measured spectrum','#93c5fd','start');
+  }
+  function responseAt(cwaveUm, cbandUm, lineUm, lineWidthUm) {
+    if (!Number.isFinite(cwaveUm) || !Number.isFinite(lineUm)) return NaN;
+    const band = Number.isFinite(cbandUm) && cbandUm > 0 ? cbandUm : 0.04;
+    const sigma = Math.sqrt(band*band + lineWidthUm*lineWidthUm) / 2.355;
+    return Math.exp(-0.5 * Math.pow((cwaveUm-lineUm)/Math.max(sigma,1e-9), 2));
+  }
   function add(name, attrs, label) { const el=document.createElementNS('http://www.w3.org/2000/svg',name); for (const [k,v] of Object.entries(attrs)) el.setAttribute(k,v); if (label!==undefined && name==='text') el.textContent=label; else if (label!==undefined) { const t=document.createElementNS('http://www.w3.org/2000/svg','title'); t.textContent=label; el.appendChild(t); } svg.appendChild(el); return el; }
   function line(x1,y1,x2,y2,color,op,w=1){ add('line',{x1,y1,x2,y2,stroke:color,opacity:op,'stroke-width':w}); }
   function dashed(x1,y1,x2,y2,color,op){ add('line',{x1,y1,x2,y2,stroke:color,opacity:op,'stroke-width':1.5,'stroke-dasharray':'5 5'}); }
@@ -2318,6 +2385,7 @@ def _spectra_html() -> str:
     .toggles input { width: auto; }
     #targetList { height: calc(100vh - 300px); min-height: 380px; }
     #plot { width: 100%; height: 680px; background: rgba(5,11,20,.92); border: 1px solid #1d5f7a; border-radius: 6px; box-shadow: 0 0 28px rgba(56,189,248,.12), inset 0 0 24px rgba(244,114,182,.035); }
+    #injectionPlot { width: 100%; height: 220px; background: rgba(5,11,20,.92); border: 1px solid #1d5f7a; border-radius: 6px; box-shadow: 0 0 24px rgba(244,114,182,.1), inset 0 0 24px rgba(56,189,248,.03); }
     .summary { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 8px; margin-bottom: 10px; }
     .tile { border: 1px solid var(--line); background: rgba(9,21,39,.95); padding: 8px; border-radius: 4px; box-shadow: inset 0 0 14px rgba(56,189,248,.035); }
     .tile .k { color: var(--muted); font-size: 11px; text-transform: uppercase; }
@@ -2325,6 +2393,8 @@ def _spectra_html() -> str:
     table { width: 100%; border-collapse: collapse; font-size: 12px; }
     th, td { border-bottom: 1px solid var(--line); padding: 5px; text-align: left; }
     th { color: #7dd3fc; font-weight: 600; }
+    .flag-table { margin-top: 12px; }
+    .flag-chip { display:inline-block; margin:1px 4px 1px 0; padding:1px 5px; border:1px solid rgba(249,115,22,.55); color:#fed7aa; background:rgba(249,115,22,.12); border-radius:3px; }
     .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; color: #bdd7f4; }
     .small { color: var(--muted); font-size: 12px; }
   </style>
@@ -2377,7 +2447,12 @@ def _spectra_html() -> str:
       <svg id="plot" viewBox="0 0 1100 680"></svg>
       <div class="small">Aperture/SAPM is the reference path. PSF is still experimental. Fatal-flagged points are dimmed orange.</div>
     </section>
+    <section id="injectionPanel" style="display:none; margin-top:12px">
+      <div class="small" style="margin-bottom:6px">Synthetic injected flux only, not added to the measured spectrum.</div>
+      <svg id="injectionPlot" viewBox="0 0 1100 220"></svg>
+    </section>
     <section style="margin-top:12px">
+      <div id="flagTable"></div>
       <div id="pointTable"></div>
     </section>
   </div>
@@ -2390,7 +2465,33 @@ let targetLimit = 200;
 let targetFetchTimer = null;
 let current = null;
 let currentRows = [];
+let currentInjections = [];
 let activeRun = new URLSearchParams(window.location.search).get('run') || '';
+const FLAG_DEFS = {
+  0: ['TRANSIENT', 'Transient, e.g. cosmic ray hit during SUR; can also mark charge spillover/bloom from bright nearby sources.'],
+  1: ['OVERFLOW', 'SUR overflow threshold reached, about half full-well saturation.'],
+  2: ['SUR_ERROR', 'SUR/instrument processing checksum/statistics inconsistency; with TRANSIENT or OVERFLOW indicates early transient/overflow.'],
+  4: ['PHANTOM', 'Header-defined SPHEREx image flag from FLAGS MP_PHANTOM.'],
+  5: ['REFERENCE', 'Header-defined SPHEREx image flag from FLAGS MP_REFERENCE.'],
+  6: ['NONFUNC', 'Static nonfunctional/dead pixel, unusable for any purpose.'],
+  7: ['DICHROIC', 'Dichroic-edge/dark-corner pixel with low or incompatible throughput; not useful for photometry.'],
+  9: ['MISSING_DATA', 'Onboard data missing/corrupted before ingest; no data available for this pixel in this image.'],
+  10: ['HOT', 'Hot/noisy pixel or spurious signal; not usable for science.'],
+  11: ['COLD', 'Anomalously low-response pixel in this exposure; not usable for science.'],
+  12: ['FULLSAMPLE', 'Full sample-history readout region; informational, not usable for science.'],
+  14: ['PHANMISS', 'Pixel could not be corrected because phantom pixels are missing.'],
+  15: ['NONLINEAR', 'Reliable nonlinearity correction could not be determined; exclude from most science analyses.'],
+  17: ['PERSIST', 'Pixel affected by persistence above the Level 2 threshold.'],
+  19: ['OUTLIER', 'Flagged by the Level 2 outlier-pixel detection module.'],
+  21: ['SOURCE', 'Pixel mapped to a known source by the SPHEREx source mask.'],
+  22: ['GHOST', 'Optical ghost from a bright source inside the exposure frame.'],
+  23: ['GHOST_FPA', 'Header-defined ghost flag from FLAGS MP_GHOST_FPA.'],
+  24: ['GHOST_EXT', 'Optical ghost from a bright source outside the field of view.'],
+  26: ['BLOOM', 'Source blooming affected pixel.'],
+  27: ['SNOWBALL', 'Snowball event releasing a large quantity of detector charge.'],
+  28: ['HALO', 'Transient halo; not recommended for science analysis.'],
+  29: ['SATELLITE_HALO', 'Satellite-streak halo; not recommended for science analysis.']
+};
 
 function runQS(extra) {
   const p = new URLSearchParams(extra || '');
@@ -2475,8 +2576,10 @@ async function selectTarget(targetId) {
   document.getElementById('targetList').value = targetId;
   const data = await getJSON('/api/spectrum/' + encodeURIComponent(targetId) + runQS());
   currentRows = data.rows || [];
+  currentInjections = data.target_injections || [];
   renderSummary();
   redraw();
+  renderFlagTable();
   renderTable();
 }
 
@@ -2496,13 +2599,15 @@ function renderSummary() {
 }
 
 function redraw() {
-  drawPlot(currentRows || []);
+  drawPlot(currentRows || [], currentInjections || []);
+  drawInjectionPanel(currentRows || [], currentInjections || []);
 }
 
-function drawPlot(rows) {
+function drawPlot(rows, injections) {
   const svg = document.getElementById('plot');
   svg.innerHTML = '';
-  const W = 1100, H = 680, m = {l:78,r:30,t:28,b:58};
+  const W = 1100, H = 680;
+  const m = {l:100,r:30,t:28,b:58};
   const showAp = document.getElementById('showAperture').checked;
   const showPsf = document.getElementById('showPsf').checked;
   const ap = showAp ? rows.filter(r => Number.isFinite(num(r.cwave_um)) && Number.isFinite(num(r.aperture_flux_uJy))) : [];
@@ -2534,11 +2639,11 @@ function drawPlot(rows) {
     const lineRows = document.getElementById('ignoreFlaggedLine').checked ? sorted.filter(r => !r.fatal_flag_present) : sorted;
     const curveMode = document.getElementById('curveMode').value;
     if (curveMode === 'median') {
-      const smooth = runningMedianRows(lineRows, 9);
-      if (smooth.length > 1) add('polyline',{points:smooth.map(r => `${x(r.cwave_um)},${y(r.flux)}`).join(' '),fill:'none',stroke:'#e5eefb','stroke-width':1.45,opacity:.72});
+      const smooth = runningMedianRows(lineRows, 9, 'aperture_flux_uJy');
+      if (smooth.length > 1) add('polyline',{points:smooth.map(r => `${x(r.cwave_um)},${y(r.flux)}`).join(' '),fill:'none',stroke:'#5eead4','stroke-width':1.45,opacity:.74});
     } else if (curveMode === 'spline') {
-      const curve = medianBinnedRows(lineRows, 72);
-      if (curve.length > 1) add('path',{d:monotonePath(curve, x, y),fill:'none',stroke:'#e5eefb','stroke-width':1.7,opacity:.78});
+      const curve = medianBinnedRows(lineRows, 72, 'aperture_flux_uJy');
+      if (curve.length > 1) add('path',{d:monotonePath(curve, x, y),fill:'none',stroke:'#5eead4','stroke-width':1.7,opacity:.8});
     }
     for (const r of sorted) point(
       x(num(r.cwave_um)),
@@ -2550,8 +2655,19 @@ function drawPlot(rows) {
     );
   }
   if (psf.length) {
-    for (const r of psf) diamond(x(num(r.cwave_um)), y(num(r.psf_flux_uJy)), r.fatal_flag_present ? '#f97316' : '#c084fc', r.fatal_flag_present ? .3 : .75, pointTitle(r, 'psf_flux_uJy'));
+    const sorted = [...psf].sort((a,b)=>num(a.cwave_um)-num(b.cwave_um));
+    const lineRows = document.getElementById('ignoreFlaggedLine').checked ? sorted.filter(r => !r.fatal_flag_present) : sorted;
+    const curveMode = document.getElementById('curveMode').value;
+    if (curveMode === 'median') {
+      const smooth = runningMedianRows(lineRows, 9, 'psf_flux_uJy');
+      if (smooth.length > 1) add('polyline',{points:smooth.map(r => `${x(r.cwave_um)},${y(r.flux)}`).join(' '),fill:'none',stroke:'#c084fc','stroke-width':1.45,opacity:.82});
+    } else if (curveMode === 'spline') {
+      const curve = medianBinnedRows(lineRows, 72, 'psf_flux_uJy');
+      if (curve.length > 1) add('path',{d:monotonePath(curve, x, y),fill:'none',stroke:'#c084fc','stroke-width':1.7,opacity:.84});
+    }
+    for (const r of sorted) diamond(x(num(r.cwave_um)), y(num(r.psf_flux_uJy)), r.fatal_flag_present ? '#f97316' : '#c084fc', r.fatal_flag_present ? .3 : .75, pointTitle(r, 'psf_flux_uJy'));
   }
+  drawInjectionLines();
   add('text',{x:m.l,y:18,fill:'#e5eefb'},`${current || ''}  aperture=${ap.length} psf=${psf.length}`);
   legend();
 
@@ -2562,17 +2678,34 @@ function drawPlot(rows) {
     }
     for (let i=0; i<5; i++) {
       const yy = m.t + i*(H-m.t-m.b)/4;
+      const val = ymin + (ymax-ymin)*(1-i/4);
       add('line',{x1:m.l,y1:yy,x2:W-m.r,y2:yy,stroke:'#24364f',opacity:.55});
+      add('text',{x:m.l-9,y:yy+4,fill:'#93a4bb','text-anchor':'end'},fmt(val));
     }
     add('line',{x1:m.l,y1:H-m.b,x2:W-m.r,y2:H-m.b,stroke:'#93a4bb'});
     add('line',{x1:m.l,y1:m.t,x2:m.l,y2:H-m.b,stroke:'#93a4bb'});
     add('text',{x:W/2,y:H-8,fill:'#93a4bb','text-anchor':'middle'},'wavelength (um)');
-    add('text',{x:18,y:H/2,fill:'#93a4bb',transform:`rotate(-90 18 ${H/2})`,'text-anchor':'middle'},'flux (uJy)');
+    add('text',{x:13,y:(m.t+m.b)/2,fill:'#93a4bb',transform:`rotate(-90 13 ${(m.t+m.b)/2})`,'text-anchor':'middle'},'measured flux (uJy)');
   }
   function legend() {
-    point(W-230, 22, '#22c55e', .9, 3.2); add('text',{x:W-218,y:26,fill:'#e5eefb'},'aperture');
-    diamond(W-135, 22, '#c084fc', .8); add('text',{x:W-122,y:26,fill:'#e5eefb'},'PSF');
-    point(W-70, 22, '#f97316', .45, 3.2); add('text',{x:W-58,y:26,fill:'#e5eefb'},'flag');
+    point(W-292, 22, '#22c55e', .9, 3.2); add('text',{x:W-280,y:26,fill:'#e5eefb'},'aperture uJy');
+    diamond(W-185, 22, '#c084fc', .8); add('text',{x:W-172,y:26,fill:'#e5eefb'},'PSF uJy');
+    point(W-112, 22, '#f97316', .45, 3.2); add('text',{x:W-100,y:26,fill:'#e5eefb'},'flag');
+    if (injections && injections.length) {
+      add('line',{x1:W-292,y1:44,x2:W-268,y2:44,stroke:'#ff4fd8','stroke-width':2,opacity:.9});
+      add('text',{x:W-260,y:48,fill:'#e5eefb'},'injected wavelength');
+    }
+  }
+  function drawInjectionLines() {
+    for (const sig of injections || []) {
+      const lineNm = num(sig.injected_line_nm || sig.nominal_line_nm);
+      const lineUm = lineNm / 1000;
+      if (!Number.isFinite(lineUm)) continue;
+      const xx = x(lineUm);
+      if (!Number.isFinite(xx)) continue;
+      add('line',{x1:xx,y1:m.t,x2:xx,y2:H-m.b,stroke:'#ff4fd8','stroke-width':2,opacity:.78});
+      add('text',{x:xx+5,y:m.t+18,fill:'#ff9dea'},`${fmt(lineNm)} nm ${fmt(sig.find_me_snr)} sigma`);
+    }
   }
   function point(cx, cy, color, opacity, r, title) {
     if (!Number.isFinite(cx) || !Number.isFinite(cy)) return;
@@ -2596,9 +2729,90 @@ function drawPlot(rows) {
   }
 }
 
+function drawInjectionPanel(rows, injections) {
+  const panel = document.getElementById('injectionPanel');
+  const svg = document.getElementById('injectionPlot');
+  if (!panel || !svg) return;
+  svg.innerHTML = '';
+  if (!injections || !injections.length) {
+    panel.style.display = 'none';
+    return;
+  }
+  panel.style.display = '';
+  const W = 1100, H = 220, m = {l:100,r:30,t:28,b:42};
+  const xmin = 0.7, xmax = 5.05;
+  const clean = rows.map(r => ({x:num(r.cwave_um), cband:num(r.cband_um)})).filter(r => Number.isFinite(r.x));
+  const series = injections.map((sig, idx) => {
+    const lineNm = num(sig.injected_line_nm || sig.nominal_line_nm);
+    const lineUm = lineNm / 1000;
+    const widthUm = Math.max(1e-6, num(sig.line_width_nm || 0.1) / 1000);
+    const flux = num(sig.line_flux_uJy);
+    const color = idx % 3 === 0 ? '#ff4fd8' : (idx % 3 === 1 ? '#36e7ff' : '#facc15');
+    const pts = clean.map(p => ({x:p.x, y:flux * responseAt(p.x, p.cband, lineUm, widthUm)}))
+      .filter(p => Number.isFinite(p.x) && Number.isFinite(p.y) && p.x >= xmin && p.x <= xmax);
+    return {sig,lineNm,lineUm,color,pts};
+  }).filter(s => s.pts.length);
+  if (!series.length) {
+    add('text',{x:W/2,y:H/2,fill:'#93a4bb','text-anchor':'middle'},'No wavelength samples overlap injected lines');
+    return;
+  }
+  const maxY = Math.max(1, ...series.flatMap(s => s.pts.map(p => p.y)).filter(Number.isFinite));
+  const x = v => m.l + (v-xmin)/(xmax-xmin)*(W-m.l-m.r);
+  const y = v => H-m.b - (v/Math.max(maxY,1))*(H-m.t-m.b);
+  for (let v=1; v<=5; v++) {
+    add('line',{x1:x(v),y1:m.t,x2:x(v),y2:H-m.b,stroke:'#24364f',opacity:.45});
+    add('text',{x:x(v),y:H-14,fill:'#93a4bb','text-anchor':'middle'},String(v));
+  }
+  for (let i=0; i<4; i++) {
+    const val = maxY*(1-i/3);
+    const yy = m.t+i*(H-m.t-m.b)/3;
+    add('line',{x1:m.l,y1:yy,x2:W-m.r,y2:yy,stroke:'#24364f',opacity:.45});
+    add('text',{x:m.l-9,y:yy+4,fill:'#93a4bb','text-anchor':'end'},fmt(val));
+  }
+  add('line',{x1:m.l,y1:H-m.b,x2:W-m.r,y2:H-m.b,stroke:'#93a4bb'});
+  add('line',{x1:m.l,y1:m.t,x2:m.l,y2:H-m.b,stroke:'#93a4bb'});
+  for (const s of series) {
+    if (s.pts.length > 1) add('path',{d:pathFrom(s.pts,x,y),fill:'none',stroke:s.color,'stroke-width':1.9,opacity:.88});
+    const xx = x(s.lineUm);
+    if (Number.isFinite(xx)) {
+      add('line',{x1:xx,y1:m.t,x2:xx,y2:H-m.b,stroke:s.color,'stroke-width':1.2,opacity:.62});
+      add('text',{x:xx+5,y:m.t+16,fill:s.color},`${fmt(s.lineNm)} nm`);
+    }
+  }
+  add('text',{x:m.l,y:18,fill:'#e5eefb'},`${injections.length} injected signal${injections.length === 1 ? '' : 's'} on ${current || ''}`);
+  add('text',{x:W/2,y:H-2,fill:'#93a4bb','text-anchor':'middle'},'wavelength (um)');
+  add('text',{x:13,y:(m.t+H-m.b)/2,fill:'#93a4bb',transform:`rotate(-90 13 ${(m.t+H-m.b)/2})`,'text-anchor':'middle'},'synthetic flux (uJy)');
+
+  function responseAt(cwaveUm, cbandUm, lineUm, lineWidthUm) {
+    if (!Number.isFinite(cwaveUm) || !Number.isFinite(lineUm)) return NaN;
+    const band = Number.isFinite(cbandUm) && cbandUm > 0 ? cbandUm : 0.04;
+    const sigma = Math.sqrt(band*band + lineWidthUm*lineWidthUm) / 2.355;
+    return Math.exp(-0.5 * Math.pow((cwaveUm-lineUm)/Math.max(sigma,1e-9), 2));
+  }
+  function add(name, attrs, text) {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', name);
+    for (const [k,v] of Object.entries(attrs)) el.setAttribute(k,v);
+    if (text !== undefined && name === 'text') el.textContent = text;
+    svg.appendChild(el);
+  }
+}
+
 function renderTable() {
-  const cols = ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','fatal_flag_present','detector','phot_g_mean_mag','bp_rp','pmra_masyr','pmdec_masyr','coordinate_propagation','observation_id','image_id','fits_file','input_file_path'];
+  const cols = ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','psf_flux_uJy','psf_flux_unc_uJy','psf_fit_status','fatal_flag_present','flags_summary','flag_names','detector','phot_g_mean_mag','bp_rp','pmra_masyr','pmdec_masyr','coordinate_propagation','observation_id','image_id','fits_file','input_file_path'];
   document.getElementById('pointTable').innerHTML = makeTable([...currentRows].sort((a,b)=>num(a.cwave_um)-num(b.cwave_um)).slice(0, 260), cols);
+}
+
+function renderFlagTable() {
+  const rows = [...(currentRows || [])].filter(r => decodeFlags(r.flags_summary).length || r.fatal_flag_present);
+  const el = document.getElementById('flagTable');
+  if (!el) return;
+  if (!rows.length) {
+    el.innerHTML = '<div class="small flag-table">No flagged spectrum points for this target.</div>';
+    return;
+  }
+  const cols = ['cwave_um','aperture_flux_uJy','psf_flux_uJy','flags_summary','flag_names','flag_explanations','image_id','fits_file'];
+  const sorted = rows.sort((a,b)=>num(a.cwave_um)-num(b.cwave_um)).slice(0, 260);
+  el.innerHTML = `<div class="flag-table"><div class="small" style="margin-bottom:6px">Flagged points decoded from FLAGS bitmask, SPHEREx Explanatory Supplement Table 16 / FITS MP_* headers.</div>${makeTable(sorted, cols)}</div>`;
 }
 
 function pointTitle(r, fluxCol) {
@@ -2610,6 +2824,7 @@ function pointTitle(r, fluxCol) {
     `obs: ${r.observation_id || ''}`,
     `image: ${r.image_id || ''}`,
     `fits: ${r.fits_file || fileName(r.input_file_path) || ''}`,
+    `flags: ${flagNames(r.flags_summary) || (r.fatal_flag_present ? 'fatal flag present' : 'none')}`,
     `path: ${r.input_file_path || ''}`
   ].join('\\n');
 }
@@ -2630,6 +2845,8 @@ function cellHTML(row, col) {
     const href = framePointHref(row);
     return `<a href="${href}" target="_blank" rel="noopener" style="color:#7dd3fc">${escapeHtml(fmt(row[col]))}</a>`;
   }
+  if (col === 'flag_names') return flagNamesHTML(row);
+  if (col === 'flag_explanations') return escapeHtml(flagExplanations(row));
   return escapeHtml(fmt(row[col]));
 }
 
@@ -2647,15 +2864,15 @@ function framePointHref(row) {
   return '/frame-point?' + p.toString();
 }
 
-function runningMedianRows(rows, width) {
+function runningMedianRows(rows, width, fluxCol='aperture_flux_uJy') {
   const half = Math.max(1, Math.floor(width/2));
   return rows.map((r, i) => {
-    const vals = rows.slice(Math.max(0, i-half), Math.min(rows.length, i+half+1)).map(x => num(x.aperture_flux_uJy)).filter(Number.isFinite).sort((a,b)=>a-b);
+    const vals = rows.slice(Math.max(0, i-half), Math.min(rows.length, i+half+1)).map(x => num(x[fluxCol])).filter(Number.isFinite).sort((a,b)=>a-b);
     return {cwave_um:num(r.cwave_um), flux:median(vals)};
   });
 }
-function medianBinnedRows(rows, maxBins) {
-  const clean = rows.map(r => ({x:num(r.cwave_um), y:num(r.aperture_flux_uJy)})).filter(r => Number.isFinite(r.x) && Number.isFinite(r.y));
+function medianBinnedRows(rows, maxBins, fluxCol='aperture_flux_uJy') {
+  const clean = rows.map(r => ({x:num(r.cwave_um), y:num(r[fluxCol])})).filter(r => Number.isFinite(r.x) && Number.isFinite(r.y));
   if (clean.length <= 2) return clean.map(r => ({cwave_um:r.x, flux:r.y}));
   const xmin = Math.min(...clean.map(r => r.x));
   const xmax = Math.max(...clean.map(r => r.x));
@@ -2670,6 +2887,9 @@ function medianBinnedRows(rows, maxBins) {
     const ys = b.map(r => r.y).sort((a,b)=>a-b);
     return {cwave_um:median(xs), flux:median(ys)};
   }).sort((a,b)=>a.cwave_um-b.cwave_um);
+}
+function pathFrom(rows, xScale, yScale) {
+  return rows.map((p, i) => (i ? 'L' : 'M') + ' ' + xScale(p.x) + ' ' + yScale(p.y)).join(' ');
 }
 function monotonePath(rows, xScale, yScale) {
   const pts = rows.map(r => ({x:num(r.cwave_um), y:num(r.flux)})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
@@ -2720,6 +2940,39 @@ function flagRate(t) {
   const flags = num(t.flagged_measurements);
   const total = num(t.total_measurements_for_flags || t.n_measurements);
   return Number.isFinite(flags) && Number.isFinite(total) && total > 0 ? flags / total : 0;
+}
+function decodeFlags(value) {
+  const v = Number(value);
+  if (!Number.isFinite(v) || v <= 0) return [];
+  const out = [];
+  for (const [bitText, def] of Object.entries(FLAG_DEFS)) {
+    const bit = Number(bitText);
+    if ((v & Math.pow(2, bit)) !== 0) out.push({bit, name:def[0], description:def[1]});
+  }
+  return out;
+}
+function flagNames(valueOrRow) {
+  const value = typeof valueOrRow === 'object' && valueOrRow !== null ? valueOrRow.flags_summary : valueOrRow;
+  return decodeFlags(value).map(f => `${f.name}[${f.bit}]`).join(', ');
+}
+function flagNamesHTML(row) {
+  const value = typeof row === 'object' && row !== null ? row.flags_summary : row;
+  const flags = decodeFlags(value);
+  if (!flags.length) {
+    if (typeof row === 'object' && row !== null && row.fatal_flag_present) {
+      return '<span class="flag-chip" title="This older output has fatal_flag_present but did not preserve the FLAGS OR bitmask. Re-run or backfill from FITS to decode exact causes.">BITMASK_UNAVAILABLE</span>';
+    }
+    return '';
+  }
+  return flags.map(f => `<span class="flag-chip" title="${escapeHtml(f.description)}">${escapeHtml(f.name)}:${f.bit}</span>`).join('');
+}
+function flagExplanations(row) {
+  const value = typeof row === 'object' && row !== null ? row.flags_summary : row;
+  const decoded = decodeFlags(value);
+  if (!decoded.length && typeof row === 'object' && row !== null && row.fatal_flag_present) {
+    return 'Older output: fatal_flag_present is true, but flags_summary was not preserved. Re-run or backfill this run to decode exact FLAGS bits.';
+  }
+  return decoded.map(f => `${f.name}[${f.bit}]: ${f.description}`).join(' | ');
 }
 function fmt(v) {
   const n = Number(v);
