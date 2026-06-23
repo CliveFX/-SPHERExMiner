@@ -150,6 +150,40 @@ def _done(path: Path) -> bool:
     return path.exists() and path.stat().st_size > 0
 
 
+def _has_zero_measured_parent(run_dir: Path) -> bool:
+    qa = _json(run_dir / "qa.json")
+    return bool(qa) and int(qa.get("trial_count") or 0) > 0 and int(qa.get("measured_count") or 0) == 0
+
+
+def _write_manifest(campaign_root: Path, manifest_rows: list[dict[str, Any]]) -> None:
+    (campaign_root / "campaign_manifest.json").write_text(json.dumps(manifest_rows, indent=2), encoding="utf-8")
+
+
+def _skipped_manifest_row(
+    *,
+    target: dict[str, Any],
+    baseline_run: Path,
+    injected_run: Path,
+    plan_path: Path,
+    manifest_path: Path,
+    recovery_dir: Path,
+    review_path: Path,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "target_id": str(target["target_id"]),
+        "object_name": target.get("object_name"),
+        "status": "skipped",
+        "skip_reason": reason,
+        "baseline_run": str(baseline_run),
+        "injected_run": str(injected_run),
+        "injection_plan": str(plan_path),
+        "injection_manifest": str(manifest_path),
+        "recovery_summary": str(recovery_dir / "recovery_summary.json"),
+        "false_positive_review": str(review_path),
+    }
+
+
 def _false_positive_review(injected_run: Path, output_path: Path, viewer_base_url: str) -> dict[str, Any]:
     recovery_dir = injected_run / "recovery_score_mixed_lasers"
     false_positive_path = recovery_dir / "false_positive_candidates.parquet"
@@ -341,6 +375,24 @@ def main() -> None:
         recovery_dir = injected_run / "recovery_score_mixed_lasers"
         review_path = campaign_root / "false_positive_reviews" / f"{target_id}.json"
         print(f"\n##### target {index}/{len(target_rows)} {target_id} #####", flush=True)
+
+        if not args.force and _has_zero_measured_parent(baseline_run):
+            reason = "baseline has zero measured parent fields"
+            print(f"skipping {target_id}: {reason}", flush=True)
+            manifest_rows.append(
+                _skipped_manifest_row(
+                    target=target,
+                    baseline_run=baseline_run,
+                    injected_run=injected_run,
+                    plan_path=plan_path,
+                    manifest_path=manifest_path,
+                    recovery_dir=recovery_dir,
+                    review_path=review_path,
+                    reason=reason,
+                )
+            )
+            _write_manifest(campaign_root, manifest_rows)
+            continue
 
         if args.force or not _done(baseline_run / "spectra" / "target_spectra.parquet"):
             _run(
@@ -622,7 +674,7 @@ def main() -> None:
                 "review_url": review.get("review_url"),
             }
         )
-        (campaign_root / "campaign_manifest.json").write_text(json.dumps(manifest_rows, indent=2), encoding="utf-8")
+        _write_manifest(campaign_root, manifest_rows)
 
     print(json.dumps({"campaign_root": str(campaign_root), "targets": len(manifest_rows)}, indent=2), flush=True)
 
