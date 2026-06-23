@@ -3008,6 +3008,7 @@ def _blind_candidates_html() -> str:
 <script>
 let activeRun = new URLSearchParams(window.location.search).get('run') || '';
 let rows = [], offset = 0, total = 0, limit = 300, selectedId = null, detail = null, timer = null;
+const initialParams = new URLSearchParams(window.location.search);
 async function getJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); return await r.json(); }
 function runQS(extra){ const p=new URLSearchParams(extra||''); if(activeRun) p.set('run', activeRun); const s=p.toString(); return s?'?'+s:''; }
 async function refreshAll(){
@@ -3063,13 +3064,13 @@ function drawPlot(rows,cand){
   line(m.l,H-m.b,W-m.r,H-m.b,'#90a4b8',1); line(m.l,m.t,m.l,H-m.b,'#90a4b8',1);
   for(const kind of ['ap','psf']){
     const color = kind==='psf' ? '#c084fc' : '#22c55e';
-    const rows = pts.filter(p=>p.k===kind && !p.flag).sort((a,b)=>a.x-b.x);
+    const rows = medianBins(pts.filter(p=>p.k===kind && !p.flag), 72);
     let d = '';
     for(const p of rows){
       const xx=xs(p.x), yy=yscl(p.y);
       d += d ? ` L ${xx} ${yy}` : `M ${xx} ${yy}`;
     }
-    if(d) path(d,color,.72,1.6);
+    if(d) path(d,color,.82,1.8);
   }
   for(const p of pts){ const color=p.flag?'#fb7185':(p.k==='psf'?'#c084fc':'#22c55e'); circle(xs(p.x),yscl(p.y),p.k==='psf'?3.2:2.8,color,p.flag ? .35 : .8); }
   const c=num(cand.peak_line_nm)/1000, lo=num(cand.line_min_nm)/1000, hi=num(cand.line_max_nm)/1000;
@@ -3082,6 +3083,27 @@ function drawPlot(rows,cand){
   function circle(cx,cy,r,c,o){ if(Number.isFinite(cx)&&Number.isFinite(cy)) add('circle',{cx,cy,r,fill:c,opacity:o}); }
   function path(d,c,o,w){ add('path',{d,fill:'none',stroke:c,opacity:o,'stroke-width':w,'vector-effect':'non-scaling-stroke'}); }
   function text(x,y,s,c,a){ const el=add('text',{x,y,fill:c,'text-anchor':a}); el.textContent=s; }
+}
+function medianBins(points, nBins){
+  const good = points.filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);
+  if(!good.length) return [];
+  const xmin = good[0].x, xmax = good[good.length-1].x, width = (xmax-xmin || 1) / Math.max(1,nBins);
+  const bins = new Map();
+  for(const p of good){
+    const b = Math.max(0, Math.min(nBins-1, Math.floor((p.x-xmin)/width)));
+    if(!bins.has(b)) bins.set(b, []);
+    bins.get(b).push(p);
+  }
+  return [...bins.values()].map(bin => {
+    const xs = bin.map(p=>p.x).sort((a,b)=>a-b);
+    const ys = bin.map(p=>p.y).sort((a,b)=>a-b);
+    return {x: median(xs), y: median(ys)};
+  }).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y));
+}
+function median(values){
+  if(!values.length) return NaN;
+  const mid = Math.floor(values.length/2);
+  return values.length % 2 ? values[mid] : (values[mid-1] + values[mid]) / 2;
 }
 function drawLinePlot(scores,cand){
   const svg=document.getElementById('linePlot'); svg.innerHTML=''; const W=1100,H=320,m={l:92,r:28,t:26,b:46};
@@ -3110,7 +3132,7 @@ function drawLinePlot(scores,cand){
     const rows=s.rows.map(r=>({x:num(r.candidate_line_nm)/1000,y:num(r.matched_snr),support:num(r.n_supporting_points),flags:num(r.n_flagged_nearby)})).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);
     let d='';
     for(const p of rows){ const xx=xs(p.x), yy=ys(p.y); d += d ? ` L ${xx} ${yy}` : `M ${xx} ${yy}`; }
-    if(d) path(d,s.color,.95,2.4);
+    if(d) path(d,s.color,.9,1.7);
     for(const p of rows){ circle(xs(p.x),ys(p.y),p.flags>0?2.7:2.1,s.color,p.support>=2?.75:.35); }
   }
   if(Number.isFinite(peak)){ line(xs(peak),m.t,xs(peak),H-m.b,'#ff4fd8',.95,2); text(xs(peak)+5,m.t+16,fmt(cand.peak_line_nm)+' nm','#ff9dea','start'); }
@@ -3132,6 +3154,16 @@ function q(a,p){ if(!a.length) return 0; const i=Math.max(0,Math.min(a.length-1,
 function fmt(v){ if(v===null||v===undefined||v==='') return ''; const n=Number(v); return Number.isFinite(n)?(Math.abs(n)>=100?n.toFixed(1):n.toFixed(3)).replace(/\\.0+$/,''):String(v); }
 function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function attr(s){ return esc(s).replace(/`/g,'&#96;'); }
+function applyInitialFilters(){
+  for(const id of ['tier','sort','scope','limit']){
+    const value = initialParams.get(id);
+    const el = document.getElementById(id);
+    if(value && el && [...el.options].some(o=>o.value===value || o.text===value)) el.value = value;
+  }
+  const q = initialParams.get('q');
+  if(q) document.getElementById('query').value = q;
+}
+applyInitialFilters();
 refreshAll();
 </script>
 </body>
