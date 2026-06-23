@@ -10,11 +10,37 @@ import numpy as np
 import pandas as pd
 
 
+JOINT_COLUMNS = [
+    "joint_candidate_id",
+    "target_id",
+    "peak_line_nm",
+    "line_min_nm",
+    "line_max_nm",
+    "cluster_width_nm",
+    "has_aperture",
+    "has_psf",
+    "aperture_peak_snr",
+    "psf_peak_snr",
+    "aperture_peak_flux_uJy",
+    "psf_peak_flux_uJy",
+    "aperture_support",
+    "psf_support",
+    "flux_ratio_psf_aperture",
+    "detectors",
+    "best_frame_ids",
+    "flagged_points_sum",
+    "aperture_cluster_id",
+    "psf_cluster_id",
+    "tier",
+    "rank_score",
+]
+
+
 def _read_clusters(path: Path, flux_kind: str) -> pd.DataFrame:
     if not path.exists():
         return pd.DataFrame()
     df = pd.read_parquet(path)
-    if df.empty:
+    if df.empty or "peak_snr" not in df.columns:
         return df
     df = df.copy()
     df["flux_kind"] = flux_kind
@@ -151,6 +177,10 @@ def build_joint(aperture: pd.DataFrame, psf: pd.DataFrame, tolerance_nm: float) 
     rows: list[dict[str, Any]] = []
     used_psf: set[int] = set()
     index = 0
+    if aperture.empty or "peak_snr" not in aperture.columns:
+        aperture = pd.DataFrame(columns=["peak_snr"])
+    if psf.empty or "peak_snr" not in psf.columns:
+        psf = pd.DataFrame(columns=["peak_snr"])
     for _, ap_row in aperture.sort_values("peak_snr", ascending=False, na_position="last").iterrows():
         matches = _nearby_rows(ap_row, psf, tolerance_nm)
         matches = matches[~matches.index.isin(used_psf)]
@@ -165,7 +195,7 @@ def build_joint(aperture: pd.DataFrame, psf: pd.DataFrame, tolerance_nm: float) 
         rows.append(_merge_pair(None, psf_row, index))
         index += 1
     if not rows:
-        return pd.DataFrame()
+        return pd.DataFrame(columns=JOINT_COLUMNS)
     return pd.DataFrame(rows).sort_values(["tier", "rank_score"], ascending=[True, False], na_position="last")
 
 
