@@ -1,0 +1,261 @@
+targets:
+  - target_id: cvj_regulus
+    target_type: sky_anchor
+    object_name: "Regulus / Alpha Leonis"
+    ra_deg: 152.092963
+    dec_deg: 11.967209
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_regulus
+    priority_score: 100.0
+    notes: "Castro Valley June evening western anchor; survey stars come from Gaia magnitude cuts."
+  - target_id: cvj_denebola
+    target_type: sky_anchor
+    object_name: "Denebola / Beta Leonis"
+    ra_deg: 177.264910
+    dec_deg: 14.572058
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_denebola
+    priority_score: 100.0
+    notes: "Castro Valley June western anchor."
+  - target_id: cvj_porrima
+    target_type: sky_anchor
+    object_name: "Porrima / Gamma Virginis"
+    ra_deg: 190.415181
+    dec_deg: -1.449373
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_porrima
+    priority_score: 100.0
+    notes: "Castro Valley June anchor."
+  - target_id: cvj_spica
+    target_type: sky_anchor
+    object_name: "Spica / Alpha Virginis"
+    ra_deg: 201.298247
+    dec_deg: -11.161322
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_spica
+    priority_score: 100.0
+    notes: "Castro Valley June southern anchor."
+  - target_id: cvj_arcturus
+    target_type: sky_anchor
+    object_name: "Arcturus / Alpha Bootis"
+    ra_deg: 213.915300
+    dec_deg: 19.182409
+    reference_epoch_yr: 2000.0
+    pmra_masyr: -1093.39
+    pmdec_masyr: -1999.85
+    parallax_mas: 88.83
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_arcturus
+    priority_score: 100.0
+    notes: "Validated Castro Valley June anchor; use nearby Gaia stars, not the saturated star."
+  - target_id: cvj_izar
+    target_type: sky_anchor
+    object_name: "Izar / Epsilon Bootis"
+    ra_deg: 221.246878
+    dec_deg: 27.074222
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_izar
+    priority_score: 100.0
+    notes: "Castro Valley June Bootes anchor."
+  - target_id: cvj_alphecca
+    target_type: sky_anchor
+    object_name: "Alphecca / Alpha Coronae Borealis"
+    ra_deg: 233.671613
+    dec_deg: 26.714693
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_alphecca
+    priority_score: 100.0
+    notes: "Castro Valley June anchor."
+  - target_id: cvj_unukalhai
+    target_type: sky_anchor
+    object_name: "Unukalhai / Alpha Serpentis"
+    ra_deg: 236.066978
+    dec_deg: 6.425627
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_unukalhai
+    priority_score: 100.0
+    notes: "Castro Valley June equatorial anchor."
+  - target_id: cvj_antarest
+    target_type: sky_anchor
+    object_name: "Antares / Alpha Scorpii"
+    ra_deg: 247.351915
+    dec_deg: -26.432002
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_antares
+    priority_score: 100.0
+    notes: "Low southern June anchor from Castro Valley; nearby Gaia stars may be crowded/extincted."
+  - target_id: cvj_rasalhague
+    target_type: sky_anchor
+    object_name: "Rasalhague / Alpha Ophiuchi"
+    ra_deg: 263.733627
+    dec_deg: 12.560035
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_rasalhague
+    priority_score: 100.0
+    notes: "Castro Valley June eastern anchor."
+  - target_id: cvj_vega
+    target_type: sky_anchor
+    object_name: "Vega / Alpha Lyrae"
+    ra_deg: 279.234735
+    dec_deg: 38.783689
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_vega
+    priority_score: 100.0
+    notes: "High northern summer anchor."
+  - target_id: cvj_sheltan
+    target_type: sky_anchor
+    object_name: "Sheliak / Beta Lyrae"
+    ra_deg: 282.519974
+    dec_deg: 33.362667
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_sheliak
+    priority_score: 100.0
+    notes: "Lyra anchor near Vega."
+  - target_id: cvj_altair
+    target_type: sky_anchor
+    object_name: "Altair / Alpha Aquilae"
+    ra_deg: 297.695827
+    dec_deg: 8.868322
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_altair
+    priority_score: 100.0
+    notes: "Summer triangle equatorial anchor."
+  - target_id: cvj_tarazed
+    target_type: sky_anchor
+    object_name: "Tarazed / Gamma Aquilae"
+    ra_deg: 296.564875
+    dec_deg: 10.613268
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_tarazed
+    priority_score: 100.0
+    notes: "Aquila anchor near Altair."
+  - target_id: cvj_deneb
+    target_type: sky_anchor
+    object_name: "Deneb / Alpha Cygni"
+    ra_deg: 310.357979
+    dec_deg: 45.280338
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_deneb
+    priority_score: 100.0
+    notes: "High northern summer triangle anchor."
+  - target_id: cvj_sadr
+    target_type: sky_anchor
+    object_name: "Sadr / Gamma Cygni"
+    ra_deg: 305.557091
+    dec_deg: 40.256679
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_sadr
+    priority_score: 100.0
+    notes: "Cygnus anchor; crowded Milky Way field."
+  - target_id: cvj_enif
+    target_type: sky_anchor
+    object_name: "Enif / Epsilon Pegasi"
+    ra_deg: 326.046484
+    dec_deg: 9.875009
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_enif
+    priority_score: 100.0
+    notes: "Late-night June eastern anchor."
+  - target_id: cvj_scheat
+    target_type: sky_anchor
+    object_name: "Scheat / Beta Pegasi"
+    ra_deg: 345.943572
+    dec_deg: 28.082789
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_scheat
+    priority_score: 100.0
+    notes: "Late-night June Pegasus anchor."
+  - target_id: cvj_markab
+    target_type: sky_anchor
+    object_name: "Markab / Alpha Pegasi"
+    ra_deg: 346.190070
+    dec_deg: 15.205267
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_markab
+    priority_score: 100.0
+    notes: "Late-night June Pegasus anchor."
+  - target_id: cvj_fomalhaut
+    target_type: sky_anchor
+    object_name: "Fomalhaut / Alpha Piscis Austrini"
+    ra_deg: 344.412693
+    dec_deg: -29.622237
+    reference_epoch_yr: 2000.0
+    pmra_masyr:
+    pmdec_masyr:
+    parallax_mas:
+    source_catalog: manual_anchor
+    source_catalog_id: cvj_fomalhaut
+    priority_score: 100.0
+    notes: "Low late-night southern anchor; useful edge case for Castro Valley visibility."

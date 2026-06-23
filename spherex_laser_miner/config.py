@@ -46,7 +46,7 @@ class MinerConfig(BaseModel):
 
     @property
     def manual_targets_path(self) -> Path:
-        return Path("configs/manual_targets.yaml")
+        return Path(os.getenv("SPHEREX_MANUAL_TARGETS_PATH", "configs/manual_targets.yaml"))
 
     @property
     def smoke_run_dir(self) -> Path:
