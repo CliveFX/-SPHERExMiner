@@ -277,13 +277,14 @@ def _false_positive_rows(path: Path, run_name: str, campaign: str, target: str, 
     for row in df.head(limit).to_dict(orient="records"):
         target_id = str(row.get("target_id") or "")
         spectra_url = f"/spectra?run={urllib.parse.quote(run_name)}&target={urllib.parse.quote(target_id)}"
+        review_url = f"/injections?run={urllib.parse.quote(run_name)}&status=false_positive&q={urllib.parse.quote(target_id)}"
         out = dict(row)
         out.update(
             {
                 "run_name": run_name,
                 "campaign": campaign,
                 "target": target,
-                "review_url": spectra_url,
+                "review_url": review_url,
                 "injections_url": f"/injections?run={urllib.parse.quote(run_name)}&status=candidate&q={urllib.parse.quote(target_id)}",
                 "spectra_url": spectra_url,
             }
