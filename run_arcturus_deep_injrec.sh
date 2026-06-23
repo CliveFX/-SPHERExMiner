@@ -8,10 +8,11 @@ CACHE_ROOT="${CACHE_ROOT:-/mnt/niroseti/spherex_cache}"
 LOG_ROOT="${LOG_ROOT:-$CACHE_ROOT/logs}"
 mkdir -p "$LOG_ROOT"
 
-BASE_RUN="${BASE_RUN:-arcturus_deep20k_f500_baseline_gpu}"
-CAMPAIGN_ID="${CAMPAIGN_ID:-arcturus_deep20k_mixed_lasers}"
+TARGET_ID="${TARGET_ID:-arcturus_anchor_gaia_1246275131342423168}"
+BASE_RUN="${BASE_RUN:-arcturus_gaia_anchor_deep20k_f500_baseline_gpu}"
+CAMPAIGN_ID="${CAMPAIGN_ID:-arcturus_gaia_anchor_deep20k_mixed_lasers}"
 INJECT_STRENGTH="${INJECT_STRENGTH:-5}"
-INJECTED_RUN="${INJECTED_RUN:-arcturus_deep20k_f500_injected_s${INJECT_STRENGTH}_gpu}"
+INJECTED_RUN="${INJECTED_RUN:-arcturus_gaia_anchor_deep20k_f500_injected_s${INJECT_STRENGTH}_gpu}"
 CAMPAIGN_ROOT="$CACHE_ROOT/injection_campaigns/${CAMPAIGN_ID}_s${INJECT_STRENGTH}"
 PLAN_PATH="$CACHE_ROOT/injection_campaigns/$CAMPAIGN_ID/injection_plan.json"
 MANIFEST_PATH="$CAMPAIGN_ROOT/injection_manifest.json"
@@ -41,12 +42,12 @@ run_step() {
 }
 
 log "Arcturus deep injection/recovery pipeline"
-log "baseline_run=$BASE_RUN injected_run=$INJECTED_RUN campaign_root=$CAMPAIGN_ROOT"
+log "target=$TARGET_ID baseline_run=$BASE_RUN injected_run=$INJECTED_RUN campaign_root=$CAMPAIGN_ROOT"
 log "fields=$FIELDS targets=$TARGETS workers=$WORKERS gaia_g=$GAIA_G_MIN..$GAIA_G_MAX devices=$WARP_DEVICES"
 log "simple status: http://0.0.0.0:8765/simple-status?run=$BASE_RUN then run=$INJECTED_RUN"
 
 run_step .venv/bin/spherex-mine run-depth-test \
-  --target arcturus \
+  --target "$TARGET_ID" \
   --run-name "$BASE_RUN" \
   --limit-fields "$FIELDS" \
   --max-gaia-sources "$TARGETS" \
@@ -75,7 +76,7 @@ run_step .venv/bin/python tools/run_injection_plan.py \
   --overwrite
 
 run_step .venv/bin/spherex-mine run-depth-test \
-  --target arcturus \
+  --target "$TARGET_ID" \
   --run-name "$INJECTED_RUN" \
   --limit-fields "$FIELDS" \
   --max-gaia-sources "$TARGETS" \

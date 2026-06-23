@@ -38,3 +38,16 @@ targets:
     source_catalog_id: arcturus
     priority_score: 100.0
     notes: "Bright high-proper-motion anchor target for deep Arcturus-region SPHEREx runs."
+  - target_id: arcturus_anchor_gaia_1246275131342423168
+    target_type: gaia_dr3_anchor
+    object_name: "Gaia DR3 1246275131342423168 near Arcturus"
+    ra_deg: 212.93515592163504
+    dec_deg: 20.01325863963189
+    reference_epoch_yr: 2016.0
+    pmra_masyr: -27.13193251011083
+    pmdec_masyr: 20.713748204058344
+    parallax_mas: 3.934032357006565
+    source_catalog: gaia_dr3
+    source_catalog_id: "1246275131342423168"
+    priority_score: 100.0
+    notes: "Empirical Arcturus-region anchor: G=12.809, sep=1.24 deg from Arcturus; 59 clean nonfatal measured trials out of first 96 tested SPHEREx products."
