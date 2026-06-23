@@ -15,6 +15,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tools.wavelength_guard import assert_science_wavelengths  # noqa: E402
+
 
 DEFAULT_RUN_DIR = Path("/mnt/niroseti/spherex_cache/runs/ucs0972_gpu_g14_16_n1000_f500")
 DEFAULT_OUTPUT_ROOT = Path("/mnt/niroseti/spherex_cache/injection_campaigns")
@@ -134,6 +136,11 @@ def main() -> None:
     parser.add_argument("--line-width-nm", type=float, default=1.0)
     parser.add_argument("--min-response", type=float, default=1e-3)
     parser.add_argument("--max-frames-per-injection", type=int)
+    parser.add_argument(
+        "--allow-approx-wavelengths",
+        action="store_true",
+        help="Allow old MEF WCS-WAVE spectra. Not valid for science-grade injection/recovery.",
+    )
     parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
 
@@ -145,6 +152,10 @@ def main() -> None:
     missing = sorted(required - set(df.columns))
     if missing:
         raise SystemExit(f"Missing required spectra columns: {', '.join(missing)}")
+    try:
+        assert_science_wavelengths(df, spectra_path, allow_approx=args.allow_approx_wavelengths)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
     targets = _choose_targets(df, args)
     if targets.empty:

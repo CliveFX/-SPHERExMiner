@@ -64,6 +64,10 @@ def main() -> None:
                         "wcs_cband_p05_um": float(np.nanpercentile(cband_values, 5)),
                         "wcs_cband_p95_um": float(np.nanpercentile(cband_values, 95)),
                         "wcs_r_median": float(np.nanmedian(r_values)),
+                        "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+                        "wavelength_calibration_file": str(wcs_path),
+                        "wavelength_calibration_collection": WCS_COLLECTION,
+                        "wavelength_detector": detector,
                     }
 
             rows.append(
@@ -81,7 +85,8 @@ def main() -> None:
             )
 
     payload = {
-        "source": "SPHEREx QR2 spectral_channels and spectral_wcs calibration products from IRSA IBE",
+        "source": "SPHEREx QR2 spectral_channels plus science-grade spectral_wcs CWAVE/CBAND pixel maps from IRSA IBE",
+        "wavelength_source": "spectral_wcs_CWAVE_CBAND",
         "spectral_channels_collection": CHANNEL_COLLECTION,
         "spectral_wcs_collection": WCS_COLLECTION,
         "channel_count": len(rows),

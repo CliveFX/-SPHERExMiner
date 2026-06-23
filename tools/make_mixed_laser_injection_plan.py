@@ -16,6 +16,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.make_injection_plan import _parse_csv_floats, _parse_line_families, _safe_id
+from tools.wavelength_guard import assert_science_wavelengths
 
 
 DEFAULT_RUN_DIR = Path("/mnt/niroseti/spherex_cache/runs/injrec_baseline_10k_f80_g14_16_gpu3")
@@ -75,6 +76,11 @@ def main() -> None:
     parser.add_argument("--min-response", type=float, default=1e-3)
     parser.add_argument("--max-frames-per-injection", type=int)
     parser.add_argument("--min-measurements", type=int, default=20)
+    parser.add_argument(
+        "--allow-approx-wavelengths",
+        action="store_true",
+        help="Allow old MEF WCS-WAVE spectra. Not valid for science-grade injection/recovery.",
+    )
     parser.add_argument("--seed", type=int, default=20260622)
     args = parser.parse_args()
 
@@ -82,6 +88,10 @@ def main() -> None:
     if not spectra_path.exists():
         raise SystemExit(f"Missing spectra parquet: {spectra_path}")
     df = pd.read_parquet(spectra_path)
+    try:
+        assert_science_wavelengths(df, spectra_path, allow_approx=args.allow_approx_wavelengths)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     if "fatal_flag_present" in df.columns:
         df = df[~df["fatal_flag_present"].fillna(False).astype(bool)].copy()
     df = df.groupby("target_id").filter(lambda group: len(group) >= args.min_measurements)

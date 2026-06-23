@@ -5,13 +5,21 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import astropy.units as u
+import numpy as np
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 
 from spherex_laser_miner.cache import cache_path_for_access_url, sha256_file
-from spherex_laser_miner.calibration import image_to_ujy_per_pixel, load_sapm, variance_to_ujy2
+from spherex_laser_miner.calibration import (
+    SPECTRAL_WCS_COLLECTION,
+    image_to_ujy_per_pixel,
+    load_sapm,
+    load_spectral_wcs_maps,
+    sample_wavelength_maps,
+    variance_to_ujy2,
+)
 from spherex_laser_miner.catalog.manual_targets import ManualTarget
 from spherex_laser_miner.config import MinerConfig
 from spherex_laser_miner.coordinates import edge_distance_pix, propagate_target
@@ -93,6 +101,11 @@ def evaluate_one_candidate(
             zodi = hdul["ZODI"].data if "ZODI" in hdul else None
             detector = int(image_hdu.header.get("DETECTOR", candidate.detector))
             sapm_data, sapm_header, sapm_path = load_sapm(cfg.cache_root, cfg.release, detector)
+            cwave_map, cband_map, _wave_header, wavelength_calibration_path = load_spectral_wcs_maps(
+                cfg.cache_root,
+                cfg.release,
+                detector,
+            )
             flux_ujy = image_to_ujy_per_pixel(image, image_hdu.header, sapm_data, sapm_header)
             var_ujy2 = (
                 variance_to_ujy2(variance, image_hdu.header, sapm_data, sapm_header)
@@ -105,7 +118,14 @@ def evaluate_one_candidate(
             spatial_wcs = WCS(image_hdu.header)
             x_pix, y_pix = spatial_wcs.world_to_pixel(SkyCoord(ra_epoch * u.deg, dec_epoch * u.deg))
             edge_pix = edge_distance_pix(float(x_pix), float(y_pix), image.shape)
-            cwave_um, cband_um = _wavelength_at(hdul, image_hdu.header, float(x_pix), float(y_pix))
+            cwave_arr, cband_arr = sample_wavelength_maps(
+                cwave_map,
+                cband_map,
+                np.asarray([float(x_pix)], dtype=float),
+                np.asarray([float(y_pix)], dtype=float),
+            )
+            cwave_um = _optional_float(cwave_arr[0])
+            cband_um = _optional_float(cband_arr[0])
 
             trial.update(
                 {
@@ -124,7 +144,10 @@ def evaluate_one_candidate(
                     "image_unit": str(image_hdu.header.get("BUNIT", "")),
                     "cwave_um": cwave_um,
                     "cband_um": cband_um,
-                    "wavelength_source": "MEF WCS-WAVE",
+                    "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+                    "wavelength_calibration_file": str(wavelength_calibration_path),
+                    "wavelength_calibration_collection": SPECTRAL_WCS_COLLECTION,
+                    "wavelength_detector": detector,
                     "sapm_file_path": str(sapm_path),
                     "aperture_radius_pix": cfg.aperture_radius_pix,
                     "annulus_inner_pix": cfg.annulus_inner_pix,
@@ -183,6 +206,15 @@ def _obs_mid_mjd(candidate: SpherexImageCandidate, header: fits.Header) -> float
 def _inside_image(x_pix: float, y_pix: float, shape: tuple[int, int]) -> bool:
     height, width = shape
     return 0 <= x_pix < width and 0 <= y_pix < height
+
+
+def _optional_float(value: object) -> float | None:
+    try:
+        if value is None or np.isnan(value):
+            return None
+        return float(value)
+    except Exception:
+        return None
 
 
 def _wavelength_at(

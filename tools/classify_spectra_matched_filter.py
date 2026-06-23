@@ -3,11 +3,18 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.wavelength_guard import assert_science_wavelengths  # noqa: E402
 
 
 DEFAULT_RUN_DIR = Path("/mnt/niroseti/spherex_cache/runs/ucs0972_gpu_g14_16_n1000_f500")
@@ -182,6 +189,11 @@ def main() -> None:
     parser.add_argument("--continuum-exclude-template-above", type=float, default=0.25)
     parser.add_argument("--min-snr", type=float, default=5.0)
     parser.add_argument("--max-targets", type=int)
+    parser.add_argument(
+        "--allow-approx-wavelengths",
+        action="store_true",
+        help="Allow old MEF WCS-WAVE spectra. Not valid for science-grade candidate scoring.",
+    )
     args = parser.parse_args()
 
     spectra_path = args.spectra_path or (args.run_dir / "spectra" / "target_spectra.parquet")
@@ -196,6 +208,10 @@ def main() -> None:
     missing = sorted(required - set(df.columns))
     if missing:
         raise SystemExit(f"Missing required spectra columns: {', '.join(missing)}")
+    try:
+        assert_science_wavelengths(df, spectra_path, allow_approx=args.allow_approx_wavelengths)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     target_ids = list(df["target_id"].dropna().astype(str).drop_duplicates())
     if args.max_targets:
         target_ids = target_ids[: int(args.max_targets)]

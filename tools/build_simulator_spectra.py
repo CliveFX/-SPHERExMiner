@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import json
+import sys
 from pathlib import Path
 
 import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.wavelength_guard import assert_science_wavelengths  # noqa: E402
 
 
 DEFAULT_RUN_DIR = Path("/mnt/niroseti/spherex_cache/runs/ucs0972_gpu_g14_16_n1000_f500")
@@ -11,7 +18,18 @@ MAX_TARGETS = 12
 
 
 def main() -> None:
-    run_dir = DEFAULT_RUN_DIR
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Build simulator background spectra from a corrected spectra parquet.")
+    parser.add_argument("--run-dir", type=Path, default=DEFAULT_RUN_DIR)
+    parser.add_argument(
+        "--allow-approx-wavelengths",
+        action="store_true",
+        help="Allow old MEF WCS-WAVE spectra. Not valid for science-grade simulator examples.",
+    )
+    args = parser.parse_args()
+
+    run_dir = args.run_dir
     spectra_path = run_dir / "spectra" / "target_spectra.parquet"
     if not spectra_path.exists():
         raise SystemExit(f"Missing spectra parquet: {spectra_path}")
@@ -28,7 +46,15 @@ def main() -> None:
         "detector",
         "edge_distance_pix",
     ]
-    df = pd.read_parquet(spectra_path, columns=cols)
+    df = pd.read_parquet(spectra_path)
+    try:
+        assert_science_wavelengths(df, spectra_path, allow_approx=args.allow_approx_wavelengths)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+    missing = [col for col in cols if col not in df.columns]
+    if missing:
+        raise SystemExit(f"Missing required spectra columns: {', '.join(missing)}")
+    df = df[cols].copy()
     df["fatal_flag_present"] = df["fatal_flag_present"].fillna(False).astype(bool)
     df["snr"] = df["aperture_flux_uJy"] / df["aperture_flux_unc_uJy"].replace(0, pd.NA)
     grouped = (

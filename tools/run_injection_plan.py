@@ -60,6 +60,7 @@ def _run_one_injection(
     kernel_radius_native: int,
     overwrite: bool,
     dry_run: bool,
+    allow_approx_wavelengths: bool,
 ) -> dict[str, Any]:
     target_id = str(injection["target_id"])
     line_nm = float(injection["injected_line_nm"])
@@ -69,7 +70,11 @@ def _run_one_injection(
     min_response = float(injection.get("min_response", 1e-3))
     max_frames = injection.get("max_frames")
 
-    rows = _load_target_rows(baseline_run_dir, target_id)
+    rows = _load_target_rows(
+        baseline_run_dir,
+        target_id,
+        allow_approx_wavelengths=allow_approx_wavelengths,
+    )
     responses = np.array(
         [
             _response_for_row(
@@ -209,6 +214,11 @@ def main() -> None:
     )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--allow-approx-wavelengths",
+        action="store_true",
+        help="Allow old MEF WCS-WAVE spectra. Not valid for science-grade injection/recovery.",
+    )
     args = parser.parse_args()
 
     plan = json.loads(args.plan.read_text(encoding="utf-8"))
@@ -257,6 +267,7 @@ def main() -> None:
             kernel_radius_native=args.kernel_radius_native,
             overwrite=args.overwrite,
             dry_run=args.dry_run,
+            allow_approx_wavelengths=args.allow_approx_wavelengths,
         )
         results.append(result)
         for original_path, injected_path in result["path_overrides"].items():

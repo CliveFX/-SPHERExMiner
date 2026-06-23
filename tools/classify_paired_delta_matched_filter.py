@@ -15,6 +15,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.classify_spectra_matched_filter import _line_grid_from_args, _line_grid_from_plan, _response
+from tools.wavelength_guard import assert_science_wavelengths
 
 
 BASELINE_RUN = Path("/mnt/niroseti/spherex_cache/runs/injrec_baseline_10k_f80_g14_16_gpu3")
@@ -68,6 +69,11 @@ def _load_pair(args: argparse.Namespace) -> pd.DataFrame:
     ]
     base = pd.read_parquet(base_path)
     inj = pd.read_parquet(inj_path)
+    try:
+        assert_science_wavelengths(base, base_path, allow_approx=args.allow_approx_wavelengths)
+        assert_science_wavelengths(inj, inj_path, allow_approx=args.allow_approx_wavelengths)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     base = base[[col for col in columns if col in base.columns]].copy()
     inj = inj[[col for col in columns if col in inj.columns]].copy()
     required = {"target_id", "image_id", "cwave_um", "cband_um", "aperture_flux_uJy", "aperture_flux_unc_uJy"}
@@ -215,6 +221,11 @@ def main() -> None:
     parser.add_argument("--continuum-exclude-template-above", type=float, default=0.25)
     parser.add_argument("--min-snr", type=float, default=5.0)
     parser.add_argument("--max-targets", type=int)
+    parser.add_argument(
+        "--allow-approx-wavelengths",
+        action="store_true",
+        help="Allow old MEF WCS-WAVE spectra. Not valid for science-grade paired scoring.",
+    )
     args = parser.parse_args()
 
     lines = _line_grid_from_plan(args.plan) if args.plan else _line_grid_from_args(args.line_nm, args.line_width_nm)

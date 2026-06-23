@@ -1,5 +1,6 @@
 {
-  "source": "SPHEREx QR2 spectral_channels and spectral_wcs calibration products from IRSA IBE",
+  "source": "SPHEREx QR2 spectral_channels plus science-grade spectral_wcs CWAVE/CBAND pixel maps from IRSA IBE",
+  "wavelength_source": "spectral_wcs_CWAVE_CBAND",
   "spectral_channels_collection": "cal-sch-v1-2026-106",
   "spectral_wcs_collection": "cal-wcs-v4-2025-254",
   "channel_count": 102,
@@ -20,7 +21,11 @@
       "wcs_cband_median_um": 0.01773364283144474,
       "wcs_cband_p05_um": 0.016837991774082184,
       "wcs_cband_p95_um": 0.018527483567595482,
-      "wcs_r_median": 42.46015930175781
+      "wcs_r_median": 42.46015930175781,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -38,7 +43,11 @@
       "wcs_cband_median_um": 0.018558789044618607,
       "wcs_cband_p05_um": 0.017749527469277382,
       "wcs_cband_p95_um": 0.019286124035716057,
-      "wcs_r_median": 41.53989028930664
+      "wcs_r_median": 41.53989028930664,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -56,7 +65,11 @@
       "wcs_cband_median_um": 0.019317826256155968,
       "wcs_cband_p05_um": 0.018478313460946083,
       "wcs_cband_p95_um": 0.02008548378944397,
-      "wcs_r_median": 40.86514663696289
+      "wcs_r_median": 40.86514663696289,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -74,7 +87,11 @@
       "wcs_cband_median_um": 0.02005073055624962,
       "wcs_cband_p05_um": 0.019261997193098068,
       "wcs_cband_p95_um": 0.020741291344165802,
-      "wcs_r_median": 40.332115173339844
+      "wcs_r_median": 40.332115173339844,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -92,7 +109,11 @@
       "wcs_cband_median_um": 0.020490430295467377,
       "wcs_cband_p05_um": 0.01975211128592491,
       "wcs_cband_p95_um": 0.021141696721315384,
-      "wcs_r_median": 40.41468811035156
+      "wcs_r_median": 40.41468811035156,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -110,7 +131,11 @@
       "wcs_cband_median_um": 0.0209953635931015,
       "wcs_cband_p05_um": 0.020263073965907097,
       "wcs_cband_p95_um": 0.02165057696402073,
-      "wcs_r_median": 40.377906799316406
+      "wcs_r_median": 40.377906799316406,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -128,7 +153,11 @@
       "wcs_cband_median_um": 0.02177681401371956,
       "wcs_cband_p05_um": 0.020985538139939308,
       "wcs_cband_p95_um": 0.022499756887555122,
-      "wcs_r_median": 39.857906341552734
+      "wcs_r_median": 39.857906341552734,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -146,7 +175,11 @@
       "wcs_cband_median_um": 0.022693736478686333,
       "wcs_cband_p05_um": 0.02192903682589531,
       "wcs_cband_p95_um": 0.023397628217935562,
-      "wcs_r_median": 39.16108322143555
+      "wcs_r_median": 39.16108322143555,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -164,7 +197,11 @@
       "wcs_cband_median_um": 0.02340683527290821,
       "wcs_cband_p05_um": 0.022716328501701355,
       "wcs_cband_p95_um": 0.024010585620999336,
-      "wcs_r_median": 38.893402099609375
+      "wcs_r_median": 38.893402099609375,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -182,7 +219,11 @@
       "wcs_cband_median_um": 0.023906612768769264,
       "wcs_cband_p05_um": 0.023262474685907364,
       "wcs_cband_p95_um": 0.024467723444104195,
-      "wcs_r_median": 39.00172805786133
+      "wcs_r_median": 39.00172805786133,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -200,7 +241,11 @@
       "wcs_cband_median_um": 0.024559255689382553,
       "wcs_cband_p05_um": 0.023862676694989204,
       "wcs_cband_p95_um": 0.025231290608644485,
-      "wcs_r_median": 38.85542297363281
+      "wcs_r_median": 38.85542297363281,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -218,7 +263,11 @@
       "wcs_cband_median_um": 0.02556896209716797,
       "wcs_cband_p05_um": 0.02481369860470295,
       "wcs_cband_p95_um": 0.026301339268684387,
-      "wcs_r_median": 38.21950149536133
+      "wcs_r_median": 38.21950149536133,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -236,7 +285,11 @@
       "wcs_cband_median_um": 0.02648860216140747,
       "wcs_cband_p05_um": 0.02581368386745453,
       "wcs_cband_p95_um": 0.027108661830425262,
-      "wcs_r_median": 37.79047775268555
+      "wcs_r_median": 37.79047775268555,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -254,7 +307,11 @@
       "wcs_cband_median_um": 0.027053503319621086,
       "wcs_cband_p05_um": 0.02642887271940708,
       "wcs_cband_p95_um": 0.027602016925811768,
-      "wcs_r_median": 37.897132873535156
+      "wcs_r_median": 37.897132873535156,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -272,7 +329,11 @@
       "wcs_cband_median_um": 0.02782982401549816,
       "wcs_cband_p05_um": 0.027079595252871513,
       "wcs_cband_p95_um": 0.02855626493692398,
-      "wcs_r_median": 37.717376708984375
+      "wcs_r_median": 37.717376708984375,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -290,7 +351,11 @@
       "wcs_cband_median_um": 0.028932450339198112,
       "wcs_cband_p05_um": 0.02814539708197117,
       "wcs_cband_p95_um": 0.029637770727276802,
-      "wcs_r_median": 37.162933349609375
+      "wcs_r_median": 37.162933349609375,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 1,
@@ -308,7 +373,11 @@
       "wcs_cband_median_um": 0.029755055904388428,
       "wcs_cband_p05_um": 0.029109206050634384,
       "wcs_cband_p95_um": 0.030334416776895523,
-      "wcs_r_median": 37.00491714477539
+      "wcs_r_median": 37.00491714477539,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/1/spectral_wcs_D1_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 1
     },
     {
       "detector": 2,
@@ -326,7 +395,11 @@
       "wcs_cband_median_um": 0.026083508506417274,
       "wcs_cband_p05_um": 0.02521028183400631,
       "wcs_cband_p95_um": 0.02690049447119236,
-      "wcs_r_median": 42.63629150390625
+      "wcs_r_median": 42.63629150390625,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -344,7 +417,11 @@
       "wcs_cband_median_um": 0.027139319106936455,
       "wcs_cband_p05_um": 0.02635834366083145,
       "wcs_cband_p95_um": 0.027893822640180588,
-      "wcs_r_median": 41.96609115600586
+      "wcs_r_median": 41.96609115600586,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -362,7 +439,11 @@
       "wcs_cband_median_um": 0.028107700869441032,
       "wcs_cband_p05_um": 0.027393506839871407,
       "wcs_cband_p95_um": 0.028738565742969513,
-      "wcs_r_median": 41.52016067504883
+      "wcs_r_median": 41.52016067504883,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -380,7 +461,11 @@
       "wcs_cband_median_um": 0.028876008465886116,
       "wcs_cband_p05_um": 0.02822408452630043,
       "wcs_cband_p95_um": 0.029459921643137932,
-      "wcs_r_median": 41.39076232910156
+      "wcs_r_median": 41.39076232910156,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -398,7 +483,11 @@
       "wcs_cband_median_um": 0.029558764770627022,
       "wcs_cband_p05_um": 0.028887609019875526,
       "wcs_cband_p95_um": 0.030144307762384415,
-      "wcs_r_median": 41.41745376586914
+      "wcs_r_median": 41.41745376586914,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -416,7 +505,11 @@
       "wcs_cband_median_um": 0.030231155455112457,
       "wcs_cband_p05_um": 0.029581980779767036,
       "wcs_cband_p95_um": 0.030810007825493813,
-      "wcs_r_median": 41.47039031982422
+      "wcs_r_median": 41.47039031982422,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -434,7 +527,11 @@
       "wcs_cband_median_um": 0.030937442556023598,
       "wcs_cband_p05_um": 0.030310271307826042,
       "wcs_cband_p95_um": 0.031472381204366684,
-      "wcs_r_median": 41.5032844543457
+      "wcs_r_median": 41.5032844543457,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -452,7 +549,11 @@
       "wcs_cband_median_um": 0.03162233158946037,
       "wcs_cband_p05_um": 0.031019289046525955,
       "wcs_cband_p95_um": 0.032142993062734604,
-      "wcs_r_median": 41.5781135559082
+      "wcs_r_median": 41.5781135559082,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -470,7 +571,11 @@
       "wcs_cband_median_um": 0.032244566828012466,
       "wcs_cband_p05_um": 0.03167068585753441,
       "wcs_cband_p95_um": 0.032795291393995285,
-      "wcs_r_median": 41.73476028442383
+      "wcs_r_median": 41.73476028442383,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -488,7 +593,11 @@
       "wcs_cband_median_um": 0.033095043152570724,
       "wcs_cband_p05_um": 0.03242674842476845,
       "wcs_cband_p95_um": 0.03370363265275955,
-      "wcs_r_median": 41.641578674316406
+      "wcs_r_median": 41.641578674316406,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -506,7 +615,11 @@
       "wcs_cband_median_um": 0.03413931280374527,
       "wcs_cband_p05_um": 0.03341009095311165,
       "wcs_cband_p95_um": 0.03486240655183792,
-      "wcs_r_median": 41.32199478149414
+      "wcs_r_median": 41.32199478149414,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -524,7 +637,11 @@
       "wcs_cband_median_um": 0.03530367836356163,
       "wcs_cband_p05_um": 0.03462986275553703,
       "wcs_cband_p95_um": 0.035960495471954346,
-      "wcs_r_median": 40.933502197265625
+      "wcs_r_median": 40.933502197265625,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -542,7 +659,11 @@
       "wcs_cband_median_um": 0.03637964650988579,
       "wcs_cband_p05_um": 0.03563954308629036,
       "wcs_cband_p95_um": 0.03704496845602989,
-      "wcs_r_median": 40.70623779296875
+      "wcs_r_median": 40.70623779296875,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -560,7 +681,11 @@
       "wcs_cband_median_um": 0.03730529174208641,
       "wcs_cband_p05_um": 0.036665111780166626,
       "wcs_cband_p95_um": 0.037888675928115845,
-      "wcs_r_median": 40.664066314697266
+      "wcs_r_median": 40.664066314697266,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -578,7 +703,11 @@
       "wcs_cband_median_um": 0.03804473206400871,
       "wcs_cband_p05_um": 0.037442807108163834,
       "wcs_cband_p95_um": 0.03857281059026718,
-      "wcs_r_median": 40.85185623168945
+      "wcs_r_median": 40.85185623168945,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -596,7 +725,11 @@
       "wcs_cband_median_um": 0.03870067372918129,
       "wcs_cband_p05_um": 0.03809264674782753,
       "wcs_cband_p95_um": 0.039233867079019547,
-      "wcs_r_median": 41.14068603515625
+      "wcs_r_median": 41.14068603515625,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 2,
@@ -614,7 +747,11 @@
       "wcs_cband_median_um": 0.03933442756533623,
       "wcs_cband_p05_um": 0.03878340125083923,
       "wcs_cband_p95_um": 0.0398433655500412,
-      "wcs_r_median": 41.449764251708984
+      "wcs_r_median": 41.449764251708984,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/2/spectral_wcs_D2_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 2
     },
     {
       "detector": 3,
@@ -632,7 +769,11 @@
       "wcs_cband_median_um": 0.0393856056034565,
       "wcs_cband_p05_um": 0.038631025701761246,
       "wcs_cband_p95_um": 0.040162552148103714,
-      "wcs_r_median": 42.03502655029297
+      "wcs_r_median": 42.03502655029297,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -650,7 +791,11 @@
       "wcs_cband_median_um": 0.04058754816651344,
       "wcs_cband_p05_um": 0.03998018801212311,
       "wcs_cband_p95_um": 0.04133452847599983,
-      "wcs_r_median": 41.72008514404297
+      "wcs_r_median": 41.72008514404297,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -668,7 +813,11 @@
       "wcs_cband_median_um": 0.04188859462738037,
       "wcs_cband_p05_um": 0.04110923781991005,
       "wcs_cband_p95_um": 0.042792171239852905,
-      "wcs_r_median": 41.36613082885742
+      "wcs_r_median": 41.36613082885742,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -686,7 +835,11 @@
       "wcs_cband_median_um": 0.043390464037656784,
       "wcs_cband_p05_um": 0.04253418371081352,
       "wcs_cband_p95_um": 0.04416462779045105,
-      "wcs_r_median": 40.91865158081055
+      "wcs_r_median": 40.91865158081055,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -704,7 +857,11 @@
       "wcs_cband_median_um": 0.0448368638753891,
       "wcs_cband_p05_um": 0.0439581423997879,
       "wcs_cband_p95_um": 0.0454954095184803,
-      "wcs_r_median": 40.5722770690918
+      "wcs_r_median": 40.5722770690918,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -722,7 +879,11 @@
       "wcs_cband_median_um": 0.045924097299575806,
       "wcs_cband_p05_um": 0.04518613591790199,
       "wcs_cband_p95_um": 0.04651855677366257,
-      "wcs_r_median": 40.529178619384766
+      "wcs_r_median": 40.529178619384766,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -740,7 +901,11 @@
       "wcs_cband_median_um": 0.04676768183708191,
       "wcs_cband_p05_um": 0.04605422914028168,
       "wcs_cband_p95_um": 0.0474231094121933,
-      "wcs_r_median": 40.721435546875
+      "wcs_r_median": 40.721435546875,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -758,7 +923,11 @@
       "wcs_cband_median_um": 0.047588199377059937,
       "wcs_cband_p05_um": 0.04686850681900978,
       "wcs_cband_p95_um": 0.048388462513685226,
-      "wcs_r_median": 40.930728912353516
+      "wcs_r_median": 40.930728912353516,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -776,7 +945,11 @@
       "wcs_cband_median_um": 0.04877534508705139,
       "wcs_cband_p05_um": 0.04800651594996452,
       "wcs_cband_p95_um": 0.04962719604372978,
-      "wcs_r_median": 40.865638732910156
+      "wcs_r_median": 40.865638732910156,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -794,7 +967,11 @@
       "wcs_cband_median_um": 0.050733618438243866,
       "wcs_cband_p05_um": 0.04945490136742592,
       "wcs_cband_p95_um": 0.05183733254671097,
-      "wcs_r_median": 40.25201416015625
+      "wcs_r_median": 40.25201416015625,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -812,7 +989,11 @@
       "wcs_cband_median_um": 0.05242485553026199,
       "wcs_cband_p05_um": 0.051621753722429276,
       "wcs_cband_p95_um": 0.0532383993268013,
-      "wcs_r_median": 39.83095932006836
+      "wcs_r_median": 39.83095932006836,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -830,7 +1011,11 @@
       "wcs_cband_median_um": 0.05384031683206558,
       "wcs_cband_p05_um": 0.0528198778629303,
       "wcs_cband_p95_um": 0.0547918938100338,
-      "wcs_r_median": 39.715057373046875
+      "wcs_r_median": 39.715057373046875,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -848,7 +1033,11 @@
       "wcs_cband_median_um": 0.05479329451918602,
       "wcs_cband_p05_um": 0.05400083586573601,
       "wcs_cband_p95_um": 0.055464405566453934,
-      "wcs_r_median": 39.95102310180664
+      "wcs_r_median": 39.95102310180664,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -866,7 +1055,11 @@
       "wcs_cband_median_um": 0.05573838949203491,
       "wcs_cband_p05_um": 0.05487338826060295,
       "wcs_cband_p95_um": 0.05652245879173279,
-      "wcs_r_median": 40.18268585205078
+      "wcs_r_median": 40.18268585205078,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -884,7 +1077,11 @@
       "wcs_cband_median_um": 0.056685563176870346,
       "wcs_cband_p05_um": 0.05581722781062126,
       "wcs_cband_p95_um": 0.05761604383587837,
-      "wcs_r_median": 40.406368255615234
+      "wcs_r_median": 40.406368255615234,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -902,7 +1099,11 @@
       "wcs_cband_median_um": 0.05837477743625641,
       "wcs_cband_p05_um": 0.05736100301146507,
       "wcs_cband_p95_um": 0.05927843227982521,
-      "wcs_r_median": 40.16939926147461
+      "wcs_r_median": 40.16939926147461,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 3,
@@ -920,7 +1121,11 @@
       "wcs_cband_median_um": 0.05850956216454506,
       "wcs_cband_p05_um": 0.04638112336397171,
       "wcs_cband_p95_um": 0.05986752733588219,
-      "wcs_r_median": 40.881134033203125
+      "wcs_r_median": 40.881134033203125,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/3/spectral_wcs_D3_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 3
     },
     {
       "detector": 4,
@@ -938,7 +1143,11 @@
       "wcs_cband_median_um": 0.05764670670032501,
       "wcs_cband_p05_um": 0.043613892048597336,
       "wcs_cband_p95_um": 0.07136958837509155,
-      "wcs_r_median": 42.41461944580078
+      "wcs_r_median": 42.41461944580078,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -956,7 +1165,11 @@
       "wcs_cband_median_um": 0.07288722693920135,
       "wcs_cband_p05_um": 0.07126335054636002,
       "wcs_cband_p95_um": 0.07444556057453156,
-      "wcs_r_median": 34.369606018066406
+      "wcs_r_median": 34.369606018066406,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -974,7 +1187,11 @@
       "wcs_cband_median_um": 0.07400316745042801,
       "wcs_cband_p05_um": 0.07225722819566727,
       "wcs_cband_p95_um": 0.07542126625776291,
-      "wcs_r_median": 34.787353515625
+      "wcs_r_median": 34.787353515625,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -992,7 +1209,11 @@
       "wcs_cband_median_um": 0.07546700537204742,
       "wcs_cband_p05_um": 0.07337265461683273,
       "wcs_cband_p95_um": 0.07758495211601257,
-      "wcs_r_median": 35.02360534667969
+      "wcs_r_median": 35.02360534667969,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1010,7 +1231,11 @@
       "wcs_cband_median_um": 0.07756315916776657,
       "wcs_cband_p05_um": 0.07523652911186218,
       "wcs_cband_p95_um": 0.07962948083877563,
-      "wcs_r_median": 35.048194885253906
+      "wcs_r_median": 35.048194885253906,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1028,7 +1253,11 @@
       "wcs_cband_median_um": 0.07931913435459137,
       "wcs_cband_p05_um": 0.07634888589382172,
       "wcs_cband_p95_um": 0.08315936475992203,
-      "wcs_r_median": 35.14385223388672
+      "wcs_r_median": 35.14385223388672,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1046,7 +1275,11 @@
       "wcs_cband_median_um": 0.08364178240299225,
       "wcs_cband_p05_um": 0.08096718043088913,
       "wcs_cband_p95_um": 0.08604710549116135,
-      "wcs_r_median": 34.32731628417969
+      "wcs_r_median": 34.32731628417969,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1064,7 +1297,11 @@
       "wcs_cband_median_um": 0.08587250113487244,
       "wcs_cband_p05_um": 0.08286277949810028,
       "wcs_cband_p95_um": 0.08856256306171417,
-      "wcs_r_median": 34.36700439453125
+      "wcs_r_median": 34.36700439453125,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1082,7 +1319,11 @@
       "wcs_cband_median_um": 0.08876064419746399,
       "wcs_cband_p05_um": 0.08557706326246262,
       "wcs_cband_p95_um": 0.09152515232563019,
-      "wcs_r_median": 34.16592025756836
+      "wcs_r_median": 34.16592025756836,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1100,7 +1341,11 @@
       "wcs_cband_median_um": 0.09108829498291016,
       "wcs_cband_p05_um": 0.08839220553636551,
       "wcs_cband_p95_um": 0.09344808757305145,
-      "wcs_r_median": 34.24327850341797
+      "wcs_r_median": 34.24327850341797,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1118,7 +1363,11 @@
       "wcs_cband_median_um": 0.092741958796978,
       "wcs_cband_p05_um": 0.090084969997406,
       "wcs_cband_p95_um": 0.09508243948221207,
-      "wcs_r_median": 34.55141067504883
+      "wcs_r_median": 34.55141067504883,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1136,7 +1385,11 @@
       "wcs_cband_median_um": 0.09426587074995041,
       "wcs_cband_p05_um": 0.0916675478219986,
       "wcs_cband_p95_um": 0.09663572162389755,
-      "wcs_r_median": 34.92945861816406
+      "wcs_r_median": 34.92945861816406,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1154,7 +1407,11 @@
       "wcs_cband_median_um": 0.09593982994556427,
       "wcs_cband_p05_um": 0.0932183787226677,
       "wcs_cband_p95_um": 0.09849602729082108,
-      "wcs_r_median": 35.24821090698242
+      "wcs_r_median": 35.24821090698242,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1172,7 +1429,11 @@
       "wcs_cband_median_um": 0.09781251102685928,
       "wcs_cband_p05_um": 0.09487207978963852,
       "wcs_cband_p95_um": 0.10045726597309113,
-      "wcs_r_median": 35.5294303894043
+      "wcs_r_median": 35.5294303894043,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1190,7 +1451,11 @@
       "wcs_cband_median_um": 0.09946003556251526,
       "wcs_cband_p05_um": 0.09624309837818146,
       "wcs_cband_p95_um": 0.10241978615522385,
-      "wcs_r_median": 35.89441680908203
+      "wcs_r_median": 35.89441680908203,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1208,7 +1473,11 @@
       "wcs_cband_median_um": 0.10172992944717407,
       "wcs_cband_p05_um": 0.09799588471651077,
       "wcs_cband_p95_um": 0.10510557889938354,
-      "wcs_r_median": 36.034156799316406
+      "wcs_r_median": 36.034156799316406,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 4,
@@ -1226,7 +1495,11 @@
       "wcs_cband_median_um": 0.1034349873661995,
       "wcs_cband_p05_um": 0.09878773987293243,
       "wcs_cband_p95_um": 0.10766080021858215,
-      "wcs_r_median": 36.4177360534668
+      "wcs_r_median": 36.4177360534668,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/4/spectral_wcs_D4_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 4
     },
     {
       "detector": 5,
@@ -1244,7 +1517,11 @@
       "wcs_cband_median_um": 0.03514289855957031,
       "wcs_cband_p05_um": 0.03484908118844032,
       "wcs_cband_p95_um": 0.035447780042886734,
-      "wcs_r_median": 108.91657257080078
+      "wcs_r_median": 108.91657257080078,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1262,7 +1539,11 @@
       "wcs_cband_median_um": 0.03554217517375946,
       "wcs_cband_p05_um": 0.03528684377670288,
       "wcs_cband_p95_um": 0.03579104691743851,
-      "wcs_r_median": 108.62433624267578
+      "wcs_r_median": 108.62433624267578,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1280,7 +1561,11 @@
       "wcs_cband_median_um": 0.035740844905376434,
       "wcs_cband_p05_um": 0.035443566739559174,
       "wcs_cband_p95_um": 0.03603985905647278,
-      "wcs_r_median": 108.97891235351562
+      "wcs_r_median": 108.97891235351562,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1298,7 +1583,11 @@
       "wcs_cband_median_um": 0.03626876324415207,
       "wcs_cband_p05_um": 0.035906627774238586,
       "wcs_cband_p95_um": 0.036597076803445816,
-      "wcs_r_median": 108.35100555419922
+      "wcs_r_median": 108.35100555419922,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1316,7 +1605,11 @@
       "wcs_cband_median_um": 0.036468565464019775,
       "wcs_cband_p05_um": 0.03621906042098999,
       "wcs_cband_p95_um": 0.03672483190894127,
-      "wcs_r_median": 108.69200134277344
+      "wcs_r_median": 108.69200134277344,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1334,7 +1627,11 @@
       "wcs_cband_median_um": 0.036480166018009186,
       "wcs_cband_p05_um": 0.036219727247953415,
       "wcs_cband_p95_um": 0.036737993359565735,
-      "wcs_r_median": 109.61862182617188
+      "wcs_r_median": 109.61862182617188,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1352,7 +1649,11 @@
       "wcs_cband_median_um": 0.036688607186079025,
       "wcs_cband_p05_um": 0.036405403167009354,
       "wcs_cband_p95_um": 0.03696857765316963,
-      "wcs_r_median": 109.95604705810547
+      "wcs_r_median": 109.95604705810547,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1370,7 +1671,11 @@
       "wcs_cband_median_um": 0.036640189588069916,
       "wcs_cband_p05_um": 0.03631959483027458,
       "wcs_cband_p95_um": 0.036959655582904816,
-      "wcs_r_median": 111.10041046142578
+      "wcs_r_median": 111.10041046142578,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1388,7 +1693,11 @@
       "wcs_cband_median_um": 0.03679874166846275,
       "wcs_cband_p05_um": 0.036486588418483734,
       "wcs_cband_p95_um": 0.037092335522174835,
-      "wcs_r_median": 111.56147766113281
+      "wcs_r_median": 111.56147766113281,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1406,7 +1715,11 @@
       "wcs_cband_median_um": 0.036753419786691666,
       "wcs_cband_p05_um": 0.0364384762942791,
       "wcs_cband_p95_um": 0.037078309804201126,
-      "wcs_r_median": 112.69059753417969
+      "wcs_r_median": 112.69059753417969,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1424,7 +1737,11 @@
       "wcs_cband_median_um": 0.03702792152762413,
       "wcs_cband_p05_um": 0.036626819521188736,
       "wcs_cband_p95_um": 0.03744993358850479,
-      "wcs_r_median": 112.81310272216797
+      "wcs_r_median": 112.81310272216797,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1442,7 +1759,11 @@
       "wcs_cband_median_um": 0.036752231419086456,
       "wcs_cband_p05_um": 0.03630058094859123,
       "wcs_cband_p95_um": 0.03724231198430061,
-      "wcs_r_median": 114.73018646240234
+      "wcs_r_median": 114.73018646240234,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1460,7 +1781,11 @@
       "wcs_cband_median_um": 0.03719528391957283,
       "wcs_cband_p05_um": 0.036723311990499496,
       "wcs_cband_p95_um": 0.0376213900744915,
-      "wcs_r_median": 114.2959213256836
+      "wcs_r_median": 114.2959213256836,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1478,7 +1803,11 @@
       "wcs_cband_median_um": 0.037184204906225204,
       "wcs_cband_p05_um": 0.0366799533367157,
       "wcs_cband_p95_um": 0.0376921184360981,
-      "wcs_r_median": 115.29507446289062
+      "wcs_r_median": 115.29507446289062,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1496,7 +1825,11 @@
       "wcs_cband_median_um": 0.03739237040281296,
       "wcs_cband_p05_um": 0.0369451530277729,
       "wcs_cband_p95_um": 0.03783031180500984,
-      "wcs_r_median": 115.6575698852539
+      "wcs_r_median": 115.6575698852539,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1514,7 +1847,11 @@
       "wcs_cband_median_um": 0.037739187479019165,
       "wcs_cband_p05_um": 0.03718670457601547,
       "wcs_cband_p95_um": 0.03829921409487724,
-      "wcs_r_median": 115.56849670410156
+      "wcs_r_median": 115.56849670410156,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 5,
@@ -1532,7 +1869,11 @@
       "wcs_cband_median_um": 0.03752117231488228,
       "wcs_cband_p05_um": 0.036901503801345825,
       "wcs_cband_p95_um": 0.03834972903132439,
-      "wcs_r_median": 117.18444061279297
+      "wcs_r_median": 117.18444061279297,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/5/spectral_wcs_D5_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 5
     },
     {
       "detector": 6,
@@ -1550,7 +1891,11 @@
       "wcs_cband_median_um": 0.034489069133996964,
       "wcs_cband_p05_um": 0.033771973103284836,
       "wcs_cband_p95_um": 0.03531597554683685,
-      "wcs_r_median": 128.3460235595703
+      "wcs_r_median": 128.3460235595703,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1568,7 +1913,11 @@
       "wcs_cband_median_um": 0.03567897528409958,
       "wcs_cband_p05_um": 0.03512554243206978,
       "wcs_cband_p95_um": 0.036173515021800995,
-      "wcs_r_median": 125.0538101196289
+      "wcs_r_median": 125.0538101196289,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1586,7 +1935,11 @@
       "wcs_cband_median_um": 0.035462088882923126,
       "wcs_cband_p05_um": 0.03491127863526344,
       "wcs_cband_p95_um": 0.0360521525144577,
-      "wcs_r_median": 126.70948028564453
+      "wcs_r_median": 126.70948028564453,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1604,7 +1957,11 @@
       "wcs_cband_median_um": 0.03605645149946213,
       "wcs_cband_p05_um": 0.03548886999487877,
       "wcs_cband_p95_um": 0.036601319909095764,
-      "wcs_r_median": 125.54261016845703
+      "wcs_r_median": 125.54261016845703,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1622,7 +1979,11 @@
       "wcs_cband_median_um": 0.035883668810129166,
       "wcs_cband_p05_um": 0.03526602312922478,
       "wcs_cband_p95_um": 0.03661665692925453,
-      "wcs_r_median": 127.05192565917969
+      "wcs_r_median": 127.05192565917969,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1640,7 +2001,11 @@
       "wcs_cband_median_um": 0.036624662578105927,
       "wcs_cband_p05_um": 0.035980816930532455,
       "wcs_cband_p95_um": 0.03727969154715538,
-      "wcs_r_median": 125.42755889892578
+      "wcs_r_median": 125.42755889892578,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1658,7 +2023,11 @@
       "wcs_cband_median_um": 0.03646575286984444,
       "wcs_cband_p05_um": 0.03576675057411194,
       "wcs_cband_p95_um": 0.03717479854822159,
-      "wcs_r_median": 126.91366577148438
+      "wcs_r_median": 126.91366577148438,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1676,7 +2045,11 @@
       "wcs_cband_median_um": 0.03707315772771835,
       "wcs_cband_p05_um": 0.03627578541636467,
       "wcs_cband_p95_um": 0.03784707933664322,
-      "wcs_r_median": 125.75818634033203
+      "wcs_r_median": 125.75818634033203,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1694,7 +2067,11 @@
       "wcs_cband_median_um": 0.036795176565647125,
       "wcs_cband_p05_um": 0.03587128221988678,
       "wcs_cband_p95_um": 0.03771832585334778,
-      "wcs_r_median": 127.65982818603516
+      "wcs_r_median": 127.65982818603516,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1712,7 +2089,11 @@
       "wcs_cband_median_um": 0.03653519228100777,
       "wcs_cband_p05_um": 0.0349319726228714,
       "wcs_cband_p95_um": 0.03786712512373924,
-      "wcs_r_median": 129.50621032714844
+      "wcs_r_median": 129.50621032714844,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1730,7 +2111,11 @@
       "wcs_cband_median_um": 0.036391232162714005,
       "wcs_cband_p05_um": 0.035162609070539474,
       "wcs_cband_p95_um": 0.03749316558241844,
-      "wcs_r_median": 131.02227783203125
+      "wcs_r_median": 131.02227783203125,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1748,7 +2133,11 @@
       "wcs_cband_median_um": 0.03643559291958809,
       "wcs_cband_p05_um": 0.035210054367780685,
       "wcs_cband_p95_um": 0.03752066567540169,
-      "wcs_r_median": 131.81504821777344
+      "wcs_r_median": 131.81504821777344,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1766,7 +2155,11 @@
       "wcs_cband_median_um": 0.03704579174518585,
       "wcs_cband_p05_um": 0.03595806658267975,
       "wcs_cband_p95_um": 0.03814948722720146,
-      "wcs_r_median": 130.52508544921875
+      "wcs_r_median": 130.52508544921875,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1784,7 +2177,11 @@
       "wcs_cband_median_um": 0.03752908483147621,
       "wcs_cband_p05_um": 0.036327946931123734,
       "wcs_cband_p95_um": 0.03873825818300247,
-      "wcs_r_median": 129.82447814941406
+      "wcs_r_median": 129.82447814941406,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1802,7 +2199,11 @@
       "wcs_cband_median_um": 0.03764251992106438,
       "wcs_cband_p05_um": 0.036271385848522186,
       "wcs_cband_p95_um": 0.03890824690461159,
-      "wcs_r_median": 130.40281677246094
+      "wcs_r_median": 130.40281677246094,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1820,7 +2221,11 @@
       "wcs_cband_median_um": 0.037447746843099594,
       "wcs_cband_p05_um": 0.03601505607366562,
       "wcs_cband_p95_um": 0.0388622060418129,
-      "wcs_r_median": 132.05455017089844
+      "wcs_r_median": 132.05455017089844,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     },
     {
       "detector": 6,
@@ -1838,7 +2243,11 @@
       "wcs_cband_median_um": 0.03686564415693283,
       "wcs_cband_p05_um": 0.035084277391433716,
       "wcs_cband_p95_um": 0.03875378146767616,
-      "wcs_r_median": 135.1607666015625
+      "wcs_r_median": 135.1607666015625,
+      "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+      "wavelength_calibration_file": "/mnt/niroseti/spherex_cache/calibration/qr2/spectral_wcs/cal-wcs-v4-2025-254/6/spectral_wcs_D6_spx_cal-wcs-v4-2025-254.fits",
+      "wavelength_calibration_collection": "cal-wcs-v4-2025-254",
+      "wavelength_detector": 6
     }
   ]
 }

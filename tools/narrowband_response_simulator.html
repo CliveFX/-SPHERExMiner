@@ -197,7 +197,7 @@
 
     <label for="calibrationMode">Channel calibration</label>
     <select id="calibrationMode">
-      <option value="wcs" selected>QR2 WCS medians</option>
+      <option value="wcs" selected>QR2 CWAVE/CBAND pixel medians</option>
       <option value="table">QR2 channel table</option>
       <option value="approx">Design approximation</option>
     </select>
@@ -221,8 +221,9 @@
     </select>
 
     <div class="note">
-      Default channels come from QR2 `spectral_channels` plus per-channel medians from `spectral_wcs`
-      `CWAVE/CBAND`. The response shape is still approximate until the fiducial spectral response
+      Default channels come from QR2 `spectral_channels` plus per-detector, per-subchannel medians from
+      the science-grade `spectral_wcs` `CWAVE/CBAND` pixel maps. Do not use MEF `WCS-WAVE` for science
+      wavelength placement. The response shape is still approximate until the fiducial spectral response
       functions become visible in the public archive.
     </div>
   </section>

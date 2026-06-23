@@ -53,6 +53,10 @@ def assemble_spectra_from_jobs(run_dir: Path, jobs: list[dict[str, object]]) -> 
         "astrometric_params_solved",
         "cwave_um",
         "cband_um",
+        "wavelength_source",
+        "wavelength_calibration_file",
+        "wavelength_calibration_collection",
+        "wavelength_detector",
         "aperture_flux_uJy",
         "aperture_flux_unc_uJy",
         "psf_flux_uJy",
@@ -101,6 +105,9 @@ def assemble_spectra_from_jobs(run_dir: Path, jobs: list[dict[str, object]]) -> 
         "measurement_rows": int(len(all_measurements)),
         "target_count": int(target_summary["target_id"].nunique()),
         "shard_count": int(len(tables)),
+        "wavelength_sources": _unique_strings(all_measurements, "wavelength_source"),
+        "wavelength_calibration_collections": _unique_strings(all_measurements, "wavelength_calibration_collection"),
+        "wavelength_detectors": _unique_strings(all_measurements, "wavelength_detector"),
         "spectra_dir": str(spectra_dir),
         "all_measurements_path": str(spectra_dir / "all_measurements.parquet"),
         "target_spectra_path": str(spectra_dir / "target_spectra.parquet"),
@@ -108,3 +115,9 @@ def assemble_spectra_from_jobs(run_dir: Path, jobs: list[dict[str, object]]) -> 
     }
     (spectra_dir / "assembly_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
+
+
+def _unique_strings(df: pd.DataFrame, column: str) -> list[str]:
+    if column not in df.columns:
+        return []
+    return sorted({str(value) for value in df[column].dropna().unique()})

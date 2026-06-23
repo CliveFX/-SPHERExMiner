@@ -22,6 +22,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from spherex_laser_miner.calibration import load_sapm  # noqa: E402
 from spherex_laser_miner.photometry.psf import _extract_native_psf  # noqa: E402
+from tools.wavelength_guard import assert_science_wavelengths  # noqa: E402
 
 
 DEFAULT_CACHE_ROOT = Path("/mnt/niroseti/spherex_cache")
@@ -223,13 +224,14 @@ def _inject_one_frame(
     )
 
 
-def _load_target_rows(run_dir: Path, target_id: str) -> pd.DataFrame:
+def _load_target_rows(run_dir: Path, target_id: str, *, allow_approx_wavelengths: bool = False) -> pd.DataFrame:
     spectra_path = run_dir / "spectra" / "target_spectra.parquet"
     if not spectra_path.exists():
         raise FileNotFoundError(f"Missing spectra parquet: {spectra_path}")
     rows = pd.read_parquet(spectra_path)
     if "target_id" not in rows.columns:
         raise ValueError(f"{spectra_path} has no target_id column")
+    assert_science_wavelengths(rows, spectra_path, allow_approx=allow_approx_wavelengths)
     rows = rows[rows["target_id"].astype(str).eq(str(target_id))].copy()
     if rows.empty:
         raise ValueError(f"Target {target_id!r} not found in {spectra_path}")
@@ -270,6 +272,11 @@ def main() -> None:
         help="Skip frames below this spectral response.",
     )
     parser.add_argument("--max-frames", type=int, help="Limit frames for smoke tests.")
+    parser.add_argument(
+        "--allow-approx-wavelengths",
+        action="store_true",
+        help="Allow old MEF WCS-WAVE spectra. Not valid for science-grade injection/recovery.",
+    )
     parser.add_argument("--cache-root", type=Path, default=DEFAULT_CACHE_ROOT)
     parser.add_argument("--release", default=DEFAULT_RELEASE)
     parser.add_argument("--kernel-radius-native", type=int, default=5)
@@ -296,7 +303,7 @@ def main() -> None:
     output_root = output_root.resolve()
 
     print(f"Loading target rows for {args.target_id} from {run_dir}", flush=True)
-    rows = _load_target_rows(run_dir, args.target_id)
+    rows = _load_target_rows(run_dir, args.target_id, allow_approx_wavelengths=args.allow_approx_wavelengths)
     responses = np.array(
         [
             _response_for_row(

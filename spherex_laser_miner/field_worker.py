@@ -15,7 +15,14 @@ from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
 
-from spherex_laser_miner.calibration import image_to_ujy_per_pixel, load_sapm, variance_to_ujy2
+from spherex_laser_miner.calibration import (
+    SPECTRAL_WCS_COLLECTION,
+    image_to_ujy_per_pixel,
+    load_sapm,
+    load_spectral_wcs_maps,
+    sample_wavelength_maps,
+    variance_to_ujy2,
+)
 from spherex_laser_miner.catalog.gaia import query_gaia_for_s_region
 from spherex_laser_miner.catalog.manual_targets import ManualTarget
 from spherex_laser_miner.config import MinerConfig
@@ -119,13 +126,17 @@ def run_trial_field_worker(
             zodi = hdul["ZODI"].data if "ZODI" in hdul else None
             psf_cube = hdul["PSF"].data if "PSF" in hdul else None
             spatial_wcs = WCS(image_hdu.header)
-            spectral_wcs = _make_spectral_wcs(hdul, image_hdu.header)
             obs_mid_mjd = float(trial["obs_mid_mjd"])
             detector = int(trial["detector"])
             perf["fits_open_sec"] += time.perf_counter() - t0
 
             t0 = time.perf_counter()
             sapm_data, sapm_header, sapm_path = load_sapm(cfg.cache_root, cfg.release, detector)
+            cwave_map, cband_map, _wave_header, wavelength_calibration_path = load_spectral_wcs_maps(
+                cfg.cache_root,
+                cfg.release,
+                detector,
+            )
             flux_ujy = image_to_ujy_per_pixel(image, image_hdu.header, sapm_data, sapm_header)
             var_ujy2 = (
                 variance_to_ujy2(variance, image_hdu.header, sapm_data, sapm_header)
@@ -163,6 +174,7 @@ def run_trial_field_worker(
             x_arr, y_arr = spatial_wcs.world_to_pixel(SkyCoord(ra_epoch_arr * u.deg, dec_epoch_arr * u.deg))
             x_arr = np.asarray(x_arr, dtype=float)
             y_arr = np.asarray(y_arr, dtype=float)
+            cwave_arr, cband_arr = sample_wavelength_maps(cwave_map, cband_map, x_arr, y_arr)
             edge_arr = np.minimum.reduce(
                 [x_arr, y_arr, image.shape[1] - 1 - x_arr, image.shape[0] - 1 - y_arr]
             )
@@ -186,6 +198,12 @@ def run_trial_field_worker(
                     "y_pix": y_pix,
                     "inside_image": inside,
                     "edge_distance_pix": edge_pix,
+                    "cwave_um": _optional_float(cwave_arr[idx]),
+                    "cband_um": _optional_float(cband_arr[idx]),
+                    "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+                    "wavelength_calibration_file": str(wavelength_calibration_path),
+                    "wavelength_calibration_collection": SPECTRAL_WCS_COLLECTION,
+                    "wavelength_detector": detector,
                     "selected_for_photometry": selected,
                     "rejection_reason": None if selected else "outside_or_edge",
                 }
@@ -224,7 +242,8 @@ def run_trial_field_worker(
             for row_idx, row in enumerate(selected_rows):
                 x_pix = float(row["x_pix"])
                 y_pix = float(row["y_pix"])
-                cwave_um, cband_um = _wavelength_at(spectral_wcs, x_pix, y_pix)
+                cwave_um = _optional_float(row.get("cwave_um"))
+                cband_um = _optional_float(row.get("cband_um"))
                 aperture_json = {
                     "aperture_status": "diagnostic_disabled",
                     "aperture_flux": None,
@@ -290,8 +309,10 @@ def run_trial_field_worker(
                     "filter_profile": cfg.filter_profile,
                     "cwave_um": cwave_um,
                     "cband_um": cband_um,
-                    "wavelength_source": "MEF WCS-WAVE",
-                    "wavelength_calibration_file": None,
+                    "wavelength_source": "spectral_wcs_CWAVE_CBAND",
+                    "wavelength_calibration_file": str(wavelength_calibration_path),
+                    "wavelength_calibration_collection": SPECTRAL_WCS_COLLECTION,
+                    "wavelength_detector": detector,
                     "sapm_file_path": str(sapm_path),
                     "image_unit": str(image_hdu.header.get("BUNIT", "")),
                     "photometry_backend": cfg.photometry_backend,
