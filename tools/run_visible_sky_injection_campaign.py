@@ -198,7 +198,7 @@ def _run_blind_raw(
         "--flux-kind",
         flux_kind,
         "--min-snr",
-        str(args.blind_min_snr),
+        str(args.blind_raw_min_snr),
         "--min-supporting-points",
         str(args.blind_min_supporting_points),
         "--device",
@@ -299,6 +299,7 @@ def main() -> None:
     parser.add_argument("--blind-scan", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--blind-grid-step-nm", type=float, default=5.0)
     parser.add_argument("--blind-min-snr", type=float, default=5.0)
+    parser.add_argument("--blind-raw-min-snr", type=float, default=5.0)
     parser.add_argument("--blind-min-supporting-points", type=int, default=2)
     parser.add_argument("--blind-flux-kind", choices=["aperture", "psf", "both"], default="both")
     parser.add_argument("--blind-warp-device", default="cuda:0")
