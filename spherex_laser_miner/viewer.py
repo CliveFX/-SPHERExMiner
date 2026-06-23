@@ -55,6 +55,8 @@ def _make_handler(run_dir: Path):
                     self._send_html(_spectra_html())
                 elif path == "/injections":
                     self._send_html(_injections_html())
+                elif path == "/recovery-summary":
+                    self._send_html(_recovery_summary_html())
                 elif path == "/frame-point":
                     self._send_html(_frame_point_html(active_run_dir, params))
                 elif path == "/api/runs":
@@ -85,6 +87,8 @@ def _make_handler(run_dir: Path):
                     self._send_json(_spectrum(active_run_dir, target_id))
                 elif path == "/api/injections":
                     self._send_json(_injections(active_run_dir, params))
+                elif path == "/api/recovery-summary":
+                    self._send_json(_recovery_summary(runs_root, params))
                 elif path.startswith("/api/injection/"):
                     injection_id = urllib.parse.unquote(path.removeprefix("/api/injection/"))
                     self._send_json(_injection_detail(active_run_dir, injection_id))
@@ -179,6 +183,156 @@ def _summary(run_dir: Path) -> dict[str, object]:
     assembly = _read_json(run_dir / "spectra" / "assembly_summary.json")
     jobs = _read_json(run_dir / "field_jobs.json")
     return {"run_dir": str(run_dir), "qa": qa, "assembly": assembly, "field_job_count": len(jobs) if isinstance(jobs, list) else 0}
+
+
+def _recovery_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    campaign_filter = (params.get("campaign") or [""])[0].strip()
+    q = (params.get("q") or [""])[0].strip().lower()
+    limit_false = min(500, max(25, _query_int(params, "false_limit", 100)))
+    run_rows: list[dict[str, object]] = []
+    strength_rows: list[dict[str, object]] = []
+    line_rows: list[dict[str, object]] = []
+    false_rows: list[dict[str, object]] = []
+
+    if not runs_root.exists():
+        return _recovery_summary_payload([], [], [], [], campaign_filter)
+
+    run_dirs = sorted([path for path in runs_root.iterdir() if path.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True)
+    for run_dir in run_dirs:
+        recovery_dir = run_dir / "recovery_score_mixed_lasers"
+        summary_path = recovery_dir / "recovery_summary.json"
+        if not summary_path.exists():
+            continue
+        summary = _read_json(summary_path)
+        if not isinstance(summary, dict):
+            continue
+        campaign, target = _campaign_and_target_from_run(run_dir.name)
+        if campaign_filter and campaign != campaign_filter:
+            continue
+        if q and q not in run_dir.name.lower() and q not in str(target).lower() and q not in str(campaign).lower():
+            continue
+        row = {
+            "run_name": run_dir.name,
+            "campaign": campaign,
+            "target": target,
+            "mtime": run_dir.stat().st_mtime,
+            "mtime_iso": _format_time(run_dir.stat().st_mtime),
+            "injection_count": int(summary.get("injection_count") or 0),
+            "recovered_count": int(summary.get("recovered_count") or 0),
+            "missed_count": int(summary.get("injection_count") or 0) - int(summary.get("recovered_count") or 0),
+            "recovery_fraction": _maybe_float(summary.get("recovery_fraction")),
+            "candidate_count_above_threshold": int(summary.get("candidate_count_above_threshold") or 0),
+            "false_positive_count": int(summary.get("false_positive_count") or 0),
+            "false_positives_per_injection": _maybe_float(summary.get("false_positives_per_injection")),
+            "min_snr": _maybe_float(summary.get("min_snr")),
+            "wavelength_tolerance_nm": _maybe_float(summary.get("wavelength_tolerance_nm")),
+            "injections_url": f"/injections?run={urllib.parse.quote(run_dir.name)}",
+            "false_positive_url": f"/injections?run={urllib.parse.quote(run_dir.name)}&status=candidate",
+        }
+        run_rows.append(row)
+        strength_rows.extend(_recovery_group_rows(recovery_dir / "recovery_by_strength.parquet", run_dir.name, campaign, target))
+        line_rows.extend(_recovery_group_rows(recovery_dir / "recovery_by_line.parquet", run_dir.name, campaign, target))
+        false_path = recovery_dir / "false_positive_candidates.parquet"
+        if false_path.exists():
+            false_rows.extend(_false_positive_rows(false_path, run_dir.name, campaign, target, limit_false))
+
+    campaigns = sorted({str(row["campaign"]) for row in run_rows if row.get("campaign")})
+    return _recovery_summary_payload(run_rows, strength_rows, line_rows, false_rows[:limit_false], campaign_filter, campaigns)
+
+
+def _campaign_and_target_from_run(run_name: str) -> tuple[str, str]:
+    stem = run_name.removesuffix("_injected").removesuffix("_baseline")
+    if "_cvj_" in stem:
+        campaign, rest = stem.split("_cvj_", 1)
+        return campaign, "cvj_" + rest
+    parts = stem.rsplit("_", 1)
+    return (parts[0], stem) if len(parts) == 2 else ("", stem)
+
+
+def _recovery_group_rows(path: Path, run_name: str, campaign: str, target: str) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    try:
+        df = pd.read_parquet(path)
+    except Exception:
+        return []
+    rows = []
+    for row in df.to_dict(orient="records"):
+        out = dict(row)
+        out.update({"run_name": run_name, "campaign": campaign, "target": target})
+        rows.append(out)
+    return rows
+
+
+def _false_positive_rows(path: Path, run_name: str, campaign: str, target: str, limit: int) -> list[dict[str, object]]:
+    try:
+        df = pd.read_parquet(path)
+    except Exception:
+        return []
+    if df.empty:
+        return []
+    if "matched_snr" in df.columns:
+        df = df.sort_values("matched_snr", ascending=False, na_position="last")
+    rows = []
+    for row in df.head(limit).to_dict(orient="records"):
+        out = dict(row)
+        out.update(
+            {
+                "run_name": run_name,
+                "campaign": campaign,
+                "target": target,
+                "injections_url": f"/injections?run={urllib.parse.quote(run_name)}&status=candidate&q={urllib.parse.quote(str(row.get('target_id') or ''))}",
+            }
+        )
+        rows.append(out)
+    return rows
+
+
+def _recovery_summary_payload(
+    runs: list[dict[str, object]],
+    by_strength_rows: list[dict[str, object]],
+    by_line_rows: list[dict[str, object]],
+    false_rows: list[dict[str, object]],
+    campaign_filter: str,
+    campaigns: list[str] | None = None,
+) -> dict[str, object]:
+    total_injections = sum(int(row.get("injection_count") or 0) for row in runs)
+    total_recovered = sum(int(row.get("recovered_count") or 0) for row in runs)
+    total_false = sum(int(row.get("false_positive_count") or 0) for row in runs)
+    return {
+        "summary": {
+            "run_count": len(runs),
+            "injection_count": total_injections,
+            "recovered_count": total_recovered,
+            "missed_count": total_injections - total_recovered,
+            "recovery_fraction": float(total_recovered / total_injections) if total_injections else None,
+            "false_positive_count": total_false,
+            "false_positives_per_injection": float(total_false / total_injections) if total_injections else None,
+            "campaign_filter": campaign_filter,
+        },
+        "campaigns": campaigns or [],
+        "runs": runs,
+        "by_strength": _aggregate_recovery_rows(by_strength_rows, "find_me_snr"),
+        "by_line": _aggregate_recovery_rows(by_line_rows, "line_family"),
+        "false_positives": false_rows,
+    }
+
+
+def _aggregate_recovery_rows(rows: list[dict[str, object]], key: str) -> list[dict[str, object]]:
+    if not rows:
+        return []
+    df = pd.DataFrame(rows)
+    if key not in df.columns:
+        return []
+    df["injections"] = pd.to_numeric(df.get("injections", 0), errors="coerce").fillna(0)
+    df["recovered"] = pd.to_numeric(df.get("recovered", 0), errors="coerce").fillna(0)
+    grouped = df.groupby(key, dropna=False).agg(injections=("injections", "sum"), recovered=("recovered", "sum")).reset_index()
+    grouped["missed"] = grouped["injections"] - grouped["recovered"]
+    grouped["recovery_fraction"] = grouped["recovered"] / grouped["injections"].replace(0, np.nan)
+    if "median_recovered_snr" in df.columns:
+        snr = df.groupby(key, dropna=False)["median_recovered_snr"].median().rename("median_recovered_snr").reset_index()
+        grouped = grouped.merge(snr, on=key, how="left")
+    return grouped.sort_values(key, kind="mergesort").to_dict(orient="records")
 
 
 def _fields(run_dir: Path) -> list[dict[str, object]]:
@@ -370,7 +524,8 @@ def _evaluation_status(run_dir: Path, summary: dict[str, object]) -> dict[str, o
                 "observation_id": candidate.get("obs_id"),
                 "edge_distance_pix": trial.get("edge_distance_pix"),
                 "download_status": trial.get("download_status"),
-                "error": trial.get("error"),
+                "error": trial.get("error") or trial.get("error_message"),
+                "error_type": trial.get("error_type"),
             }
         )
     summary_out = dict(summary)
@@ -1941,6 +2096,151 @@ function escapeHtml(v) {
 
 tick();
 setInterval(tick, 1500);
+</script>
+</body>
+</html>"""
+
+
+def _recovery_summary_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SPHEREx Recovery Summary</title>
+  <style>
+    :root { --bg:#050914; --panel:#0b1424; --line:#1f3a5f; --text:#e7f6ff; --muted:#86a4bf; --cyan:#36e7ff; --pink:#ff4fd8; --green:#25f38c; --amber:#ffb84a; --red:#ff5c7c; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--text); font:13px system-ui, sans-serif; background:linear-gradient(90deg, rgba(54,231,255,.045) 1px, transparent 1px), linear-gradient(rgba(255,79,216,.035) 1px, transparent 1px), var(--bg); background-size:42px 42px; letter-spacing:0; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:12px 16px; border-bottom:1px solid var(--line); background:rgba(5,9,20,.94); position:sticky; top:0; z-index:2; }
+    h1 { margin:0; font-size:18px; color:var(--cyan); text-shadow:0 0 16px rgba(54,231,255,.45); }
+    a { color:#93e8ff; text-decoration:none; }
+    main { padding:12px; display:grid; gap:12px; }
+    section, .tile { border:1px solid var(--line); background:rgba(11,20,36,.92); border-radius:6px; box-shadow:inset 0 0 0 1px rgba(54,231,255,.035); }
+    section { padding:10px; min-width:0; }
+    .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+    select, input, button { color:var(--text); background:#07101e; border:1px solid var(--line); border-radius:4px; padding:7px 9px; }
+    button { cursor:pointer; font-weight:600; background:rgba(54,231,255,.12); }
+    button:hover { border-color:var(--cyan); box-shadow:0 0 12px rgba(54,231,255,.25); }
+    .tiles { display:grid; grid-template-columns:repeat(7, minmax(120px, 1fr)); gap:8px; }
+    .tile { padding:9px; min-width:0; }
+    .k { color:var(--muted); font-size:10px; text-transform:uppercase; }
+    .v { margin-top:4px; font:20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow:hidden; text-overflow:ellipsis; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    h2 { margin:0 0 8px; color:var(--cyan); font-size:14px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed; }
+    th,td { padding:5px 6px; border-bottom:1px solid rgba(31,58,95,.75); text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    th { color:#8eeaff; background:#0b182b; position:sticky; top:0; z-index:1; }
+    .scroll { max-height:360px; overflow:auto; border:1px solid rgba(31,58,95,.75); border-radius:4px; }
+    .good { color:var(--green); }
+    .warn { color:var(--amber); }
+    .bad { color:var(--red); }
+    .muted { color:var(--muted); }
+    .mono { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    @media (max-width:1100px) { .tiles { grid-template-columns:repeat(2, 1fr); } .grid { grid-template-columns:1fr; } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Recovery Summary</h1>
+  <div class="controls">
+    <select id="campaign" onchange="refresh()"><option value="">All campaigns</option></select>
+    <input id="query" placeholder="filter target/campaign" oninput="scheduleRefresh()">
+    <button type="button" onclick="refresh()">Refresh</button>
+    <a href="/simple-status">Status</a>
+    <a href="/spectra">Spectra</a>
+    <a href="/injections">Injections</a>
+  </div>
+</header>
+<main>
+  <div class="tiles" id="tiles"></div>
+  <div class="grid">
+    <section><h2>Recovery By Strength</h2><div class="scroll" id="byStrength"></div></section>
+    <section><h2>Recovery By Line</h2><div class="scroll" id="byLine"></div></section>
+  </div>
+  <section><h2>Completed Recovery Runs</h2><div class="scroll" id="runs"></div></section>
+  <section><h2>False Positives</h2><div class="scroll" id="falsePositives"></div></section>
+</main>
+<script>
+let timer = null;
+async function getJSON(url) {
+  const r = await fetch(url, {cache:'no-store'});
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+function params() {
+  const p = new URLSearchParams();
+  const campaign = document.getElementById('campaign').value;
+  const q = document.getElementById('query').value.trim();
+  if (campaign) p.set('campaign', campaign);
+  if (q) p.set('q', q);
+  p.set('ts', Date.now());
+  return '?' + p.toString();
+}
+function scheduleRefresh() {
+  clearTimeout(timer);
+  timer = setTimeout(refresh, 180);
+}
+async function refresh() {
+  const data = await getJSON('/api/recovery-summary' + params());
+  syncCampaigns(data.campaigns || []);
+  renderTiles(data.summary || {});
+  document.getElementById('byStrength').innerHTML = table(data.by_strength || [], ['find_me_snr','injections','recovered','missed','recovery_fraction','median_recovered_snr']);
+  document.getElementById('byLine').innerHTML = table(data.by_line || [], ['line_family','injections','recovered','missed','recovery_fraction']);
+  document.getElementById('runs').innerHTML = table(data.runs || [], ['campaign','target','injection_count','recovered_count','missed_count','recovery_fraction','false_positive_count','min_snr','links']);
+  document.getElementById('falsePositives').innerHTML = table(data.false_positives || [], ['campaign','target','target_id','line_family','candidate_line_nm','matched_snr','matched_flux_uJy','n_supporting_points','links']);
+}
+function syncCampaigns(campaigns) {
+  const sel = document.getElementById('campaign');
+  const old = sel.value;
+  sel.innerHTML = '<option value="">All campaigns</option>' + campaigns.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  sel.value = campaigns.includes(old) ? old : '';
+}
+function renderTiles(s) {
+  const tiles = [
+    ['Runs', s.run_count],
+    ['Injections', s.injection_count],
+    ['Recovered', s.recovered_count],
+    ['Missed', s.missed_count],
+    ['Recovery', pct(s.recovery_fraction)],
+    ['False +', s.false_positive_count],
+    ['False + / inj', fmt(s.false_positives_per_injection)]
+  ];
+  document.getElementById('tiles').innerHTML = tiles.map(([k,v]) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(v ?? '-')}</div></div>`).join('');
+}
+function table(rows, cols) {
+  if (!rows.length) return '<div class="muted">No rows</div>';
+  return '<table><thead><tr>' + cols.map(c => `<th>${esc(c)}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map(r => '<tr>' + cols.map(c => cell(r, c)).join('') + '</tr>').join('') + '</tbody></table>';
+}
+function cell(row, col) {
+  if (col === 'links') {
+    const run = row.run_name || '';
+    const fp = row.injections_url || row.false_positive_url || `/injections?run=${encodeURIComponent(run)}&status=candidate`;
+    const spec = `/spectra?run=${encodeURIComponent(run)}`;
+    return `<td><a href="${fp}">review</a> <span class="muted">/</span> <a href="${spec}">spectra</a></td>`;
+  }
+  const raw = row[col];
+  const val = col.includes('fraction') ? pct(raw) : fmt(raw);
+  const cls = col.includes('false') && Number(raw) > 0 ? 'bad' : (col.includes('fraction') ? fracCls(raw) : '');
+  return `<td class="${cls}" title="${esc(val)}">${esc(val)}</td>`;
+}
+function fracCls(v) { const n=Number(v); if(!Number.isFinite(n)) return ''; return n >= .95 ? 'good' : n >= .75 ? 'warn' : 'bad'; }
+function pct(v) { const n=Number(v); return Number.isFinite(n) ? (100*n).toFixed(1)+'%' : '-'; }
+function fmt(v) {
+  if (v === null || v === undefined || v === '') return '';
+  const n = Number(v);
+  if (Number.isFinite(n)) {
+    if (Math.abs(n) >= 100000) return n.toExponential(3);
+    if (Math.abs(n) >= 100) return n.toFixed(1);
+    if (Math.abs(n) >= 10) return n.toFixed(2);
+    return n.toFixed(3).replace(/\\.000$/, '');
+  }
+  return String(v);
+}
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+}
+refresh().catch(e => document.body.insertAdjacentHTML('beforeend','<pre class="bad">'+esc(e.stack || String(e))+'</pre>'));
 </script>
 </body>
 </html>"""
