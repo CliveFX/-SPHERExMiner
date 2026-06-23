@@ -290,7 +290,7 @@ def _false_positive_rows(path: Path, run_name: str, campaign: str, target: str, 
         target_id = str(row.get("target_id") or "")
         spectra_url = f"/spectra?run={urllib.parse.quote(run_name)}&target={urllib.parse.quote(target_id)}"
         review_url = f"/injections?run={urllib.parse.quote(run_name)}&status=false_positive&q={urllib.parse.quote(target_id)}"
-        blind_url = f"/blind-candidates?run={urllib.parse.quote(run_name)}&scope=paired&q={urllib.parse.quote(target_id)}"
+        blind_url = f"/blind-candidates?run={urllib.parse.quote(run_name)}&scope=paired&target={urllib.parse.quote(target_id)}"
         out = dict(row)
         out.update(
             {
@@ -1151,8 +1151,11 @@ def _blind_candidates(run_dir: Path, params: dict[str, list[str]]) -> dict[str, 
     df = pd.read_parquet(path)
     if df.empty:
         return {"rows": [], "total": 0, "limit": 0, "offset": 0, "summary": {"path": str(path)}}
+    target_filter = (params.get("target") or [""])[0].strip()
     q = (params.get("q") or [""])[0].strip().lower()
     tier = (params.get("tier") or ["all"])[0]
+    if target_filter and "target_id" in df:
+        df = df[df["target_id"].astype(str).eq(target_filter)]
     if tier != "all" and "tier" in df:
         df = df[df["tier"].astype(str).eq(tier)]
     if q:
@@ -3009,6 +3012,7 @@ def _blind_candidates_html() -> str:
 let activeRun = new URLSearchParams(window.location.search).get('run') || '';
 let rows = [], offset = 0, total = 0, limit = 300, selectedId = null, detail = null, timer = null;
 const initialParams = new URLSearchParams(window.location.search);
+let activeTargetFilter = initialParams.get('target') || '';
 async function getJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); return await r.json(); }
 function runQS(extra){ const p=new URLSearchParams(extra||''); if(activeRun) p.set('run', activeRun); const s=p.toString(); return s?'?'+s:''; }
 async function refreshAll(){
@@ -3019,12 +3023,12 @@ async function refreshAll(){
   rs.value=activeRun;
   await fetchCandidates(0);
 }
-function switchRun(){ activeRun=document.getElementById('runSelect').value; selectedId=null; detail=null; fetchCandidates(0); }
-function scheduleFetch(){ clearTimeout(timer); timer=setTimeout(()=>fetchCandidates(0),180); }
+function switchRun(){ activeRun=document.getElementById('runSelect').value; selectedId=null; detail=null; activeTargetFilter=''; fetchCandidates(0); }
+function scheduleFetch(){ activeTargetFilter=''; clearTimeout(timer); timer=setTimeout(()=>fetchCandidates(0),180); }
 async function fetchCandidates(nextOffset){
   offset=Math.max(0,nextOffset||0);
   limit=Number(document.getElementById('limit').value)||300;
-  const p=`limit=${limit}&offset=${offset}&tier=${encodeURIComponent(val('tier'))}&sort=${encodeURIComponent(val('sort'))}&scope=${encodeURIComponent(val('scope'))}&q=${encodeURIComponent(document.getElementById('query').value.trim())}`;
+  const p=`limit=${limit}&offset=${offset}&tier=${encodeURIComponent(val('tier'))}&sort=${encodeURIComponent(val('sort'))}&scope=${encodeURIComponent(val('scope'))}&q=${encodeURIComponent(document.getElementById('query').value.trim())}&target=${encodeURIComponent(activeTargetFilter)}`;
   const data=await getJSON('/api/blind-candidates'+runQS(p));
   rows=data.rows||[]; total=data.total||0; offset=data.offset||0; renderList(data.summary||{});
   if(rows.length && (!selectedId || !rows.some(r=>r.joint_candidate_id===selectedId))) selectCandidate(rows[0].joint_candidate_id);
@@ -3032,7 +3036,8 @@ async function fetchCandidates(nextOffset){
 function page(dir){ fetchCandidates(Math.max(0, offset + dir*limit)); }
 function renderList(summary){
   const start=total?offset+1:0, end=Math.min(total, offset+rows.length);
-  document.getElementById('pageInfo').textContent=`${start}-${end} of ${total} · ${summary.path||''}`;
+  const exact = activeTargetFilter ? ` · exact target ${activeTargetFilter}` : '';
+  document.getElementById('pageInfo').textContent=`${start}-${end} of ${total}${exact} · ${summary.path||''}`;
   const cols=['tier','rank_score','peak_line_nm','aperture_peak_snr','psf_peak_snr','aperture_support','psf_support','flagged_points_sum','target_id'];
   document.getElementById('candidateList').innerHTML='<table><thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>'+
     rows.map(r=>`<tr class="${r.joint_candidate_id===selectedId?'selected':''}" onclick="selectCandidate('${attr(r.joint_candidate_id)}')">`+
@@ -3160,7 +3165,7 @@ function applyInitialFilters(){
     const el = document.getElementById(id);
     if(value && el && [...el.options].some(o=>o.value===value || o.text===value)) el.value = value;
   }
-  const q = initialParams.get('q');
+  const q = initialParams.get('q') || activeTargetFilter;
   if(q) document.getElementById('query').value = q;
 }
 applyInitialFilters();
