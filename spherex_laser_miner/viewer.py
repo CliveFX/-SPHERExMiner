@@ -114,6 +114,7 @@ def _make_handler(run_dir: Path):
             body = json.dumps(_clean_json(data), indent=2, allow_nan=False).encode("utf-8")
             self.send_response(status)
             self.send_header("Content-Type", "application/json")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -122,6 +123,7 @@ def _make_handler(run_dir: Path):
             body = html.encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -3165,8 +3167,7 @@ function applyInitialFilters(){
     const el = document.getElementById(id);
     if(value && el && [...el.options].some(o=>o.value===value || o.text===value)) el.value = value;
   }
-  const q = initialParams.get('q') || activeTargetFilter;
-  if(q) document.getElementById('query').value = q;
+  document.getElementById('query').value = initialParams.get('q') || activeTargetFilter || '';
 }
 applyInitialFilters();
 refreshAll();
