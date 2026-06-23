@@ -3061,6 +3061,16 @@ function drawPlot(rows,cand){
   for(let v=1;v<=5;v++){ line(xs(v),m.t,xs(v),H-m.b,'#21405b',.55); text(xs(v),H-18,String(v),'#90a4b8','middle'); }
   for(let i=0;i<5;i++){ const yy=m.t+i*(H-m.t-m.b)/4; const val=ymin+(ymax-ymin)*(1-i/4); line(m.l,yy,W-m.r,yy,'#21405b',.55); text(m.l-8,yy+4,fmt(val),'#90a4b8','end'); }
   line(m.l,H-m.b,W-m.r,H-m.b,'#90a4b8',1); line(m.l,m.t,m.l,H-m.b,'#90a4b8',1);
+  for(const kind of ['ap','psf']){
+    const color = kind==='psf' ? '#c084fc' : '#22c55e';
+    const rows = pts.filter(p=>p.k===kind && !p.flag).sort((a,b)=>a.x-b.x);
+    let d = '';
+    for(const p of rows){
+      const xx=xs(p.x), yy=yscl(p.y);
+      d += d ? ` L ${xx} ${yy}` : `M ${xx} ${yy}`;
+    }
+    if(d) path(d,color,.72,1.6);
+  }
   for(const p of pts){ const color=p.flag?'#fb7185':(p.k==='psf'?'#c084fc':'#22c55e'); circle(xs(p.x),yscl(p.y),p.k==='psf'?3.2:2.8,color,p.flag ? .35 : .8); }
   const c=num(cand.peak_line_nm)/1000, lo=num(cand.line_min_nm)/1000, hi=num(cand.line_max_nm)/1000;
   if(Number.isFinite(lo)&&Number.isFinite(hi)){ rect(xs(lo),m.t,Math.max(1,xs(hi)-xs(lo)),H-m.t-m.b,'#ff4fd8',.08); }
@@ -3070,6 +3080,7 @@ function drawPlot(rows,cand){
   function line(x1,y1,x2,y2,c,o,w=1){ add('line',{x1,y1,x2,y2,stroke:c,opacity:o,'stroke-width':w}); }
   function rect(x,y,w,h,c,o){ add('rect',{x,y,width:w,height:h,fill:c,opacity:o}); }
   function circle(cx,cy,r,c,o){ if(Number.isFinite(cx)&&Number.isFinite(cy)) add('circle',{cx,cy,r,fill:c,opacity:o}); }
+  function path(d,c,o,w){ add('path',{d,fill:'none',stroke:c,opacity:o,'stroke-width':w,'vector-effect':'non-scaling-stroke'}); }
   function text(x,y,s,c,a){ const el=add('text',{x,y,fill:c,'text-anchor':a}); el.textContent=s; }
 }
 function drawLinePlot(scores,cand){
@@ -3099,7 +3110,7 @@ function drawLinePlot(scores,cand){
     const rows=s.rows.map(r=>({x:num(r.candidate_line_nm)/1000,y:num(r.matched_snr),support:num(r.n_supporting_points),flags:num(r.n_flagged_nearby)})).filter(p=>Number.isFinite(p.x)&&Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);
     let d='';
     for(const p of rows){ const xx=xs(p.x), yy=ys(p.y); d += d ? ` L ${xx} ${yy}` : `M ${xx} ${yy}`; }
-    if(d) path(d,s.color,.9,1.7);
+    if(d) path(d,s.color,.95,2.4);
     for(const p of rows){ circle(xs(p.x),ys(p.y),p.flags>0?2.7:2.1,s.color,p.support>=2?.75:.35); }
   }
   if(Number.isFinite(peak)){ line(xs(peak),m.t,xs(peak),H-m.b,'#ff4fd8',.95,2); text(xs(peak)+5,m.t+16,fmt(cand.peak_line_nm)+' nm','#ff9dea','start'); }
@@ -3112,7 +3123,7 @@ function drawLinePlot(scores,cand){
   function line(x1,y1,x2,y2,c,o,w=1){ add('line',{x1,y1,x2,y2,stroke:c,opacity:o,'stroke-width':w}); }
   function rect(x,y,w,h,c,o){ add('rect',{x,y,width:w,height:h,fill:c,opacity:o}); }
   function circle(cx,cy,r,c,o){ if(Number.isFinite(cx)&&Number.isFinite(cy)) add('circle',{cx,cy,r,fill:c,opacity:o}); }
-  function path(d,c,o,w){ add('path',{d,fill:'none',stroke:c,opacity:o,'stroke-width':w}); }
+  function path(d,c,o,w){ add('path',{d,fill:'none',stroke:c,opacity:o,'stroke-width':w,'vector-effect':'non-scaling-stroke'}); }
   function text(x,y,s,c,a){ const el=add('text',{x,y,fill:c,'text-anchor':a}); el.textContent=s; }
 }
 function val(id){ return document.getElementById(id).value; }
