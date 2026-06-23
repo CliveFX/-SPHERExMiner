@@ -25,3 +25,16 @@ targets:
     source_catalog_id: "191109281417914880"
     priority_score: 100.0
     notes: "Gaia DR3 counterpart to 2MASS J05392474+4038437; Gaia position back-propagates to within 1.14 arcsec of 2MASS-name coordinate at epoch 2000."
+  - target_id: arcturus
+    target_type: manual_coordinate
+    object_name: "Arcturus / Alpha Boo"
+    ra_deg: 213.915300
+    dec_deg: 19.182409
+    reference_epoch_yr: 2000.0
+    pmra_masyr: -1093.39
+    pmdec_masyr: -1999.85
+    parallax_mas: 88.83
+    source_catalog: manual
+    source_catalog_id: arcturus
+    priority_score: 100.0
+    notes: "Bright high-proper-motion anchor target for deep Arcturus-region SPHEREx runs."
