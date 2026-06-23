@@ -22,7 +22,7 @@ class MinerConfig(BaseModel):
     psf_grid_step_pix: float = 0.5
     psf_grid_metric: Literal["snr", "chi2"] = "snr"
     psf_kernel_radius_native: int = 5
-    status_mode: Literal["live", "jsonl", "off"] = "live"
+    status_mode: Literal["jsonl", "off"] = "jsonl"
     warp_devices: tuple[str, ...] = ("cuda:0", "cuda:1", "cuda:2")
     enable_psf_photometry: bool = False
     enable_diagnostic_aperture: bool = False

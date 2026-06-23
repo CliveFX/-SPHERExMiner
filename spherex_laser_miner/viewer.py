@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import html
-import sqlite3
 import subprocess
 import threading
 import urllib.parse
@@ -22,7 +21,6 @@ from astropy.coordinates import SkyCoord
 from astropy.io import fits
 
 from spherex_laser_miner.coarse_status import read_coarse_summary, tail_events
-from spherex_laser_miner.live_status import db_path, init_live_status
 
 
 _COMPLETED_TARGET_CACHE: dict[tuple[str, str, float, float], list[dict[str, object]]] = {}
@@ -50,7 +48,7 @@ def _make_handler(run_dir: Path):
                 if path == "/":
                     self._send_html(_index_html())
                 elif path == "/live":
-                    self._send_html(_live_html())
+                    self._send_html(_simple_status_html())
                 elif path == "/simple-status":
                     self._send_html(_simple_status_html())
                 elif path == "/spectra":
@@ -206,124 +204,28 @@ def _fields(run_dir: Path) -> list[dict[str, object]]:
 
 
 def _live_status(run_dir: Path) -> dict[str, object]:
-    init_live_status(run_dir)
-    path = db_path(run_dir)
-    with sqlite3.connect(path) as con:
-        con.row_factory = sqlite3.Row
-        frame_limit = 32
-        frames = [
-            dict(row)
-            for row in con.execute(
-                """
-                SELECT * FROM frames
-                ORDER BY
-                  CASE status WHEN 'active' THEN 0 WHEN 'error' THEN 1 ELSE 2 END,
-                  worker_name ASC,
-                  started_at ASC,
-                  updated_at DESC
-                LIMIT 96
-                """
-            )
-        ]
-        has_live_frames = bool(frames)
-        if not frames:
-            frames = _completed_live_frames_from_jobs(run_dir, limit=frame_limit)
-        else:
-            active = sorted(
-                [row for row in frames if row.get("status") == "active"],
-                key=lambda row: (_worker_sort_key(row.get("worker_name")), float(row.get("started_at") or 0)),
-            )
-            recent = sorted(
-                [row for row in frames if row.get("status") != "active"],
-                key=lambda row: float(row.get("updated_at") or 0),
-                reverse=True,
-            )
-            frames = (active + recent)[:frame_limit]
-
-        frame_ids = [str(frame["image_id"]) for frame in frames if frame.get("image_id")]
-        targets_by_frame: dict[str, list[dict[str, object]]] = {image_id: [] for image_id in frame_ids}
-        target_counts_by_frame: dict[str, dict[str, int]] = {}
-        if has_live_frames and frame_ids:
-            placeholders = ",".join("?" for _ in frame_ids)
-            for row in con.execute(
-                f"""
-                SELECT image_id, status, COUNT(*) AS count
-                FROM targets
-                WHERE image_id IN ({placeholders})
-                GROUP BY image_id, status
-                """,
-                frame_ids,
-            ):
-                target_counts_by_frame.setdefault(str(row["image_id"]), {})[str(row["status"])] = int(row["count"])
-            for row in con.execute(
-                f"""
-                WITH ranked AS (
-                  SELECT *,
-                    ROW_NUMBER() OVER (
-                      PARTITION BY image_id
-                      ORDER BY
-                        CASE status WHEN 'active' THEN 0 WHEN 'queued' THEN 1 WHEN 'error' THEN 2 ELSE 3 END,
-                        updated_at DESC
-                    ) AS rn
-                  FROM targets
-                  WHERE image_id IN ({placeholders})
-                )
-                SELECT * FROM ranked
-                WHERE rn <= ?
-                ORDER BY image_id, rn
-                """,
-                [*frame_ids, LIVE_TARGET_OVERLAY_LIMIT_PER_FRAME],
-            ):
-                targets_by_frame.setdefault(str(row["image_id"]), []).append(dict(row))
-
-        spectra = [
-            dict(row)
-            for row in con.execute(
-                """
-                SELECT * FROM spectra_points
-                WHERE cwave_um IS NOT NULL
-                ORDER BY updated_at DESC
-                LIMIT 2500
-                """
-            )
-        ]
-
-    for frame in frames:
-        image_id = str(frame.get("image_id"))
-        if not frame.get("input_file_path"):
-            job = _job_by_image_id(run_dir, image_id)
-            if job:
-                frame["input_file_path"] = job.get("input_file_path")
-                candidate = dict(job.get("candidate") or {})
-                frame["detector"] = candidate.get("detector")
-                frame["observation_id"] = candidate.get("obs_id")
-        frame["targets"] = targets_by_frame.get(image_id) or _completed_targets_for_frame(run_dir, image_id)
-        counts = {"queued": 0, "active": 0, "done": 0, "error": 0}
-        if image_id in target_counts_by_frame:
-            for status, count in target_counts_by_frame[image_id].items():
-                counts[status] = count
-        else:
-            for target in frame["targets"]:
-                status = str(target.get("status") or "queued")
-                counts[status] = counts.get(status, 0) + 1
-        frame["target_status_counts"] = counts
-        frame["target_count"] = sum(counts.values())
-        frame["target_overlay_count"] = len(frame["targets"])
-        frame["target_overlay_truncated"] = frame["target_overlay_count"] < frame["target_count"]
-        frame["progress_percent"] = (100.0 * counts.get("done", 0) / frame["target_count"]) if frame["target_count"] else None
-        frame["elapsed_sec"] = _elapsed_seconds(frame.get("started_at"), frame.get("finished_at"))
-        perf = _frame_perf(run_dir, image_id)
-        if perf:
-            frame["performance"] = perf
-
+    simple = _simple_status(run_dir)
+    fields = simple.get("fields") if isinstance(simple, dict) else []
+    frames = []
+    for field in fields if isinstance(fields, list) else []:
+        frame = dict(field)
+        image_id = str(frame.get("image_id") or "")
+        job = _job_by_image_id(run_dir, image_id)
+        if job:
+            candidate = dict(job.get("candidate") or {})
+            frame.setdefault("input_file_path", job.get("input_file_path"))
+            frame.setdefault("detector", candidate.get("detector"))
+            frame.setdefault("observation_id", candidate.get("obs_id"))
+            frame.setdefault("targets", [])
+        frames.append(frame)
     return {
         "run_dir": str(run_dir),
-        "db_path": str(path),
+        "mode": "snapshot",
         "frames": frames,
-        "spectra_points": spectra,
+        "spectra_points": [],
         "frame_count": len(frames),
         "active_frame_count": sum(1 for frame in frames if frame.get("status") == "active"),
-        "frame_limit": frame_limit,
+        "frame_limit": len(frames),
     }
 
 
@@ -339,8 +241,9 @@ def _overall_run_status(run_dir: Path) -> dict[str, object]:
     measurement_files = list(shard_root.glob("image_id=*/measurements.parquet")) if shard_root.exists() else []
     job_files = list(shard_root.glob("image_id=*/field_job.json")) if shard_root.exists() else []
 
-    live = _live_db_counts(run_dir)
-    perf = _live_perf_summary(run_dir)
+    coarse = read_coarse_summary(run_dir)
+    coarse_fields = dict(coarse.get("fields") or {}) if isinstance(coarse, dict) else {}
+    perf = _job_perf_summary(run_dir)
     spectra_dir = run_dir / "spectra"
     assembly_path = spectra_dir / "assembly_summary.json"
     assembly = _read_json(assembly_path)
@@ -348,10 +251,10 @@ def _overall_run_status(run_dir: Path) -> dict[str, object]:
     process = _depth_process_status()
 
     total_fields = len(measured_trials) or len(trials) or None
-    completed_fields = int(live.get("done", 0))
-    errored_fields = live.get("error", 0)
-    active_fields = live.get("active", 0)
-    seen_fields = live.get("total", 0)
+    completed_fields = int(coarse.get("done", 0) or len(measurement_files)) if isinstance(coarse, dict) else len(measurement_files)
+    errored_fields = int(coarse.get("error", 0) or 0) if isinstance(coarse, dict) else 0
+    active_fields = int(coarse.get("active", 0) or 0) if isinstance(coarse, dict) else 0
+    seen_fields = len(coarse_fields) if coarse_fields else len(job_files)
     progress = (100.0 * min(completed_fields + errored_fields, total_fields) / total_fields) if total_fields else None
 
     return {
@@ -365,13 +268,13 @@ def _overall_run_status(run_dir: Path) -> dict[str, object]:
         "fields_completed": completed_fields,
         "fields_seen": seen_fields,
         "live_frames_active": active_fields,
-        "live_frames_done": live.get("done", 0),
+        "live_frames_done": completed_fields,
         "live_frames_error": errored_fields,
-        "live_frames_total_seen": live.get("total", 0),
-        "live_targets_queued": live.get("target_queued", 0),
-        "live_targets_active": live.get("target_active", 0),
-        "live_targets_done": live.get("target_done", 0),
-        "live_spectra_points": live.get("spectra_points", 0),
+        "live_frames_total_seen": seen_fields,
+        "live_targets_queued": None,
+        "live_targets_active": None,
+        "live_targets_done": coarse.get("targets_measured") if isinstance(coarse, dict) else None,
+        "live_spectra_points": None,
         "performance": perf,
         "field_progress_percent": progress,
         "assembly": assembly,
@@ -427,63 +330,20 @@ def _simple_status(run_dir: Path) -> dict[str, object]:
             -float(row.get("started_at") or row.get("finished_at") or 0),
         )
     )
+    summary_out = dict(summary)
+    summary_out.pop("fields", None)
     return {
         "run_dir": str(run_dir),
         "run_name": run_dir.name,
         "mode": "jsonl",
-        "summary": summary,
+        "summary": summary_out,
         "fields": fields[:250],
         "events": tail_events(run_dir, limit=120),
     }
 
 
-def _live_db_counts(run_dir: Path) -> dict[str, int]:
-    init_live_status(run_dir)
-    path = db_path(run_dir)
-    counts: dict[str, int] = {
-        "total": 0,
-        "active": 0,
-        "done": 0,
-        "error": 0,
-        "target_queued": 0,
-        "target_active": 0,
-        "target_done": 0,
-        "spectra_points": 0,
-    }
-    try:
-        with sqlite3.connect(path) as con:
-            for status, count in con.execute("SELECT status, COUNT(*) FROM frames GROUP BY status"):
-                counts[str(status)] = int(count)
-                counts["total"] += int(count)
-            for status, count in con.execute("SELECT status, COUNT(*) FROM targets GROUP BY status"):
-                counts[f"target_{status}"] = int(count)
-            row = con.execute("SELECT COUNT(*) FROM spectra_points").fetchone()
-            counts["spectra_points"] = int(row[0] if row else 0)
-    except sqlite3.Error:
-        pass
-    return counts
-
-
-def _frame_perf(run_dir: Path, image_id: str) -> dict[str, object] | None:
-    path = db_path(run_dir)
-    try:
-        with sqlite3.connect(path) as con:
-            con.row_factory = sqlite3.Row
-            row = con.execute("SELECT * FROM frame_perf WHERE image_id = ?", (image_id,)).fetchone()
-            return dict(row) if row else None
-    except sqlite3.Error:
-        return None
-
-
-def _live_perf_summary(run_dir: Path) -> dict[str, object]:
-    init_live_status(run_dir)
-    path = db_path(run_dir)
-    try:
-        with sqlite3.connect(path) as con:
-            con.row_factory = sqlite3.Row
-            rows = [dict(row) for row in con.execute("SELECT * FROM frame_perf")]
-    except sqlite3.Error:
-        rows = []
+def _job_perf_summary(run_dir: Path) -> dict[str, object]:
+    rows = [dict(job.get("performance") or {}) for job in _jobs(run_dir) if isinstance(job, dict)]
     if not rows:
         return {
             "frames_profiled": 0,
@@ -505,7 +365,6 @@ def _live_perf_summary(run_dir: Path) -> dict[str, object]:
         "aperture_sec",
         "calibrated_aperture_sec",
         "psf_sec",
-        "status_sec",
         "write_sec",
         "elapsed_sec",
     ]
@@ -1174,13 +1033,6 @@ def _live_frame_image(run_dir: Path, image_id: str) -> Path:
     image_path: Path | None = None
     if job:
         image_path = Path(str(job.get("input_file_path")))
-    if image_path is None:
-        path = db_path(run_dir)
-        if path.exists():
-            with sqlite3.connect(path) as con:
-                row = con.execute("SELECT input_file_path FROM frames WHERE image_id = ?", (image_id,)).fetchone()
-                if row and row[0]:
-                    image_path = Path(str(row[0]))
     if image_path is None or not image_path.exists():
         raise FileNotFoundError(f"No FITS path for image_id={image_id}")
     if out.exists() and out.stat().st_mtime > image_path.stat().st_mtime:
@@ -1562,7 +1414,6 @@ def _simple_status_html() -> str:
     <select id="runSelect" onchange="switchRun()"></select>
     <button onclick="refresh()">Refresh</button>
     <a id="spectraLink" href="/spectra">Spectra</a>
-    <a id="liveLink" href="/live">Live</a>
   </div>
 </header>
 <main>
@@ -1625,7 +1476,6 @@ function switchRun() {
 
 function updateLinks() {
   document.getElementById('spectraLink').href = '/spectra' + runQS();
-  document.getElementById('liveLink').href = '/live' + runQS();
 }
 
 async function refresh() {
@@ -1859,7 +1709,7 @@ function render(data) {
   drawSpectra(data.spectra_points || []);
   document.getElementById('raw').textContent = JSON.stringify({
     run_dir: data.run_dir,
-    db_path: data.db_path,
+    mode: data.mode,
     frames: data.frames.map(f => ({
       image_id: f.image_id,
       status: f.status,
@@ -2063,7 +1913,7 @@ def _injections_html() -> str:
 <body>
 <header>
   <h1>Injection Recovery Browser</h1>
-  <div class="small"><a href="/spectra">Spectra</a> · <a href="/live">Live workers</a> · <a href="/">Fields</a></div>
+  <div class="small"><a href="/spectra">Spectra</a> · <a href="/simple-status">Status</a> · <a href="/">Fields</a></div>
 </header>
 <main>
   <section>
@@ -2405,7 +2255,7 @@ def _spectra_html() -> str:
 <body>
 <header>
   <h1>SPHEREx Spectra Browser</h1>
-  <div class="small"><a style="color:#93c5fd" href="/live">Live workers</a> · <a style="color:#93c5fd" href="/">Field viewer</a></div>
+  <div class="small"><a style="color:#93c5fd" href="/simple-status">Status</a> · <a style="color:#93c5fd" href="/">Field viewer</a></div>
 </header>
 <main>
   <section>

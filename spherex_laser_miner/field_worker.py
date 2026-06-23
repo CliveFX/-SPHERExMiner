@@ -28,7 +28,6 @@ from spherex_laser_miner.catalog.manual_targets import ManualTarget
 from spherex_laser_miner.config import MinerConfig
 from spherex_laser_miner.coarse_status import append_status_event, reset_coarse_status
 from spherex_laser_miner.coordinates import edge_distance_pix, propagate_coordinates
-from spherex_laser_miner.live_status import mark_frame, mark_frame_perf, mark_targets, reset_live_status
 from spherex_laser_miner.photometry.aperture import aperture_measure
 from spherex_laser_miner.photometry.calibrated_aperture import calibrated_aperture_measure
 from spherex_laser_miner.photometry.warp_calibrated import warp_calibrated_aperture_batch
@@ -104,19 +103,8 @@ def run_trial_field_worker(
         "aperture_sec": 0.0,
         "calibrated_aperture_sec": 0.0,
         "psf_sec": 0.0,
-        "status_sec": 0.0,
         "write_sec": 0.0,
     }
-    if cfg.status_mode == "live":
-        mark_frame(
-            cfg.smoke_run_dir,
-            image_id=image_id,
-            status="active",
-            worker_name=threading.current_thread().name,
-            input_file_path=str(local_path),
-            detector=int(trial["detector"]),
-            observation_id=str(candidate["obs_id"]),
-        )
     try:
         t0 = time.perf_counter()
         with fits.open(local_path, memmap=True) as hdul:
@@ -210,17 +198,9 @@ def run_trial_field_worker(
                 }
                 selection_rows.append(selection)
             selected_rows = [item for item in selection_rows if item["selected_for_photometry"]]
-            if cfg.status_mode == "live":
-                ts = time.perf_counter()
-                mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=selected_rows, status="queued")
-                perf["status_sec"] += time.perf_counter() - ts
             perf["selection_sec"] += time.perf_counter() - t0
 
             t0 = time.perf_counter()
-            if cfg.status_mode == "live":
-                ts = time.perf_counter()
-                mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=selected_rows, status="active")
-                perf["status_sec"] += time.perf_counter() - ts
             calibrated_batch = None
             if cfg.photometry_backend == "warp_calibrated" and selected_rows:
                 tp = time.perf_counter()
@@ -359,14 +339,8 @@ def run_trial_field_worker(
                     **psf.to_json_dict(),
                 }
                 measurement_rows.append(measurement)
-            if cfg.status_mode == "live":
-                ts = time.perf_counter()
-                mark_targets(cfg.smoke_run_dir, image_id=image_id, targets=measurement_rows, status="done")
-                perf["status_sec"] += time.perf_counter() - ts
             perf["photometry_sec"] += time.perf_counter() - t0
     except Exception as exc:
-        if cfg.status_mode == "live":
-            mark_frame(cfg.smoke_run_dir, image_id=image_id, status="error", error=f"{type(exc).__name__}: {exc}")
         raise
 
     t0 = time.perf_counter()
@@ -379,15 +353,6 @@ def run_trial_field_worker(
     perf["elapsed_sec"] = time.perf_counter() - perf_start
     perf["target_rate_per_sec"] = len(measurement_rows) / perf["elapsed_sec"] if perf["elapsed_sec"] > 0 else None
     first_measurement = measurement_rows[0] if measurement_rows else {}
-    if cfg.status_mode == "live":
-        mark_frame(
-            cfg.smoke_run_dir,
-            image_id=image_id,
-            status="done",
-            cwave_um=_optional_float(first_measurement.get("cwave_um")),
-            cband_um=_optional_float(first_measurement.get("cband_um")),
-        )
-        mark_frame_perf(cfg.smoke_run_dir, image_id=image_id, perf=perf)
     field_job = {
         "job_kind": job_kind,
         "manual_target_id": target.target_id,
@@ -423,8 +388,6 @@ def run_multi_trial_field_workers(
     max_field_retries: int = 0,
     field_launch_stagger_sec: float = 0.0,
 ) -> list[dict[str, object]]:
-    if cfg.status_mode == "live":
-        reset_live_status(cfg.smoke_run_dir)
     shard_root = cfg.smoke_run_dir / "field_shards"
     (cfg.smoke_run_dir / "field_errors.json").unlink(missing_ok=True)
     selected_trials = []

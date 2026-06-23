@@ -345,7 +345,7 @@ def run_depth_test(
     max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
     photometry_backend: str = typer.Option("cpu_numpy", help="Photometry backend: cpu_numpy or warp_calibrated."),
     warp_devices: str = typer.Option("cuda:0,cuda:1,cuda:2", help="Comma-separated Warp CUDA devices."),
-    status_mode: str = typer.Option("live", help="Status backend: live, jsonl, or off."),
+    status_mode: str = typer.Option("jsonl", help="Status backend: jsonl or off. Legacy live aliases to jsonl."),
     max_field_retries: int = typer.Option(0, min=0, help="Retry failed fields this many times."),
     enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
     psf_photometry_backend: str = typer.Option("cpu_single", help="PSF backend: cpu_single or warp_grid."),
@@ -402,7 +402,7 @@ def run_benchmark(
     max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
     photometry_backend: str = typer.Option("cpu_numpy", help="Photometry backend: cpu_numpy or warp_calibrated."),
     warp_devices: str = typer.Option("cuda:0,cuda:1,cuda:2", help="Comma-separated Warp CUDA devices."),
-    status_mode: str = typer.Option("live", help="Status backend: live, jsonl, or off."),
+    status_mode: str = typer.Option("jsonl", help="Status backend: jsonl or off. Legacy live aliases to jsonl."),
     max_field_retries: int = typer.Option(0, min=0, help="Retry failed fields this many times."),
     enable_psf: bool = typer.Option(False, help="Run experimental PSF photometry."),
     psf_photometry_backend: str = typer.Option("cpu_single", help="PSF backend: cpu_single or warp_grid."),
@@ -508,8 +508,10 @@ def _run_depth_pipeline(
         raise typer.BadParameter("psf_kernel_build_mode must be cpu_scipy, gpu_bilinear, or gpu_spline")
     if psf_grid_metric not in {"snr", "chi2"}:
         raise typer.BadParameter("psf_grid_metric must be snr or chi2")
-    if status_mode not in {"live", "jsonl", "off"}:
-        raise typer.BadParameter("status_mode must be live, jsonl, or off")
+    if status_mode == "live":
+        status_mode = "jsonl"
+    if status_mode not in {"jsonl", "off"}:
+        raise typer.BadParameter("status_mode must be jsonl or off")
     cfg.photometry_backend = photometry_backend
     cfg.status_mode = status_mode
     cfg.warp_devices = tuple(part.strip() for part in warp_devices.split(",") if part.strip())

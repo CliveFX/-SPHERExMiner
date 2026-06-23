@@ -19,6 +19,12 @@ def summary_path(run_dir: Path) -> Path:
     return run_dir / "status_summary.json"
 
 
+def _atomic_write_json(path: Path, data: Any) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(_clean(data), indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
 def reset_coarse_status(run_dir: Path, *, total_fields: int | None = None, worker_count: int | None = None) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
     with _LOCK:
@@ -41,7 +47,7 @@ def reset_coarse_status(run_dir: Path, *, total_fields: int | None = None, worke
             "recent_events": [],
             "fields": {},
         }
-        summary_path(run_dir).write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+        _atomic_write_json(summary_path(run_dir), summary)
         append_status_event(run_dir, "run_start", total_fields=total_fields, worker_count=worker_count)
 
 
@@ -149,7 +155,7 @@ def _update_summary(run_dir: Path, row: dict[str, Any]) -> None:
     summary["last_event"] = row
     recent = tail_events(run_dir, limit=80)
     summary["recent_events"] = recent
-    path.write_text(json.dumps(_clean(summary), indent=2, sort_keys=True), encoding="utf-8")
+    _atomic_write_json(path, summary)
 
 
 def _clean(value: Any) -> Any:
