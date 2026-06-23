@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -43,10 +44,7 @@ def evaluate_target_fields(
     candidates = query_sia_candidates(query_ra, query_dec)
     cfg.smoke_run_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = cfg.smoke_run_dir / "candidate_fields.json"
-    manifest_path.write_text(
-        json.dumps([candidate.to_json_dict() for candidate in candidates], indent=2),
-        encoding="utf-8",
-    )
+    _write_json_best_effort(manifest_path, [candidate.to_json_dict() for candidate in candidates], required=True)
 
     selected = candidates[:limit_fields]
     trials_by_index: dict[int, dict[str, object]] = {}
@@ -63,15 +61,34 @@ def evaluate_target_fields(
             for future in as_completed(futures):
                 trials_by_index[futures[future]] = future.result()
                 partial = [trials_by_index[idx] for idx in sorted(trials_by_index)]
-                (cfg.smoke_run_dir / "simp_field_trials.partial.json").write_text(
-                    json.dumps(partial, indent=2),
-                    encoding="utf-8",
-                )
+                _write_json_best_effort(cfg.smoke_run_dir / "simp_field_trials.partial.json", partial, required=False)
     trials = [trials_by_index[idx] for idx in sorted(trials_by_index)]
     trial_path = cfg.smoke_run_dir / "simp_field_trials.json"
-    trial_path.write_text(json.dumps(trials, indent=2), encoding="utf-8")
+    _write_json_best_effort(trial_path, trials, required=True)
     write_smoke_artifacts(cfg.smoke_run_dir, trials)
     return trials
+
+
+def _write_json_best_effort(path: Path, payload: object, *, required: bool) -> None:
+    text = json.dumps(payload, indent=2)
+    last_exc: OSError | None = None
+    for attempt in range(3):
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_name(f".{path.name}.tmp")
+            tmp.write_text(text, encoding="utf-8")
+            tmp.replace(path)
+            return
+        except OSError as exc:
+            last_exc = exc
+            time.sleep(0.05 * (attempt + 1))
+    try:
+        path.write_text(text, encoding="utf-8")
+        return
+    except OSError as exc:
+        last_exc = exc
+    if required and last_exc is not None:
+        raise last_exc
 
 
 def evaluate_one_candidate(

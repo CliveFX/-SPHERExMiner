@@ -1279,7 +1279,10 @@ def _jobs(run_dir: Path) -> list[dict[str, object]]:
 def _read_json(path: Path) -> object:
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def _json_default(value: object) -> object:
