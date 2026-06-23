@@ -275,13 +275,17 @@ def _false_positive_rows(path: Path, run_name: str, campaign: str, target: str, 
         df = df.sort_values("matched_snr", ascending=False, na_position="last")
     rows = []
     for row in df.head(limit).to_dict(orient="records"):
+        target_id = str(row.get("target_id") or "")
+        spectra_url = f"/spectra?run={urllib.parse.quote(run_name)}&target={urllib.parse.quote(target_id)}"
         out = dict(row)
         out.update(
             {
                 "run_name": run_name,
                 "campaign": campaign,
                 "target": target,
-                "injections_url": f"/injections?run={urllib.parse.quote(run_name)}&status=candidate&q={urllib.parse.quote(str(row.get('target_id') or ''))}",
+                "review_url": spectra_url,
+                "injections_url": f"/injections?run={urllib.parse.quote(run_name)}&status=candidate&q={urllib.parse.quote(target_id)}",
+                "spectra_url": spectra_url,
             }
         )
         rows.append(out)
@@ -964,6 +968,15 @@ def _matched_candidates_path(run_dir: Path) -> Path | None:
     return next((path for path in candidates if path.exists()), None)
 
 
+def _false_positive_candidates_path(run_dir: Path) -> Path | None:
+    candidates = [
+        run_dir / "recovery_score_mixed_lasers" / "false_positive_candidates.parquet",
+        run_dir / "recovery_score" / "false_positive_candidates.parquet",
+    ]
+    candidates.extend(sorted(run_dir.glob("recovery_score*/false_positive_candidates.parquet")))
+    return next((path for path in candidates if path.exists()), None)
+
+
 def _recovery_table(run_dir: Path) -> pd.DataFrame:
     recovery_path = _injection_recovery_path(run_dir)
     if recovery_path and recovery_path.exists():
@@ -989,12 +1002,69 @@ def _matched_candidates_table(run_dir: Path) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+def _false_positive_candidates_table(run_dir: Path) -> pd.DataFrame:
+    path = _false_positive_candidates_path(run_dir)
+    if path is None:
+        return pd.DataFrame()
+    return pd.read_parquet(path)
+
+
+def _false_positive_injection_rows(run_dir: Path) -> pd.DataFrame:
+    false_positive = _false_positive_candidates_table(run_dir)
+    if false_positive.empty:
+        return pd.DataFrame()
+    rows = []
+    for row in false_positive.to_dict(orient="records"):
+        target_id = str(row.get("target_id") or "")
+        line_family = str(row.get("line_family") or "")
+        line_nm = _maybe_float(row.get("candidate_line_nm") or row.get("nominal_line_nm"))
+        injection_id = _false_positive_id(target_id, line_family, line_nm)
+        rows.append(
+            {
+                "row_kind": "false_positive",
+                "injection_id": injection_id,
+                "target_id": target_id,
+                "line_family": line_family,
+                "nominal_line_nm": line_nm,
+                "injected_line_nm": line_nm,
+                "line_width_nm": row.get("line_width_nm"),
+                "find_me_snr": np.nan,
+                "line_flux_uJy": row.get("matched_flux_uJy"),
+                "max_frame_flux_uJy": row.get("matched_flux_uJy"),
+                "recovered": False,
+                "recovered_line_nm": line_nm,
+                "wavelength_error_nm": np.nan,
+                "recovered_snr": row.get("matched_snr"),
+                "recovered_flux_uJy": row.get("matched_flux_uJy"),
+                "candidate_status": "false_positive",
+                "target_candidate_count": 1,
+                "target_best_candidate_snr": row.get("matched_snr"),
+                "false_positive": True,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _false_positive_id(target_id: str, line_family: str, line_nm: float | None) -> str:
+    line_text = "nan" if line_nm is None else f"{line_nm:g}"
+    return "false_positive::" + "::".join([target_id, line_family, line_text])
+
+
 def _injections(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
-    df = _recovery_table(run_dir)
+    recovery_df = _recovery_table(run_dir)
+    false_df = _false_positive_injection_rows(run_dir)
+    df = pd.concat([recovery_df, false_df], ignore_index=True, sort=False)
     if df.empty:
         return {"rows": [], "total": 0, "limit": 0, "offset": 0, "summary": {}}
+    if "row_kind" not in df:
+        df["row_kind"] = "injection"
+    df["row_kind"] = df["row_kind"].fillna("injection")
+    if "false_positive" not in df:
+        df["false_positive"] = False
+    df["false_positive"] = df["false_positive"].fillna(False).astype(bool)
     candidates = _matched_candidates_table(run_dir)
     if not candidates.empty and "target_id" in candidates.columns:
+        df = df.drop(columns=[col for col in ("target_candidate_count", "target_best_candidate_snr") if col in df.columns])
         cand_summary = (
             candidates.groupby("target_id", dropna=False)
             .agg(
@@ -1004,27 +1074,42 @@ def _injections(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object
             .reset_index()
         )
         df = df.merge(cand_summary, on="target_id", how="left")
+        if not false_df.empty:
+            fp_mask = df["false_positive"].fillna(False).astype(bool)
+            df.loc[fp_mask, "target_candidate_count"] = df.loc[fp_mask, "target_candidate_count"].fillna(1)
+            df.loc[fp_mask, "target_best_candidate_snr"] = df.loc[fp_mask, "target_best_candidate_snr"].fillna(
+                pd.to_numeric(df.loc[fp_mask, "recovered_snr"], errors="coerce")
+            )
+    if "target_candidate_count" not in df:
+        df["target_candidate_count"] = 0
+    if "target_best_candidate_snr" not in df:
+        df["target_best_candidate_snr"] = np.nan
+    if not false_df.empty:
+        fp_mask = df["false_positive"].fillna(False).astype(bool)
+        df.loc[fp_mask, "target_candidate_count"] = pd.to_numeric(
+            df.loc[fp_mask, "target_candidate_count"], errors="coerce"
+        ).fillna(1)
+        df.loc[fp_mask, "target_best_candidate_snr"] = pd.to_numeric(
+            df.loc[fp_mask, "target_best_candidate_snr"], errors="coerce"
+        ).fillna(pd.to_numeric(df.loc[fp_mask, "recovered_snr"], errors="coerce"))
     for col in ("target_candidate_count",):
         if col in df:
             df[col] = df[col].fillna(0).astype(int)
     for col in ("target_best_candidate_snr", "recovered_snr", "line_flux_uJy", "max_frame_flux_uJy"):
         if col in df:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-    if "target_candidate_count" not in df:
-        df["target_candidate_count"] = 0
-    if "target_best_candidate_snr" not in df:
-        df["target_best_candidate_snr"] = np.nan
-
     status = (params.get("status") or ["all"])[0]
     line = (params.get("line") or ["all"])[0]
     strength = (params.get("strength") or ["all"])[0]
     q = (params.get("q") or [""])[0].strip().lower()
     if status == "recovered" and "recovered" in df:
-        df = df[df["recovered"].fillna(False).astype(bool)]
+        df = df[df["recovered"].fillna(False).astype(bool) & ~df["false_positive"].fillna(False).astype(bool)]
     elif status == "missed" and "recovered" in df:
-        df = df[~df["recovered"].fillna(False).astype(bool)]
+        df = df[~df["recovered"].fillna(False).astype(bool) & ~df["false_positive"].fillna(False).astype(bool)]
     elif status == "candidate":
         df = df[pd.to_numeric(df["target_candidate_count"], errors="coerce").fillna(0).gt(0)]
+    elif status in {"false_positive", "false+"}:
+        df = df[df["false_positive"].fillna(False).astype(bool)]
     if line != "all" and "line_family" in df:
         df = df[df["line_family"].astype(str).eq(line)]
     if strength != "all" and "find_me_snr" in df:
@@ -1056,12 +1141,21 @@ def _injections(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object
     offset = max(0, _query_int(params, "offset", 0))
     rows = df.iloc[offset : offset + limit].to_dict(orient="records")
     full = _recovery_table(run_dir)
+    false_positive_count = int(len(false_df))
+    line_values = pd.concat(
+        [
+            full.get("line_family", pd.Series(dtype=str)),
+            false_df.get("line_family", pd.Series(dtype=str)),
+        ],
+        ignore_index=True,
+    )
     summary = {
         "injection_count": int(len(full)),
         "recovered_count": int(full["recovered"].fillna(False).astype(bool).sum()) if "recovered" in full else 0,
         "missed_count": int((~full["recovered"].fillna(False).astype(bool)).sum()) if "recovered" in full else 0,
         "candidate_count": int(len(candidates)),
-        "lines": sorted([str(value) for value in full.get("line_family", pd.Series(dtype=str)).dropna().unique()]),
+        "false_positive_count": false_positive_count,
+        "lines": sorted([str(value) for value in line_values.dropna().unique()]),
         "strengths": sorted([float(value) for value in pd.to_numeric(full.get("find_me_snr", pd.Series(dtype=float)), errors="coerce").dropna().unique()]),
         "recovery_path": str(_injection_recovery_path(run_dir) or ""),
         "candidates_path": str(_matched_candidates_path(run_dir) or ""),
@@ -1073,6 +1167,9 @@ def _injection_detail(run_dir: Path, injection_id: str) -> dict[str, object]:
     recovery = _recovery_table(run_dir)
     row_df = recovery[recovery.get("injection_id", pd.Series(dtype=str)).astype(str).eq(injection_id)] if not recovery.empty else pd.DataFrame()
     if row_df.empty:
+        false_detail = _false_positive_detail(run_dir, injection_id)
+        if false_detail is not None:
+            return false_detail
         return {"injection_id": injection_id, "error": "not found"}
     injection = row_df.iloc[0].to_dict()
     target_id = str(injection.get("target_id"))
@@ -1103,6 +1200,62 @@ def _injection_detail(run_dir: Path, injection_id: str) -> dict[str, object]:
         "target_injections": target_injections,
         "target_candidates": target_candidates.to_dict(orient="records"),
         "spectrum": spectrum,
+    }
+
+
+def _false_positive_detail(run_dir: Path, injection_id: str) -> dict[str, object] | None:
+    false_positive = _false_positive_candidates_table(run_dir)
+    if false_positive.empty:
+        return None
+    work = false_positive.copy()
+    ids = []
+    for row in work.to_dict(orient="records"):
+        ids.append(_false_positive_id(str(row.get("target_id") or ""), str(row.get("line_family") or ""), _maybe_float(row.get("candidate_line_nm") or row.get("nominal_line_nm"))))
+    work["_false_positive_id"] = ids
+    row_df = work[work["_false_positive_id"].astype(str).eq(injection_id)]
+    if row_df.empty:
+        return None
+    row = row_df.iloc[0].to_dict()
+    target_id = str(row.get("target_id") or "")
+    line_nm = _maybe_float(row.get("candidate_line_nm") or row.get("nominal_line_nm"))
+    injection = {
+        "row_kind": "false_positive",
+        "false_positive": True,
+        "injection_id": injection_id,
+        "target_id": target_id,
+        "line_family": row.get("line_family"),
+        "nominal_line_nm": row.get("nominal_line_nm") or line_nm,
+        "injected_line_nm": line_nm,
+        "line_width_nm": row.get("line_width_nm"),
+        "strength_mode": "classifier_candidate",
+        "find_me_snr": None,
+        "line_flux_uJy": row.get("matched_flux_uJy"),
+        "max_frame_flux_uJy": row.get("matched_flux_uJy"),
+        "recovered": False,
+        "recovered_line_nm": line_nm,
+        "wavelength_error_nm": None,
+        "recovered_snr": row.get("matched_snr"),
+        "recovered_flux_uJy": row.get("matched_flux_uJy"),
+        "candidate_status": "false_positive",
+    }
+    candidates = _matched_candidates_table(run_dir)
+    target_candidates = pd.DataFrame()
+    if not candidates.empty and "target_id" in candidates:
+        target_candidates = candidates[candidates["target_id"].astype(str).eq(target_id)].copy()
+        if "candidate_line_nm" in target_candidates:
+            target_candidates["selected_injection_match"] = (
+                (pd.to_numeric(target_candidates["candidate_line_nm"], errors="coerce") - float(line_nm or np.nan)).abs().le(1e-9)
+                & target_candidates.get("line_family", pd.Series([""] * len(target_candidates), index=target_candidates.index)).astype(str).eq(str(row.get("line_family") or ""))
+            )
+        else:
+            target_candidates["selected_injection_match"] = False
+        if "matched_snr" in target_candidates:
+            target_candidates = target_candidates.sort_values("matched_snr", ascending=False, na_position="last")
+    return {
+        "injection": injection,
+        "target_injections": _target_injections(run_dir, target_id),
+        "target_candidates": target_candidates.to_dict(orient="records"),
+        "spectrum": _spectrum(run_dir, target_id),
     }
 
 
@@ -2215,8 +2368,8 @@ function table(rows, cols) {
 function cell(row, col) {
   if (col === 'links') {
     const run = row.run_name || '';
-    const fp = row.injections_url || row.false_positive_url || `/injections?run=${encodeURIComponent(run)}&status=candidate`;
-    const spec = `/spectra?run=${encodeURIComponent(run)}`;
+    const fp = row.review_url || row.injections_url || row.false_positive_url || `/injections?run=${encodeURIComponent(run)}&status=candidate`;
+    const spec = row.spectra_url || `/spectra?run=${encodeURIComponent(run)}`;
     return `<td><a href="${fp}">review</a> <span class="muted">/</span> <a href="${spec}">spectra</a></td>`;
   }
   const raw = row[col];
@@ -2294,6 +2447,7 @@ def _injections_html() -> str:
     .recovered { color:var(--green); }
     .missed { color:var(--red); }
     .candidate { color:var(--amber); }
+    .false-positive { color:var(--red); }
     #plot { width:100%; height:420px; background:rgba(3,8,18,.95); border:1px solid #17617d; border-radius:6px; box-shadow:0 0 28px rgba(54,231,255,.13), inset 0 0 24px rgba(255,79,216,.035); }
     #injectionPlot { width:100%; height:240px; background:rgba(3,8,18,.95); border:1px solid #17617d; border-radius:6px; box-shadow:0 0 28px rgba(255,79,216,.10), inset 0 0 24px rgba(54,231,255,.03); }
     .small { color:var(--muted); font-size:12px; }
@@ -2316,7 +2470,7 @@ def _injections_html() -> str:
     <label for="runSelect">Run</label>
     <select id="runSelect" onchange="switchRun()"></select>
     <div class="grid4">
-      <div><label>Status</label><select id="status" onchange="fetchInjections(0)"><option value="all">All</option><option value="recovered">Recovered</option><option value="missed">Missed</option><option value="candidate">Has scorer candidate</option></select></div>
+      <div><label>Status</label><select id="status" onchange="fetchInjections(0)"><option value="all">All</option><option value="recovered">Recovered</option><option value="missed">Missed</option><option value="candidate">Has scorer candidate</option><option value="false_positive">False positives</option></select></div>
       <div><label>Line</label><select id="line" onchange="fetchInjections(0)"><option value="all">All</option></select></div>
       <div><label>Strength</label><select id="strength" onchange="fetchInjections(0)"><option value="all">All</option></select></div>
       <div><label>Sort</label><select id="sort" onchange="fetchInjections(0)"><option value="line">Line</option><option value="strength">Strength</option><option value="snr">Recovered SNR</option><option value="flux">Flux</option><option value="target">Target</option></select></div>
@@ -2354,8 +2508,10 @@ def _injections_html() -> str:
 </main>
 <script>
 let activeRun = new URLSearchParams(window.location.search).get('run') || '';
+const initialInjectionParams = new URLSearchParams(window.location.search);
 let rows = [], total = 0, offset = 0, limit = 300, summary = {};
 let selectedId = null, detail = null, tableMode = 'candidates', fetchTimer = null;
+let injectionControlsInitialized = false;
 
 function runQS(extra) {
   const p = new URLSearchParams(extra || '');
@@ -2374,7 +2530,18 @@ async function refreshAll() {
   const rs = document.getElementById('runSelect');
   rs.innerHTML = runs.map(r => `<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)} ${r.has_spectra ? '['+(r.measurement_rows || 0)+' rows]' : ''}</option>`).join('');
   rs.value = activeRun;
+  initInjectionControls();
   await fetchInjections(0);
+}
+function initInjectionControls() {
+  if (injectionControlsInitialized) return;
+  injectionControlsInitialized = true;
+  const status = initialInjectionParams.get('status');
+  const sort = initialInjectionParams.get('sort');
+  const q = initialInjectionParams.get('q') || initialInjectionParams.get('target') || initialInjectionParams.get('target_id');
+  if (status && [...document.getElementById('status').options].some(o => o.value === status)) document.getElementById('status').value = status;
+  if (sort && [...document.getElementById('sort').options].some(o => o.value === sort)) document.getElementById('sort').value = sort;
+  if (q) document.getElementById('query').value = q;
 }
 function switchRun() {
   activeRun = document.getElementById('runSelect').value;
@@ -2416,15 +2583,16 @@ function renderList() {
   const table = document.getElementById('injectionList');
   table.innerHTML = '<thead><tr><th>Status</th><th>Line</th><th>Sigma</th><th>Recovered SNR</th><th>Target candidates</th><th>Flux uJy</th><th>Target</th></tr></thead><tbody>' +
     rows.map(r => {
-      const status = r.recovered ? 'recovered' : 'missed';
+      const status = r.false_positive ? 'false+' : (r.recovered ? 'recovered' : 'missed');
+      const statusCls = r.false_positive ? 'false-positive' : status;
       const cls = [status, r.injection_id === selectedId ? 'selected' : ''].join(' ');
       return `<tr class="${cls}" onclick="selectInjection('${escapeAttr(r.injection_id)}')">
-        <td class="${status}">${status}</td><td>${escapeHtml(r.line_family)} ${fmt(r.injected_line_nm || r.nominal_line_nm)}nm</td><td>${fmt(r.find_me_snr)}</td>
+        <td class="${statusCls}">${status}</td><td>${escapeHtml(r.line_family)} ${fmt(r.injected_line_nm || r.nominal_line_nm)}nm</td><td>${fmt(r.find_me_snr)}</td>
         <td>${fmt(r.recovered_snr)}</td><td class="candidate">${fmt(r.target_candidate_count || 0)} / ${fmt(r.target_best_candidate_snr)}</td>
         <td>${fmt(r.line_flux_uJy)}</td><td class="mono">${escapeHtml(r.target_id)}</td></tr>`;
     }).join('') + '</tbody>';
   const start = total ? offset + 1 : 0, end = Math.min(total, offset + rows.length);
-  document.getElementById('pageInfo').textContent = `${start}-${end} of ${total} injections · recovered ${summary.recovered_count || 0}/${summary.injection_count || 0} · candidates ${summary.candidate_count || 0}`;
+  document.getElementById('pageInfo').textContent = `${start}-${end} of ${total} rows · recovered ${summary.recovered_count || 0}/${summary.injection_count || 0} · candidates ${summary.candidate_count || 0} · false+ ${summary.false_positive_count || 0}`;
 }
 function pageInjections(direction) {
   if (direction === 0) return fetchInjections(0);
@@ -2736,6 +2904,7 @@ let current = null;
 let currentRows = [];
 let currentInjections = [];
 let activeRun = new URLSearchParams(window.location.search).get('run') || '';
+const requestedTarget = new URLSearchParams(window.location.search).get('target') || new URLSearchParams(window.location.search).get('target_id') || '';
 const FLAG_DEFS = {
   0: ['TRANSIENT', 'Transient, e.g. cosmic ray hit during SUR; can also mark charge spillover/bloom from bright nearby sources.'],
   1: ['OVERFLOW', 'SUR overflow threshold reached, about half full-well saturation.'],
@@ -2781,10 +2950,13 @@ async function refreshAll() {
   if (!activeRun && runs.length) activeRun = runs[0].name;
   rs.innerHTML = runs.map(r => `<option value="${r.name}">${r.name} ${r.has_spectra ? '[' + (r.measurement_rows || 0) + ' rows]' : ''}</option>`).join('');
   rs.value = activeRun;
+  if (requestedTarget && !document.getElementById('filter').value.trim()) {
+    document.getElementById('filter').value = requestedTarget;
+  }
   document.getElementById('runSummary').textContent = JSON.stringify(await getJSON('/api/summary' + runQS()), null, 2);
   await fetchTargets(0);
   if (!current || !targets.some(t => t.target_id === current)) {
-    const preferred = targets.some(t => t.target_id === 'ucs_0972') ? 'ucs_0972' : (targets[0]?.target_id || null);
+    const preferred = requestedTarget || (targets.some(t => t.target_id === 'ucs_0972') ? 'ucs_0972' : (targets[0]?.target_id || null));
     if (preferred) selectTarget(preferred);
   }
   else await selectTarget(current);
