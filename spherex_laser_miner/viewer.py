@@ -236,6 +236,11 @@ def _recovery_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[str
             "injections_url": f"/injections?run={urllib.parse.quote(run_dir.name)}",
             "false_positive_url": f"/injections?run={urllib.parse.quote(run_dir.name)}&status=candidate",
         }
+        blind_path = _blind_joint_path(run_dir, "paired")
+        if blind_path is not None:
+            row["blind_candidates_url"] = f"/blind-candidates?run={urllib.parse.quote(run_dir.name)}&scope=paired"
+            if int(row["false_positive_count"] or 0) > 0:
+                row["blind_false_positive_url"] = row["blind_candidates_url"]
         run_rows.append(row)
         strength_rows.extend(_recovery_group_rows(recovery_dir / "recovery_by_strength.parquet", run_dir.name, campaign, target))
         line_rows.extend(_recovery_group_rows(recovery_dir / "recovery_by_line.parquet", run_dir.name, campaign, target))
@@ -285,6 +290,7 @@ def _false_positive_rows(path: Path, run_name: str, campaign: str, target: str, 
         target_id = str(row.get("target_id") or "")
         spectra_url = f"/spectra?run={urllib.parse.quote(run_name)}&target={urllib.parse.quote(target_id)}"
         review_url = f"/injections?run={urllib.parse.quote(run_name)}&status=false_positive&q={urllib.parse.quote(target_id)}"
+        blind_url = f"/blind-candidates?run={urllib.parse.quote(run_name)}&scope=paired&q={urllib.parse.quote(target_id)}"
         out = dict(row)
         out.update(
             {
@@ -294,6 +300,7 @@ def _false_positive_rows(path: Path, run_name: str, campaign: str, target: str, 
                 "review_url": review_url,
                 "injections_url": f"/injections?run={urllib.parse.quote(run_name)}&status=candidate&q={urllib.parse.quote(target_id)}",
                 "spectra_url": spectra_url,
+                "blind_candidates_url": blind_url,
             }
         )
         rows.append(out)
@@ -2521,7 +2528,10 @@ function cell(row, col) {
     const run = row.run_name || '';
     const fp = row.review_url || row.injections_url || row.false_positive_url || `/injections?run=${encodeURIComponent(run)}&status=candidate`;
     const spec = row.spectra_url || `/spectra?run=${encodeURIComponent(run)}`;
-    return `<td><a href="${fp}">review</a> <span class="muted">/</span> <a href="${spec}">spectra</a></td>`;
+    const links = [`<a href="${fp}">review</a>`, `<a href="${spec}">spectra</a>`];
+    if (row.blind_candidates_url) links.push(`<a href="${row.blind_candidates_url}">blind</a>`);
+    if (row.blind_false_positive_url) links.push(`<a href="${row.blind_false_positive_url}">blind false+</a>`);
+    return `<td>${links.join(' <span class="muted">/</span> ')}</td>`;
   }
   const raw = row[col];
   const val = col.includes('fraction') ? pct(raw) : fmt(raw);
