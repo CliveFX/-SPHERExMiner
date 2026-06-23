@@ -1454,6 +1454,11 @@ def _simple_status_html() -> str:
     h1 { margin:0; color:var(--cyan); font-size:18px; }
     a { color:var(--cyan); text-decoration:none; }
     select, button { color:var(--text); background:#020617; border:1px solid var(--line); border-radius:4px; padding:7px 9px; }
+    button { cursor:pointer; font-weight:600; }
+    button:hover { border-color:var(--cyan); color:#ffffff; box-shadow:0 0 12px rgba(34,211,238,.28); }
+    button:active { transform:translateY(1px); }
+    button:disabled { cursor:wait; opacity:.68; }
+    .refreshButton { min-width:96px; background:rgba(34,211,238,.12); }
     main { padding:12px; display:grid; gap:12px; }
     .cards { display:grid; grid-template-columns:repeat(8, minmax(110px, 1fr)); gap:8px; }
     .card, section { border:1px solid var(--line); background:rgba(7,17,31,.92); border-radius:6px; }
@@ -1482,7 +1487,7 @@ def _simple_status_html() -> str:
   <h1>SPHEREx Simple Status</h1>
   <div>
     <select id="runSelect" onchange="switchRun()"></select>
-    <button type="button" onclick="manualRefresh()">Refresh</button>
+    <button id="refreshButton" class="refreshButton" type="button" onclick="manualRefresh()">Refresh</button>
     <a id="spectraLink" href="/spectra">Spectra</a>
   </div>
 </header>
@@ -1553,9 +1558,15 @@ function updateLinks() {
 }
 
 async function manualRefresh() {
-  await loadRuns();
-  updateLinks();
-  await refreshStatus();
+  const button = document.getElementById('refreshButton');
+  if (button) { button.disabled = true; button.textContent = 'Refreshing'; }
+  try {
+    await loadRuns();
+    updateLinks();
+    await refreshStatus();
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Refresh'; }
+  }
 }
 
 async function refreshStatus() {
