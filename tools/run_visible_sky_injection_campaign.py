@@ -302,6 +302,7 @@ def main() -> None:
     parser.add_argument("--blind-raw-min-snr", type=float, default=5.0)
     parser.add_argument("--blind-min-supporting-points", type=int, default=2)
     parser.add_argument("--blind-flux-kind", choices=["aperture", "psf", "both"], default="both")
+    parser.add_argument("--blind-raw-scan", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--blind-warp-device", default="cuda:0")
     parser.add_argument("--blind-joint-tolerance-nm", type=float, default=10.0)
     parser.add_argument("--viewer-base-url", default="http://127.0.0.1:8765")
@@ -389,7 +390,7 @@ def main() -> None:
                 dry_run=args.dry_run,
             )
 
-        if args.blind_scan:
+        if args.blind_scan and args.blind_raw_scan:
             for flux_kind in _blind_flux_kinds(args.blind_flux_kind):
                 baseline_blind_dir = baseline_run / f"blind_classifier_{flux_kind}_warp"
                 if args.force or not _done(baseline_blind_dir / "blind_candidate_clusters.parquet"):
@@ -520,7 +521,7 @@ def main() -> None:
             for flux_kind in _blind_flux_kinds(args.blind_flux_kind):
                 injected_blind_dir = injected_run / f"blind_classifier_{flux_kind}_warp"
                 paired_blind_dir = injected_run / f"blind_classifier_paired_delta_{flux_kind}_warp"
-                if args.force or not _done(injected_blind_dir / "blind_candidate_clusters.parquet"):
+                if args.blind_raw_scan and (args.force or not _done(injected_blind_dir / "blind_candidate_clusters.parquet")):
                     _run_blind_raw(
                         py=py,
                         run_dir=injected_run,
@@ -542,7 +543,10 @@ def main() -> None:
                         env=env,
                     )
             if args.blind_flux_kind == "both":
-                for scope, parent in (("injected", injected_run), ("paired_delta", injected_run)):
+                joint_scopes = [("paired_delta", injected_run)]
+                if args.blind_raw_scan:
+                    joint_scopes.insert(0, ("injected", injected_run))
+                for scope, parent in joint_scopes:
                     aperture_dir = parent / ("blind_classifier_aperture_warp" if scope == "injected" else "blind_classifier_paired_delta_aperture_warp")
                     psf_dir = parent / ("blind_classifier_psf_warp" if scope == "injected" else "blind_classifier_paired_delta_psf_warp")
                     joint_dir = parent / ("blind_classifier_joint_warp" if scope == "injected" else "blind_classifier_paired_delta_joint_warp")
