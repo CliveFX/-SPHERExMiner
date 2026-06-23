@@ -1026,6 +1026,34 @@ def _false_positive_candidates_table(run_dir: Path) -> pd.DataFrame:
     return pd.read_parquet(path)
 
 
+def _annotate_blind_false_positives(df: pd.DataFrame, run_dir: Path, tolerance_nm: float = 10.0) -> pd.DataFrame:
+    if df.empty or "target_id" not in df or "peak_line_nm" not in df:
+        return df
+    out = df.copy()
+    out["recovery_false_positive"] = False
+    out["recovery_fp_line_nm"] = np.nan
+    out["recovery_fp_snr"] = np.nan
+    out["recovery_fp_flux_uJy"] = np.nan
+    false_positive = _false_positive_candidates_table(run_dir)
+    if false_positive.empty or "target_id" not in false_positive:
+        return out
+    for row in false_positive.to_dict(orient="records"):
+        target_id = str(row.get("target_id") or "")
+        line_nm = _maybe_float(row.get("candidate_line_nm") or row.get("nominal_line_nm"))
+        if not target_id or line_nm is None:
+            continue
+        same_target = out["target_id"].astype(str).eq(target_id)
+        wave_delta = (pd.to_numeric(out["peak_line_nm"], errors="coerce") - float(line_nm)).abs()
+        matches = same_target & wave_delta.le(float(tolerance_nm))
+        if not bool(matches.any()):
+            continue
+        out.loc[matches, "recovery_false_positive"] = True
+        out.loc[matches, "recovery_fp_line_nm"] = float(line_nm)
+        out.loc[matches, "recovery_fp_snr"] = _maybe_float(row.get("matched_snr"))
+        out.loc[matches, "recovery_fp_flux_uJy"] = _maybe_float(row.get("matched_flux_uJy"))
+    return out
+
+
 def _false_positive_injection_rows(run_dir: Path) -> pd.DataFrame:
     false_positive = _false_positive_candidates_table(run_dir)
     if false_positive.empty:
@@ -1153,11 +1181,15 @@ def _blind_candidates(run_dir: Path, params: dict[str, list[str]]) -> dict[str, 
     df = pd.read_parquet(path)
     if df.empty:
         return {"rows": [], "total": 0, "limit": 0, "offset": 0, "summary": {"path": str(path)}}
+    df = _annotate_blind_false_positives(df, run_dir, tolerance_nm=10.0)
     target_filter = (params.get("target") or [""])[0].strip()
     q = (params.get("q") or [""])[0].strip().lower()
     tier = (params.get("tier") or ["all"])[0]
+    review = (params.get("review") or ["all"])[0]
     if target_filter and "target_id" in df:
         df = df[df["target_id"].astype(str).eq(target_filter)]
+    if review in {"false_positive", "false+", "fp"} and "recovery_false_positive" in df:
+        df = df[df["recovery_false_positive"].fillna(False).astype(bool)]
     if tier != "all" and "tier" in df:
         df = df[df["tier"].astype(str).eq(tier)]
     if q:
@@ -1193,6 +1225,9 @@ def _blind_candidates(run_dir: Path, params: dict[str, list[str]]) -> dict[str, 
             "path": str(path),
             "total_after_filter": total,
             "tier_counts_after_filter": df["tier"].value_counts().sort_index().to_dict() if "tier" in df else {},
+            "recovery_false_positive_count_after_filter": int(df["recovery_false_positive"].fillna(False).astype(bool).sum())
+            if "recovery_false_positive" in df
+            else 0,
         }
     )
     return {"rows": rows, "total": total, "limit": limit, "offset": offset, "summary": summary}
@@ -2966,6 +3001,7 @@ def _blind_candidates_html() -> str:
     th { color:#7dd3fc; }
     tr { cursor:pointer; }
     tr:hover, tr.selected { background:rgba(54,231,255,.08); }
+    .fp { color:var(--pink); font-weight:700; }
     .tierA { color:var(--green); font-weight:700; }
     .tierB { color:var(--amber); font-weight:700; }
     .tierC,.tierD { color:var(--red); font-weight:700; }
@@ -2996,6 +3032,7 @@ def _blind_candidates_html() -> str:
       <div><label>Scope</label><select id="scope" onchange="fetchCandidates(0)"><option value="auto">Auto</option><option value="paired">Paired</option><option value="raw">Raw</option></select></div>
       <div><label>Limit</label><select id="limit" onchange="fetchCandidates(0)"><option>100</option><option selected>300</option><option>1000</option></select></div>
     </div>
+    <label>Review</label><select id="review" onchange="fetchCandidates(0)"><option value="all">All candidates</option><option value="false_positive">Recovery false positives</option></select>
     <label>Filter</label><input id="query" placeholder="target, detector, frame..." oninput="scheduleFetch()">
     <div class="row" style="margin-top:8px"><button onclick="page(-1)">Prev</button><button onclick="page(1)">Next</button></div>
     <div id="pageInfo" class="small"></div>
@@ -3030,7 +3067,7 @@ function scheduleFetch(){ activeTargetFilter=''; clearTimeout(timer); timer=setT
 async function fetchCandidates(nextOffset){
   offset=Math.max(0,nextOffset||0);
   limit=Number(document.getElementById('limit').value)||300;
-  const p=`limit=${limit}&offset=${offset}&tier=${encodeURIComponent(val('tier'))}&sort=${encodeURIComponent(val('sort'))}&scope=${encodeURIComponent(val('scope'))}&q=${encodeURIComponent(document.getElementById('query').value.trim())}&target=${encodeURIComponent(activeTargetFilter)}`;
+  const p=`limit=${limit}&offset=${offset}&tier=${encodeURIComponent(val('tier'))}&sort=${encodeURIComponent(val('sort'))}&scope=${encodeURIComponent(val('scope'))}&review=${encodeURIComponent(val('review'))}&q=${encodeURIComponent(document.getElementById('query').value.trim())}&target=${encodeURIComponent(activeTargetFilter)}`;
   const data=await getJSON('/api/blind-candidates'+runQS(p));
   rows=data.rows||[]; total=data.total||0; offset=data.offset||0; renderList(data.summary||{});
   if(rows.length && (!selectedId || !rows.some(r=>r.joint_candidate_id===selectedId))) selectCandidate(rows[0].joint_candidate_id);
@@ -3039,11 +3076,12 @@ function page(dir){ fetchCandidates(Math.max(0, offset + dir*limit)); }
 function renderList(summary){
   const start=total?offset+1:0, end=Math.min(total, offset+rows.length);
   const exact = activeTargetFilter ? ` · exact target ${activeTargetFilter}` : '';
-  document.getElementById('pageInfo').textContent=`${start}-${end} of ${total}${exact} · ${summary.path||''}`;
-  const cols=['tier','rank_score','peak_line_nm','aperture_peak_snr','psf_peak_snr','aperture_support','psf_support','flagged_points_sum','target_id'];
+  const fp = summary.recovery_false_positive_count_after_filter ? ` · false+ ${summary.recovery_false_positive_count_after_filter}` : '';
+  document.getElementById('pageInfo').textContent=`${start}-${end} of ${total}${exact}${fp} · ${summary.path||''}`;
+  const cols=['recovery_false_positive','tier','rank_score','peak_line_nm','aperture_peak_snr','psf_peak_snr','aperture_support','psf_support','recovery_fp_line_nm','recovery_fp_snr','flagged_points_sum','target_id'];
   document.getElementById('candidateList').innerHTML='<table><thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>'+
     rows.map(r=>`<tr class="${r.joint_candidate_id===selectedId?'selected':''}" onclick="selectCandidate('${attr(r.joint_candidate_id)}')">`+
-      cols.map(c=>`<td class="${c==='tier'?'tier'+esc(r[c]):''}" title="${esc(fmt(r[c]))}">${esc(fmt(r[c]))}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
+      cols.map(c=>`<td class="${cellClass(c,r[c])}" title="${esc(fmt(r[c]))}">${esc(fmt(r[c]))}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
 }
 async function selectCandidate(id){
   selectedId=id;
@@ -3158,12 +3196,17 @@ function drawLinePlot(scores,cand){
 function val(id){ return document.getElementById(id).value; }
 function num(v){ const n=Number(v); return Number.isFinite(n)?n:NaN; }
 function q(a,p){ if(!a.length) return 0; const i=Math.max(0,Math.min(a.length-1,Math.floor(p*(a.length-1)))); return a[i]; }
-function fmt(v){ if(v===null||v===undefined||v==='') return ''; const n=Number(v); return Number.isFinite(n)?(Math.abs(n)>=100?n.toFixed(1):n.toFixed(3)).replace(/\\.0+$/,''):String(v); }
+function fmt(v){ if(v===true) return 'yes'; if(v===false) return ''; if(v===null||v===undefined||v==='') return ''; const n=Number(v); return Number.isFinite(n)?(Math.abs(n)>=100?n.toFixed(1):n.toFixed(3)).replace(/\\.0+$/,''):String(v); }
 function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function attr(s){ return esc(s).replace(/`/g,'&#96;'); }
+function cellClass(col,val){
+  if(col==='tier') return 'tier'+esc(val);
+  if(col==='recovery_false_positive' && val) return 'fp';
+  return '';
+}
 function applyInitialFilters(){
-  const defaults = {tier:'all', sort:'rank', scope:'auto', limit:'300'};
-  for(const id of ['tier','sort','scope','limit']){
+  const defaults = {tier:'all', sort:'rank', scope:'auto', limit:'300', review:'all'};
+  for(const id of ['tier','sort','scope','limit','review']){
     const value = initialParams.get(id) || defaults[id];
     const el = document.getElementById(id);
     if(el && [...el.options].some(o=>o.value===value || o.text===value)) el.value = value;
