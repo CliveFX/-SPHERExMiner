@@ -352,6 +352,7 @@ def run_depth_test(
     cache_root: Path | None = typer.Option(None, help="Override SPHEREx cache root."),
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
     path_overrides: Path | None = typer.Option(None, help="JSON map from raw FITS path to replacement FITS path."),
+    fixed_targets_path: Path | None = typer.Option(None, help="Optional Parquet/CSV fixed target rows to use instead of querying Gaia."),
 ) -> None:
     """Run a deeper SIMP-centered spectral pass using one fixed target set."""
     summary = _run_depth_pipeline(
@@ -372,6 +373,7 @@ def run_depth_test(
         cache_root=cache_root,
         redownload=redownload,
         path_overrides=path_overrides,
+        fixed_targets_path=fixed_targets_path,
     )
     typer.echo(json.dumps(summary, indent=2, sort_keys=True))
 
@@ -396,6 +398,7 @@ def run_benchmark(
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
     output: Path | None = typer.Option(None, help="Optional benchmark summary JSON output."),
     path_overrides: Path | None = typer.Option(None, help="JSON map from raw FITS path to replacement FITS path."),
+    fixed_targets_path: Path | None = typer.Option(None, help="Optional Parquet/CSV fixed target rows to use instead of querying Gaia."),
 ) -> None:
     """Run one controlled benchmark pass and write throughput metrics."""
     wall_start = time.perf_counter()
@@ -417,6 +420,7 @@ def run_benchmark(
         cache_root=cache_root,
         redownload=redownload,
         path_overrides=path_overrides,
+        fixed_targets_path=fixed_targets_path,
     )
     wall_elapsed = time.perf_counter() - wall_start
     measurements = int(dict(summary.get("assembly") or {}).get("measurement_rows") or 0)
@@ -460,6 +464,7 @@ def _run_depth_pipeline(
     cache_root: Path | None,
     redownload: bool,
     path_overrides: Path | None = None,
+    fixed_targets_path: Path | None = None,
 ) -> dict[str, object]:
     cfg = load_config(cache_root)
     if run_name is not None:
@@ -511,14 +516,17 @@ def _run_depth_pipeline(
             float(trial.get("edge_distance_pix") or -1.0),
         ),
     )
-    fixed_targets = build_fixed_target_rows_from_trial(
-        target=manual_target,
-        cfg=cfg,
-        trial=best_trial,
-        max_gaia_sources=max_gaia_sources,
-        gaia_g_min=gaia_g_min,
-        gaia_g_max=gaia_g_max,
-    )
+    if fixed_targets_path is not None:
+        fixed_targets = _load_fixed_targets(fixed_targets_path)
+    else:
+        fixed_targets = build_fixed_target_rows_from_trial(
+            target=manual_target,
+            cfg=cfg,
+            trial=best_trial,
+            max_gaia_sources=max_gaia_sources,
+            gaia_g_min=gaia_g_min,
+            gaia_g_max=gaia_g_max,
+        )
     jobs = run_multi_trial_field_workers(
         target=manual_target,
         cfg=cfg,
@@ -554,6 +562,7 @@ def _run_depth_pipeline(
         "diagnostic_aperture_enabled": enable_diagnostic_aperture,
         "path_overrides_path": str(path_overrides) if path_overrides is not None else None,
         "path_override_count": len(path_override_map),
+        "fixed_targets_path": str(fixed_targets_path) if fixed_targets_path is not None else None,
         "assembly": assembly,
         "run_dir": str(cfg.smoke_run_dir),
     }
@@ -594,6 +603,24 @@ def _load_path_overrides(path: Path | None) -> dict[str, str]:
     if not isinstance(data, dict):
         raise typer.BadParameter("Path override JSON must be an object mapping original path to replacement path")
     return {str(key): str(value) for key, value in data.items()}
+
+
+def _load_fixed_targets(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        raise typer.BadParameter(f"Fixed target file not found: {path}")
+    import pandas as pd
+
+    if path.suffix.lower() == ".csv":
+        df = pd.read_csv(path)
+    else:
+        df = pd.read_parquet(path)
+    required = {"target_id", "target_type", "ra_reference_deg", "dec_reference_deg"}
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise typer.BadParameter(f"Fixed target file missing columns: {', '.join(missing)}")
+    if df.empty:
+        raise typer.BadParameter("Fixed target file is empty")
+    return df.where(pd.notna(df), None).to_dict(orient="records")
 
 
 def _read_json_file(path: Path) -> object:
