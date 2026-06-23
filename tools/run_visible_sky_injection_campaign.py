@@ -193,6 +193,7 @@ def main() -> None:
     parser.add_argument("--strengths-sigma", default="5,8,12")
     parser.add_argument("--targets-per-cell", type=int, default=3)
     parser.add_argument("--line-width-nm", type=float, default=1.0)
+    parser.add_argument("--max-line-flux-uJy", type=float)
     parser.add_argument("--min-snr", type=float, default=5.0)
     parser.add_argument("--wavelength-tolerance-nm", type=float, default=10.0)
     parser.add_argument("--viewer-base-url", default="http://127.0.0.1:8765")
@@ -281,27 +282,30 @@ def main() -> None:
             )
 
         if args.force or not _done(plan_path):
+            plan_cmd = [
+                py,
+                "tools/make_mixed_laser_injection_plan.py",
+                "--run-dir",
+                str(baseline_run),
+                "--campaign-id",
+                injection_campaign_id,
+                "--output-root",
+                str(args.cache_root / "injection_campaigns"),
+                "--strengths-sigma",
+                args.strengths_sigma,
+                "--targets-per-cell",
+                str(args.targets_per_cell),
+                "--line-width-nm",
+                str(args.line_width_nm),
+                "--min-measurements",
+                "20",
+                "--max-frames-per-injection",
+                "60",
+            ]
+            if args.max_line_flux_uJy is not None:
+                plan_cmd.extend(["--max-line-flux-uJy", str(args.max_line_flux_uJy)])
             _run(
-                [
-                    py,
-                    "tools/make_mixed_laser_injection_plan.py",
-                    "--run-dir",
-                    str(baseline_run),
-                    "--campaign-id",
-                    injection_campaign_id,
-                    "--output-root",
-                    str(args.cache_root / "injection_campaigns"),
-                    "--strengths-sigma",
-                    args.strengths_sigma,
-                    "--targets-per-cell",
-                    str(args.targets_per_cell),
-                    "--line-width-nm",
-                    str(args.line_width_nm),
-                    "--min-measurements",
-                    "20",
-                    "--max-frames-per-injection",
-                    "60",
-                ],
+                plan_cmd,
                 log_path=campaign_root / "logs" / f"{target_id}_make_plan.log",
                 env=env,
                 dry_run=args.dry_run,

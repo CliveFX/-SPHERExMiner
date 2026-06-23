@@ -77,6 +77,14 @@ def main() -> None:
     parser.add_argument("--max-frames-per-injection", type=int)
     parser.add_argument("--min-measurements", type=int, default=20)
     parser.add_argument(
+        "--max-line-flux-uJy",
+        type=float,
+        help=(
+            "Reject target/line/strength choices whose estimated intrinsic line flux exceeds this cap. "
+            "The estimate is strength_sigma * median_unc_uJy / max_response."
+        ),
+    )
+    parser.add_argument(
         "--allow-approx-wavelengths",
         action="store_true",
         help="Allow old MEF WCS-WAVE spectra. Not valid for science-grade injection/recovery.",
@@ -117,6 +125,7 @@ def main() -> None:
         cursor = 0
         for strength in strengths:
             picked = 0
+            skipped_cap = 0
             while picked < args.targets_per_cell and cursor < len(pool):
                 row = pool.iloc[cursor]
                 cursor += 1
@@ -124,11 +133,23 @@ def main() -> None:
                 target_line_key = (target_id, line_family)
                 if target_line_key in used_target_line:
                     continue
+                median_unc = _finite_float(row["median_unc_uJy"])
+                max_response = _finite_float(row["max_response"])
+                estimated_line_flux = None
+                if median_unc is not None and max_response is not None and max_response > 0:
+                    estimated_line_flux = float(strength) * median_unc / max_response
+                if (
+                    args.max_line_flux_uJy is not None
+                    and estimated_line_flux is not None
+                    and estimated_line_flux > args.max_line_flux_uJy
+                ):
+                    skipped_cap += 1
+                    continue
                 used_target_line.add(target_line_key)
                 targets_by_id[target_id] = {
                     "target_id": target_id,
                     "n_measurements": int(row["n_measurements"]),
-                    "median_unc_uJy": _finite_float(row["median_unc_uJy"]),
+                    "median_unc_uJy": median_unc,
                     "phot_g_mean_mag": _finite_float(row.get("phot_g_mean_mag")),
                 }
                 injection_id = _safe_id(f"{target_id}_{line_family}_{nominal_line_nm:g}nm_s{strength:g}")
@@ -145,12 +166,15 @@ def main() -> None:
                         "find_me_snr": float(strength),
                         "min_response": float(args.min_response),
                         "max_frames": args.max_frames_per_injection,
+                        "estimated_line_flux_uJy": estimated_line_flux,
+                        "line_flux_cap_uJy": args.max_line_flux_uJy,
                     }
                 )
                 picked += 1
             if picked < args.targets_per_cell:
                 print(
-                    f"warning: only picked {picked}/{args.targets_per_cell} for {line_family} s={strength:g}",
+                    f"warning: only picked {picked}/{args.targets_per_cell} for {line_family} s={strength:g}"
+                    + (f" ({skipped_cap} skipped by flux cap)" if skipped_cap else ""),
                     flush=True,
                 )
 
@@ -171,6 +195,7 @@ def main() -> None:
             "line_width_nm": args.line_width_nm,
             "min_response": args.min_response,
             "min_measurements": args.min_measurements,
+            "max_line_flux_uJy": args.max_line_flux_uJy,
             "seed": args.seed,
         },
         "line_families": line_families,

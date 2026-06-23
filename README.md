@@ -15,3 +15,8 @@ Run basic environment checks:
 ```bash
 spherex-mine doctor
 ```
+
+Operator documentation:
+
+- [SPHEREx Miner Operator Runbook](docs/operator_runbook.md)
+- [Visible-Sky Injection/Recovery Campaign](docs/visible_sky_injection_campaign.md)
