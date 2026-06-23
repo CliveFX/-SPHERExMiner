@@ -52,6 +52,8 @@ def _make_handler(run_dir: Path):
                     self._send_html(_live_html())
                 elif path == "/spectra":
                     self._send_html(_spectra_html())
+                elif path == "/injections":
+                    self._send_html(_injections_html())
                 elif path == "/frame-point":
                     self._send_html(_frame_point_html(active_run_dir, params))
                 elif path == "/api/runs":
@@ -78,6 +80,11 @@ def _make_handler(run_dir: Path):
                 elif path.startswith("/api/spectrum/"):
                     target_id = urllib.parse.unquote(path.removeprefix("/api/spectrum/"))
                     self._send_json(_spectrum(active_run_dir, target_id))
+                elif path == "/api/injections":
+                    self._send_json(_injections(active_run_dir, params))
+                elif path.startswith("/api/injection/"):
+                    injection_id = urllib.parse.unquote(path.removeprefix("/api/injection/"))
+                    self._send_json(_injection_detail(active_run_dir, injection_id))
                 elif path.startswith("/api/fits/"):
                     idx = int(path.split("/")[3])
                     self._send_json(_fits_info(active_run_dir, idx))
@@ -716,8 +723,9 @@ def _injection_manifest_candidates(run_dir: Path) -> list[Path]:
         run_dir / "injection_manifest.json",
         run_dir / "injections" / "injection_manifest.json",
     ]
-    summary_path = run_dir / "run_summary.json"
-    if summary_path.exists():
+    for summary_path in [run_dir / "run_summary.json", run_dir / "benchmark_summary.json"]:
+        if not summary_path.exists():
+            continue
         try:
             summary = _read_json(summary_path)
             overrides_path = summary.get("path_overrides_path")
@@ -791,6 +799,166 @@ def _injection_target_summary(run_dir: Path) -> pd.DataFrame:
 def _format_injected_lines(values: pd.Series) -> str:
     parsed = sorted({line for value in values if (line := _maybe_float(value)) is not None})
     return ",".join(f"{value:g}" for value in parsed)
+
+
+def _injection_recovery_path(run_dir: Path) -> Path | None:
+    candidates = [
+        run_dir / "recovery_score_mixed_lasers" / "injection_recovery.parquet",
+        run_dir / "recovery_score" / "injection_recovery.parquet",
+    ]
+    candidates.extend(sorted(run_dir.glob("recovery_score*/injection_recovery.parquet")))
+    return next((path for path in candidates if path.exists()), None)
+
+
+def _matched_candidates_path(run_dir: Path) -> Path | None:
+    candidates = [
+        run_dir / "classifier_mixed_lasers" / "matched_filter_candidates.parquet",
+        run_dir / "classifier" / "matched_filter_candidates.parquet",
+    ]
+    candidates.extend(sorted(run_dir.glob("classifier*/matched_filter_candidates.parquet")))
+    return next((path for path in candidates if path.exists()), None)
+
+
+def _recovery_table(run_dir: Path) -> pd.DataFrame:
+    recovery_path = _injection_recovery_path(run_dir)
+    if recovery_path and recovery_path.exists():
+        return pd.read_parquet(recovery_path)
+    rows: list[dict[str, object]] = []
+    for manifest_path in _injection_manifest_candidates(run_dir):
+        if not manifest_path.exists():
+            continue
+        manifest = _read_json(manifest_path)
+        injections = manifest.get("injections") if isinstance(manifest, dict) else None
+        if isinstance(injections, list):
+            for injection in injections:
+                row = dict(injection)
+                row.setdefault("recovered", False)
+                rows.append(row)
+    return pd.DataFrame(rows)
+
+
+def _matched_candidates_table(run_dir: Path) -> pd.DataFrame:
+    path = _matched_candidates_path(run_dir)
+    if path is None:
+        return pd.DataFrame()
+    return pd.read_parquet(path)
+
+
+def _injections(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    df = _recovery_table(run_dir)
+    if df.empty:
+        return {"rows": [], "total": 0, "limit": 0, "offset": 0, "summary": {}}
+    candidates = _matched_candidates_table(run_dir)
+    if not candidates.empty and "target_id" in candidates.columns:
+        cand_summary = (
+            candidates.groupby("target_id", dropna=False)
+            .agg(
+                target_candidate_count=("target_id", "size"),
+                target_best_candidate_snr=("matched_snr", "max"),
+            )
+            .reset_index()
+        )
+        df = df.merge(cand_summary, on="target_id", how="left")
+    for col in ("target_candidate_count",):
+        if col in df:
+            df[col] = df[col].fillna(0).astype(int)
+    for col in ("target_best_candidate_snr", "recovered_snr", "line_flux_uJy", "max_frame_flux_uJy"):
+        if col in df:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+    if "target_candidate_count" not in df:
+        df["target_candidate_count"] = 0
+    if "target_best_candidate_snr" not in df:
+        df["target_best_candidate_snr"] = np.nan
+
+    status = (params.get("status") or ["all"])[0]
+    line = (params.get("line") or ["all"])[0]
+    strength = (params.get("strength") or ["all"])[0]
+    q = (params.get("q") or [""])[0].strip().lower()
+    if status == "recovered" and "recovered" in df:
+        df = df[df["recovered"].fillna(False).astype(bool)]
+    elif status == "missed" and "recovered" in df:
+        df = df[~df["recovered"].fillna(False).astype(bool)]
+    elif status == "candidate":
+        df = df[pd.to_numeric(df["target_candidate_count"], errors="coerce").fillna(0).gt(0)]
+    if line != "all" and "line_family" in df:
+        df = df[df["line_family"].astype(str).eq(line)]
+    if strength != "all" and "find_me_snr" in df:
+        strength_value = _maybe_float(strength)
+        if strength_value is not None:
+            df = df[pd.to_numeric(df["find_me_snr"], errors="coerce").eq(strength_value)]
+    if q:
+        mask = pd.Series(False, index=df.index)
+        for col in ("injection_id", "target_id", "line_family", "candidate_status"):
+            if col in df:
+                mask |= df[col].astype(str).str.lower().str.contains(q, regex=False)
+        df = df[mask]
+
+    total = int(len(df))
+    sort = (params.get("sort") or ["line"])[0]
+    sort_cols = {
+        "strength": ["find_me_snr", "line_family", "target_id"],
+        "snr": ["recovered_snr", "target_best_candidate_snr", "find_me_snr"],
+        "flux": ["line_flux_uJy", "max_frame_flux_uJy"],
+        "target": ["target_id", "line_family"],
+        "line": ["injected_line_nm", "find_me_snr", "target_id"],
+    }.get(sort, ["injected_line_nm", "find_me_snr", "target_id"])
+    present = [col for col in sort_cols if col in df]
+    if present:
+        ascending = [False if col in {"recovered_snr", "target_best_candidate_snr", "line_flux_uJy", "max_frame_flux_uJy"} else True for col in present]
+        df = df.sort_values(present, ascending=ascending, na_position="last", kind="mergesort")
+
+    limit = min(1000, max(25, _query_int(params, "limit", 300)))
+    offset = max(0, _query_int(params, "offset", 0))
+    rows = df.iloc[offset : offset + limit].to_dict(orient="records")
+    full = _recovery_table(run_dir)
+    summary = {
+        "injection_count": int(len(full)),
+        "recovered_count": int(full["recovered"].fillna(False).astype(bool).sum()) if "recovered" in full else 0,
+        "missed_count": int((~full["recovered"].fillna(False).astype(bool)).sum()) if "recovered" in full else 0,
+        "candidate_count": int(len(candidates)),
+        "lines": sorted([str(value) for value in full.get("line_family", pd.Series(dtype=str)).dropna().unique()]),
+        "strengths": sorted([float(value) for value in pd.to_numeric(full.get("find_me_snr", pd.Series(dtype=float)), errors="coerce").dropna().unique()]),
+        "recovery_path": str(_injection_recovery_path(run_dir) or ""),
+        "candidates_path": str(_matched_candidates_path(run_dir) or ""),
+    }
+    return {"rows": rows, "total": total, "limit": limit, "offset": offset, "summary": summary}
+
+
+def _injection_detail(run_dir: Path, injection_id: str) -> dict[str, object]:
+    recovery = _recovery_table(run_dir)
+    row_df = recovery[recovery.get("injection_id", pd.Series(dtype=str)).astype(str).eq(injection_id)] if not recovery.empty else pd.DataFrame()
+    if row_df.empty:
+        return {"injection_id": injection_id, "error": "not found"}
+    injection = row_df.iloc[0].to_dict()
+    target_id = str(injection.get("target_id"))
+    target_injections = recovery[recovery["target_id"].astype(str).eq(target_id)].to_dict(orient="records") if "target_id" in recovery else []
+    candidates = _matched_candidates_table(run_dir)
+    target_candidates = pd.DataFrame()
+    if not candidates.empty and "target_id" in candidates:
+        target_candidates = candidates[candidates["target_id"].astype(str).eq(target_id)].copy()
+        line_nm = _maybe_float(injection.get("injected_line_nm") or injection.get("nominal_line_nm"))
+        family = str(injection.get("line_family") or "")
+        if line_nm is not None and "candidate_line_nm" in target_candidates:
+            candidate_family = (
+                target_candidates["line_family"].astype(str)
+                if "line_family" in target_candidates
+                else pd.Series([""] * len(target_candidates), index=target_candidates.index)
+            )
+            target_candidates["selected_injection_match"] = (
+                candidate_family.eq(family)
+                & (pd.to_numeric(target_candidates["candidate_line_nm"], errors="coerce") - line_nm).abs().le(10.0)
+            )
+        else:
+            target_candidates["selected_injection_match"] = False
+        if "matched_snr" in target_candidates:
+            target_candidates = target_candidates.sort_values("matched_snr", ascending=False, na_position="last")
+    spectrum = _spectrum(run_dir, target_id)
+    return {
+        "injection": injection,
+        "target_injections": target_injections,
+        "target_candidates": target_candidates.to_dict(orient="records"),
+        "spectrum": spectrum,
+    }
 
 
 def _sort_targets_df(df: pd.DataFrame, sort: str) -> pd.DataFrame:
@@ -1598,6 +1766,294 @@ function escapeHtml(v) {
 
 tick();
 setInterval(tick, 1500);
+</script>
+</body>
+</html>"""
+
+
+def _injections_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SPHEREx Injection Recovery Browser</title>
+  <style>
+    :root { --bg:#050914; --panel:#0b1424; --panel2:#0f1f33; --line:#1f3a5f; --text:#e7f6ff; --muted:#86a4bf; --cyan:#36e7ff; --pink:#ff4fd8; --green:#25f38c; --amber:#ffb84a; --red:#ff5c7c; }
+    * { box-sizing: border-box; }
+    body {
+      margin:0;
+      color:var(--text);
+      font:13px system-ui, sans-serif;
+      background:
+        linear-gradient(90deg, rgba(54,231,255,.055) 1px, transparent 1px),
+        linear-gradient(rgba(255,79,216,.04) 1px, transparent 1px),
+        radial-gradient(circle at 18% 8%, rgba(54,231,255,.16), transparent 30%),
+        radial-gradient(circle at 82% 88%, rgba(255,79,216,.12), transparent 34%),
+        var(--bg);
+      background-size:42px 42px,42px 42px,auto,auto;
+      letter-spacing:0;
+    }
+    header { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); background:rgba(5,9,20,.92); box-shadow:0 0 28px rgba(54,231,255,.13); }
+    h1 { margin:0; font-size:18px; color:var(--cyan); text-shadow:0 0 16px rgba(54,231,255,.55); }
+    a { color:#93e8ff; }
+    main { display:grid; grid-template-columns: 520px minmax(720px, 1fr); gap:12px; padding:12px; }
+    section { background:rgba(11,20,36,.92); border:1px solid var(--line); border-radius:6px; padding:10px; min-width:0; box-shadow:inset 0 0 0 1px rgba(54,231,255,.04), 0 0 24px rgba(0,0,0,.36); }
+    label { display:block; color:var(--muted); font-size:12px; margin:7px 0 4px; }
+    input, select, button { width:100%; padding:7px; background:#07101e; color:var(--text); border:1px solid var(--line); border-radius:4px; }
+    button { cursor:pointer; }
+    button:hover { border-color:var(--cyan); }
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .grid4 { display:grid; grid-template-columns:repeat(4,1fr); gap:8px; }
+    .tiles { display:grid; grid-template-columns:repeat(6,minmax(100px,1fr)); gap:8px; margin-bottom:10px; }
+    .tile { border:1px solid var(--line); background:rgba(9,21,39,.92); border-radius:4px; padding:8px; }
+    .tile .k { color:var(--muted); font-size:10px; text-transform:uppercase; }
+    .tile .v { font-size:15px; margin-top:3px; color:var(--text); }
+    #injectionList { width:100%; height:calc(100vh - 260px); min-height:520px; border-collapse:collapse; font-size:11px; }
+    .scroll { overflow:auto; max-height:calc(100vh - 250px); border:1px solid var(--line); border-radius:4px; }
+    table { width:100%; border-collapse:collapse; }
+    th, td { border-bottom:1px solid rgba(31,58,95,.85); padding:5px 6px; text-align:left; white-space:nowrap; }
+    th { position:sticky; top:0; background:#0b182b; color:#8eeaff; z-index:1; }
+    tr { cursor:pointer; }
+    tr:hover { background:rgba(54,231,255,.08); }
+    tr.selected { background:rgba(255,79,216,.16); outline:1px solid rgba(255,79,216,.45); }
+    .recovered { color:var(--green); }
+    .missed { color:var(--red); }
+    .candidate { color:var(--amber); }
+    #plot { width:100%; height:620px; background:rgba(3,8,18,.95); border:1px solid #17617d; border-radius:6px; box-shadow:0 0 28px rgba(54,231,255,.13), inset 0 0 24px rgba(255,79,216,.035); }
+    .small { color:var(--muted); font-size:12px; }
+    .mono { font-family:ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .tabs { display:flex; gap:8px; margin-bottom:8px; }
+    .tabs button { width:auto; min-width:120px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Injection Recovery Browser</h1>
+  <div class="small"><a href="/spectra">Spectra</a> · <a href="/live">Live workers</a> · <a href="/">Fields</a></div>
+</header>
+<main>
+  <section>
+    <div class="grid2">
+      <button onclick="refreshAll()">Refresh</button>
+      <button onclick="pageInjections(0)">First page</button>
+    </div>
+    <label for="runSelect">Run</label>
+    <select id="runSelect" onchange="switchRun()"></select>
+    <div class="grid4">
+      <div><label>Status</label><select id="status" onchange="fetchInjections(0)"><option value="all">All</option><option value="recovered">Recovered</option><option value="missed">Missed</option><option value="candidate">Has scorer candidate</option></select></div>
+      <div><label>Line</label><select id="line" onchange="fetchInjections(0)"><option value="all">All</option></select></div>
+      <div><label>Strength</label><select id="strength" onchange="fetchInjections(0)"><option value="all">All</option></select></div>
+      <div><label>Sort</label><select id="sort" onchange="fetchInjections(0)"><option value="line">Line</option><option value="strength">Strength</option><option value="snr">Recovered SNR</option><option value="flux">Flux</option><option value="target">Target</option></select></div>
+    </div>
+    <label>Search</label>
+    <input id="query" placeholder="injection id, target id, 1064, diode..." oninput="scheduleFetch()">
+    <div class="grid2" style="margin-top:8px">
+      <button onclick="pageInjections(-1)">Prev</button>
+      <button onclick="pageInjections(1)">Next</button>
+    </div>
+    <div id="pageInfo" class="small"></div>
+    <div class="scroll" style="margin-top:8px">
+      <table id="injectionList"></table>
+    </div>
+  </section>
+  <div>
+    <section>
+      <div class="tiles" id="summaryTiles"></div>
+      <svg id="plot" viewBox="0 0 1160 620"></svg>
+      <div class="small">Solid magenta line is the selected injected wavelength. Amber dashed lines are scorer candidates for the same target. Orange points are fatal-flagged measurements.</div>
+    </section>
+    <section style="margin-top:12px">
+      <div class="tabs">
+        <button onclick="setTableMode('candidates')">Candidates</button>
+        <button onclick="setTableMode('targetInjections')">Target injections</button>
+        <button onclick="setTableMode('points')">Spectrum points</button>
+      </div>
+      <div id="detailTable"></div>
+    </section>
+  </div>
+</main>
+<script>
+let activeRun = new URLSearchParams(window.location.search).get('run') || '';
+let rows = [], total = 0, offset = 0, limit = 300, summary = {};
+let selectedId = null, detail = null, tableMode = 'candidates', fetchTimer = null;
+
+function runQS(extra) {
+  const p = new URLSearchParams(extra || '');
+  if (activeRun) p.set('run', activeRun);
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
+async function getJSON(url) {
+  const r = await fetch(url, {cache:'no-store'});
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+async function refreshAll() {
+  const runs = await getJSON('/api/runs' + runQS());
+  if (!activeRun && runs.length) activeRun = runs[0].name;
+  const rs = document.getElementById('runSelect');
+  rs.innerHTML = runs.map(r => `<option value="${escapeHtml(r.name)}">${escapeHtml(r.name)} ${r.has_spectra ? '['+(r.measurement_rows || 0)+' rows]' : ''}</option>`).join('');
+  rs.value = activeRun;
+  await fetchInjections(0);
+}
+function switchRun() {
+  activeRun = document.getElementById('runSelect').value;
+  selectedId = null; detail = null;
+  refreshAll();
+}
+function scheduleFetch() {
+  clearTimeout(fetchTimer);
+  fetchTimer = setTimeout(() => fetchInjections(0), 180);
+}
+async function fetchInjections(newOffset) {
+  offset = Math.max(0, newOffset || 0);
+  const q = document.getElementById('query').value.trim();
+  const params = `limit=${limit}&offset=${offset}&status=${encodeURIComponent(val('status'))}&line=${encodeURIComponent(val('line'))}&strength=${encodeURIComponent(val('strength'))}&sort=${encodeURIComponent(val('sort'))}&q=${encodeURIComponent(q)}`;
+  const data = await getJSON('/api/injections' + runQS(params));
+  rows = data.rows || []; total = data.total || 0; offset = data.offset || 0; limit = data.limit || limit; summary = data.summary || {};
+  syncFilters();
+  renderList();
+  if (!selectedId || !rows.some(r => r.injection_id === selectedId)) {
+    const prefer1064Miss = rows.find(r => String(r.line_family) === 'nd_yag_1064' && !r.recovered);
+    const first = prefer1064Miss || rows[0];
+    if (first) await selectInjection(first.injection_id);
+    else { detail = null; renderDetail(); }
+  } else {
+    renderList();
+  }
+}
+function syncFilters() {
+  const lineSelect = document.getElementById('line');
+  const oldLine = lineSelect.value || 'all';
+  lineSelect.innerHTML = '<option value="all">All</option>' + (summary.lines || []).map(x => `<option value="${escapeHtml(x)}">${escapeHtml(x)}</option>`).join('');
+  lineSelect.value = [...lineSelect.options].some(o => o.value === oldLine) ? oldLine : 'all';
+  const strengthSelect = document.getElementById('strength');
+  const oldStrength = strengthSelect.value || 'all';
+  strengthSelect.innerHTML = '<option value="all">All</option>' + (summary.strengths || []).map(x => `<option value="${x}">${fmt(x)}</option>`).join('');
+  strengthSelect.value = [...strengthSelect.options].some(o => o.value === oldStrength) ? oldStrength : 'all';
+}
+function renderList() {
+  const table = document.getElementById('injectionList');
+  table.innerHTML = '<thead><tr><th>Status</th><th>Line</th><th>Sigma</th><th>Recovered SNR</th><th>Target candidates</th><th>Flux uJy</th><th>Target</th></tr></thead><tbody>' +
+    rows.map(r => {
+      const status = r.recovered ? 'recovered' : 'missed';
+      const cls = [status, r.injection_id === selectedId ? 'selected' : ''].join(' ');
+      return `<tr class="${cls}" onclick="selectInjection('${escapeAttr(r.injection_id)}')">
+        <td class="${status}">${status}</td><td>${escapeHtml(r.line_family)} ${fmt(r.injected_line_nm || r.nominal_line_nm)}nm</td><td>${fmt(r.find_me_snr)}</td>
+        <td>${fmt(r.recovered_snr)}</td><td class="candidate">${fmt(r.target_candidate_count || 0)} / ${fmt(r.target_best_candidate_snr)}</td>
+        <td>${fmt(r.line_flux_uJy)}</td><td class="mono">${escapeHtml(r.target_id)}</td></tr>`;
+    }).join('') + '</tbody>';
+  const start = total ? offset + 1 : 0, end = Math.min(total, offset + rows.length);
+  document.getElementById('pageInfo').textContent = `${start}-${end} of ${total} injections · recovered ${summary.recovered_count || 0}/${summary.injection_count || 0} · candidates ${summary.candidate_count || 0}`;
+}
+function pageInjections(direction) {
+  if (direction === 0) return fetchInjections(0);
+  const next = Math.min(Math.max(0, offset + direction * limit), Math.max(0, total - 1));
+  fetchInjections(next);
+}
+async function selectInjection(id) {
+  selectedId = id;
+  renderList();
+  detail = await getJSON('/api/injection/' + encodeURIComponent(id) + runQS());
+  renderDetail();
+}
+function renderDetail() {
+  if (!detail || detail.error) {
+    document.getElementById('summaryTiles').innerHTML = '<div class="tile"><div class="v">No injection selected</div></div>';
+    document.getElementById('plot').innerHTML = '';
+    document.getElementById('detailTable').innerHTML = '';
+    return;
+  }
+  const inj = detail.injection || {};
+  const cand = detail.target_candidates || [];
+  const matched = cand.filter(c => c.selected_injection_match);
+  const tiles = [
+    ['Injection', inj.injection_id],
+    ['Target', inj.target_id],
+    ['Line', `${inj.line_family || ''} ${fmt(inj.injected_line_nm || inj.nominal_line_nm)} nm`],
+    ['Strength', `${fmt(inj.find_me_snr)} sigma`],
+    ['Recovered', inj.recovered ? `yes · SNR ${fmt(inj.recovered_snr)}` : 'missed'],
+    ['Target candidates', `${cand.length} total · ${matched.length} line match`],
+    ['Line flux', `${fmt(inj.line_flux_uJy)} uJy`],
+    ['Max frame flux', `${fmt(inj.max_frame_flux_uJy)} uJy`],
+    ['Frames', `${fmt(inj.frames_written)} written / ${fmt(inj.frames_skipped || 0)} skipped`],
+    ['Candidate status', inj.candidate_status || '']
+  ];
+  document.getElementById('summaryTiles').innerHTML = tiles.map(([k,v]) => `<div class="tile"><div class="k">${escapeHtml(k)}</div><div class="v">${escapeHtml(v)}</div></div>`).join('');
+  drawPlot(detail.spectrum?.rows || [], inj, cand);
+  renderTable();
+}
+function setTableMode(mode) { tableMode = mode; renderTable(); }
+function renderTable() {
+  if (!detail) return;
+  if (tableMode === 'targetInjections') {
+    document.getElementById('detailTable').innerHTML = makeTable(detail.target_injections || [], ['recovered','line_family','injected_line_nm','find_me_snr','recovered_snr','line_flux_uJy','max_frame_flux_uJy','frames_written','injection_id']);
+  } else if (tableMode === 'points') {
+    const pts = [...(detail.spectrum?.rows || [])].sort((a,b)=>num(a.cwave_um)-num(b.cwave_um));
+    document.getElementById('detailTable').innerHTML = makeTable(pts.slice(0,420), ['cwave_um','aperture_flux_uJy','aperture_flux_unc_uJy','fatal_flag_present','detector','image_id','input_file_path']);
+  } else {
+    document.getElementById('detailTable').innerHTML = makeTable(detail.target_candidates || [], ['selected_injection_match','candidate_line_nm','line_family','matched_snr','matched_flux_uJy','matched_flux_unc_uJy','n_supporting_points','n_flagged_nearby','best_frame_ids']);
+  }
+}
+function drawPlot(points, inj, candidates) {
+  const svg = document.getElementById('plot');
+  svg.innerHTML = '';
+  const W=1160,H=620,m={l:74,r:28,t:26,b:54};
+  const clean = points.map(p => ({x:num(p.cwave_um), y:num(p.aperture_flux_uJy), unc:num(p.aperture_flux_unc_uJy), flag:!!p.fatal_flag_present, image_id:p.image_id})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (!clean.length) { add('text',{x:W/2,y:H/2,fill:'#86a4bf','text-anchor':'middle'},'No spectrum points'); return; }
+  const xmin=0.72,xmax=5.05;
+  const inRange = clean.filter(p => p.x>=xmin && p.x<=xmax).map(p=>p.y).sort((a,b)=>a-b);
+  let ymin = quantile(inRange, .02), ymax = quantile(inRange, .98);
+  const pad=(ymax-ymin || 1)*.12; ymin-=pad; ymax+=pad;
+  const xs = v => m.l + (v-xmin)/(xmax-xmin)*(W-m.l-m.r);
+  const ys = v => H-m.b - (v-ymin)/(ymax-ymin || 1)*(H-m.t-m.b);
+  for (let v=1; v<=5; v++) { line(xs(v),m.t,xs(v),H-m.b,'#1f3a5f',.55); text(xs(v),H-22,String(v),'#86a4bf','middle'); }
+  for (let i=0; i<5; i++) line(m.l,m.t+i*(H-m.t-m.b)/4,W-m.r,m.t+i*(H-m.t-m.b)/4,'#1f3a5f',.5);
+  line(m.l,H-m.b,W-m.r,H-m.b,'#86a4bf',1); line(m.l,m.t,m.l,H-m.b,'#86a4bf',1);
+  const smooth = medianBinned(clean, 80);
+  if (smooth.length > 1) add('path',{d:pathFrom(smooth,xs,ys),fill:'none',stroke:'#e7f6ff','stroke-width':1.45,opacity:.72});
+  for (const p of clean) point(xs(p.x), ys(p.y), p.flag ? '#ff8a3d' : '#25f38c', p.flag ? .35 : .82, p.flag ? 2.7 : 3.1, `${fmt(p.x)}um ${fmt(p.y)}uJy\\n${p.image_id || ''}`);
+  const lineNm = num(inj.injected_line_nm || inj.nominal_line_nm), lineUm = lineNm/1000;
+  if (Number.isFinite(lineUm)) {
+    const xx = xs(lineUm);
+    line(xx,m.t,xx,H-m.b,'#ff4fd8',1,2.5);
+    text(xx+5,m.t+18,`${fmt(lineNm)} nm injected`,'#ff9dea','start');
+  }
+  for (const c of candidates || []) {
+    const cu = num(c.candidate_line_nm)/1000;
+    if (!Number.isFinite(cu)) continue;
+    const color = c.selected_injection_match ? '#ffb84a' : '#36e7ff';
+    dashed(xs(cu),m.t,xs(cu),H-m.b,color,.55);
+    text(xs(cu)+4,H-m.b-12,`${fmt(c.candidate_line_nm)} SNR ${fmt(c.matched_snr)}`,color,'start');
+  }
+  text(W/2,H-7,'wavelength (um)','#86a4bf','middle');
+  text(16,H/2,'aperture flux (uJy)','#86a4bf','middle','rotate(-90 16 '+(H/2)+')');
+  function add(name, attrs, label) { const el=document.createElementNS('http://www.w3.org/2000/svg',name); for (const [k,v] of Object.entries(attrs)) el.setAttribute(k,v); if (label!==undefined && name==='text') el.textContent=label; else if (label!==undefined) { const t=document.createElementNS('http://www.w3.org/2000/svg','title'); t.textContent=label; el.appendChild(t); } svg.appendChild(el); return el; }
+  function line(x1,y1,x2,y2,color,op,w=1){ add('line',{x1,y1,x2,y2,stroke:color,opacity:op,'stroke-width':w}); }
+  function dashed(x1,y1,x2,y2,color,op){ add('line',{x1,y1,x2,y2,stroke:color,opacity:op,'stroke-width':1.5,'stroke-dasharray':'5 5'}); }
+  function point(cx,cy,color,op,r,label){ if(Number.isFinite(cx)&&Number.isFinite(cy)) add('circle',{cx,cy,r,fill:color,opacity:op},label); }
+  function text(x,y,s,color,anchor,transform){ const attrs={x,y,fill:color,'text-anchor':anchor||'start'}; if(transform) attrs.transform=transform; add('text',attrs,s); }
+}
+function medianBinned(rows, maxBins) {
+  const sorted = [...rows].sort((a,b)=>a.x-b.x), bins = Math.min(maxBins, Math.max(10, Math.ceil(sorted.length/3)));
+  const xmin = sorted[0].x, xmax = sorted[sorted.length-1].x, out = Array.from({length:bins},()=>[]);
+  for (const r of sorted) out[Math.max(0, Math.min(bins-1, Math.floor((r.x-xmin)/Math.max(xmax-xmin,1e-9)*bins)))].push(r);
+  return out.filter(b=>b.length).map(b=>({x:median(b.map(r=>r.x).sort((a,b)=>a-b)), y:median(b.map(r=>r.y).sort((a,b)=>a-b))}));
+}
+function pathFrom(rows,xs,ys) { return rows.map((p,i)=>(i?'L':'M')+' '+xs(p.x)+' '+ys(p.y)).join(' '); }
+function makeTable(rows, cols) {
+  if (!rows.length) return '<div class="small">No rows</div>';
+  return '<div class="scroll" style="max-height:320px"><table><thead><tr>'+cols.map(c=>`<th>${c}</th>`).join('')+'</tr></thead><tbody>'+
+    rows.map(r=>'<tr>'+cols.map(c=>`<td>${escapeHtml(fmt(r[c]))}</td>`).join('')+'</tr>').join('')+'</tbody></table></div>';
+}
+function val(id){ return document.getElementById(id).value; }
+function num(v){ const n=Number(v); return Number.isFinite(n)?n:NaN; }
+function median(a){ if(!a.length)return NaN; const m=Math.floor(a.length/2); return a.length%2?a[m]:(a[m-1]+a[m])/2; }
+function quantile(a,q){ if(!a.length)return NaN; return a[Math.max(0,Math.min(a.length-1,Math.floor(q*(a.length-1))))]; }
+function fmt(v){ const n=Number(v); if(!Number.isFinite(n)) return v === null || v === undefined ? '' : String(v); if(Math.abs(n)>=1000)return n.toExponential(3); if(Math.abs(n)>=10)return n.toFixed(2); return n.toFixed(4); }
+function escapeHtml(v){ return String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function escapeAttr(v){ return String(v ?? '').replace(/[\\\\']/g,'_').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+refreshAll().catch(e => document.body.insertAdjacentHTML('beforeend','<pre style="color:#ff8a9b">'+escapeHtml(e.stack || String(e))+'</pre>'));
 </script>
 </body>
 </html>"""
