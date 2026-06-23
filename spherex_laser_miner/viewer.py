@@ -1482,7 +1482,7 @@ def _simple_status_html() -> str:
   <h1>SPHEREx Simple Status</h1>
   <div>
     <select id="runSelect" onchange="switchRun()"></select>
-    <button onclick="refresh()">Refresh</button>
+    <button type="button" onclick="manualRefresh()">Refresh</button>
     <a id="spectraLink" href="/spectra">Spectra</a>
   </div>
 </header>
@@ -1527,28 +1527,38 @@ async function getJSON(url) {
 }
 
 async function init() {
+  await loadRuns();
+  updateLinks();
+  await refreshStatus();
+  timer = setInterval(refreshStatus, 2000);
+}
+
+async function loadRuns() {
   const runs = await getJSON('/api/runs' + runQS());
   const rs = document.getElementById('runSelect');
   if (!activeRun && runs.length) activeRun = runs[0].name;
   rs.innerHTML = runs.map(r => `<option value="${esc(r.name)}">${esc(r.name)}</option>`).join('');
   rs.value = activeRun;
-  updateLinks();
-  await refresh();
-  timer = setInterval(refresh, 2000);
 }
 
 function switchRun() {
   activeRun = document.getElementById('runSelect').value;
   updateLinks();
   history.replaceState(null, '', '/simple-status' + runQS());
-  refresh();
+  refreshStatus();
 }
 
 function updateLinks() {
   document.getElementById('spectraLink').href = '/spectra' + runQS();
 }
 
-async function refresh() {
+async function manualRefresh() {
+  await loadRuns();
+  updateLinks();
+  await refreshStatus();
+}
+
+async function refreshStatus() {
   const data = await getJSON('/api/simple-status' + runQS('ts=' + Date.now()));
   const s = data.summary || {};
   setText('total', fmtInt(s.total_fields));
