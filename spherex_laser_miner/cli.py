@@ -353,6 +353,7 @@ def run_depth_test(
     redownload: bool = typer.Option(False, help="Refresh cached parent MEFs."),
     path_overrides: Path | None = typer.Option(None, help="JSON map from raw FITS path to replacement FITS path."),
     fixed_targets_path: Path | None = typer.Option(None, help="Optional Parquet/CSV fixed target rows to use instead of querying Gaia."),
+    field_launch_stagger_sec: float = typer.Option(0.0, min=0.0, help="Delay between field worker submissions; useful for GPU backend startup."),
 ) -> None:
     """Run a deeper SIMP-centered spectral pass using one fixed target set."""
     summary = _run_depth_pipeline(
@@ -374,6 +375,7 @@ def run_depth_test(
         redownload=redownload,
         path_overrides=path_overrides,
         fixed_targets_path=fixed_targets_path,
+        field_launch_stagger_sec=field_launch_stagger_sec,
     )
     typer.echo(json.dumps(summary, indent=2, sort_keys=True))
 
@@ -399,6 +401,7 @@ def run_benchmark(
     output: Path | None = typer.Option(None, help="Optional benchmark summary JSON output."),
     path_overrides: Path | None = typer.Option(None, help="JSON map from raw FITS path to replacement FITS path."),
     fixed_targets_path: Path | None = typer.Option(None, help="Optional Parquet/CSV fixed target rows to use instead of querying Gaia."),
+    field_launch_stagger_sec: float = typer.Option(0.0, min=0.0, help="Delay between field worker submissions; useful for GPU backend startup."),
 ) -> None:
     """Run one controlled benchmark pass and write throughput metrics."""
     wall_start = time.perf_counter()
@@ -421,6 +424,7 @@ def run_benchmark(
         redownload=redownload,
         path_overrides=path_overrides,
         fixed_targets_path=fixed_targets_path,
+        field_launch_stagger_sec=field_launch_stagger_sec,
     )
     wall_elapsed = time.perf_counter() - wall_start
     measurements = int(dict(summary.get("assembly") or {}).get("measurement_rows") or 0)
@@ -465,6 +469,7 @@ def _run_depth_pipeline(
     redownload: bool,
     path_overrides: Path | None = None,
     fixed_targets_path: Path | None = None,
+    field_launch_stagger_sec: float = 0.0,
 ) -> dict[str, object]:
     cfg = load_config(cache_root)
     if run_name is not None:
@@ -491,6 +496,7 @@ def _run_depth_pipeline(
             gaia_g_min=gaia_g_min,
             gaia_g_max=gaia_g_max,
             photometry_backend=photometry_backend,
+            field_launch_stagger_sec=field_launch_stagger_sec,
         )
     manual_target = get_manual_target(cfg.manual_targets_path, target)
     try:
@@ -539,6 +545,7 @@ def _run_depth_pipeline(
         gaia_g_max=gaia_g_max,
         path_overrides=path_override_map,
         max_field_retries=max_field_retries,
+        field_launch_stagger_sec=field_launch_stagger_sec,
     )
     error_path = cfg.smoke_run_dir / "field_errors.json"
     field_errors = _read_json_file(error_path) if error_path.exists() else []
@@ -563,6 +570,7 @@ def _run_depth_pipeline(
         "path_overrides_path": str(path_overrides) if path_overrides is not None else None,
         "path_override_count": len(path_override_map),
         "fixed_targets_path": str(fixed_targets_path) if fixed_targets_path is not None else None,
+        "field_launch_stagger_sec": field_launch_stagger_sec,
         "assembly": assembly,
         "run_dir": str(cfg.smoke_run_dir),
     }

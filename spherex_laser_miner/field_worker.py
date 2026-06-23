@@ -389,6 +389,7 @@ def run_multi_trial_field_workers(
     gaia_g_max: float = 19.0,
     path_overrides: dict[str, str] | None = None,
     max_field_retries: int = 0,
+    field_launch_stagger_sec: float = 0.0,
 ) -> list[dict[str, object]]:
     if cfg.status_mode == "live":
         reset_live_status(cfg.smoke_run_dir)
@@ -491,7 +492,12 @@ def run_multi_trial_field_workers(
                 failed_jobs.append({"image_id": Path(str(trial["local_path"])).stem, "error": f"{type(exc).__name__}: {exc}"})
     else:
         with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="field-worker") as executor:
-            futures = {executor.submit(run_one, trial): trial for trial in selected_trials}
+            futures = {}
+            stagger = max(0.0, float(field_launch_stagger_sec))
+            for idx, trial in enumerate(selected_trials):
+                futures[executor.submit(run_one, trial)] = trial
+                if stagger > 0.0 and idx + 1 < len(selected_trials):
+                    time.sleep(stagger)
             for future in as_completed(futures):
                 trial = futures[future]
                 try:
