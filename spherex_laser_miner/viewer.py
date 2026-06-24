@@ -5310,6 +5310,7 @@ def _umap_html() -> str:
     tr.selected { background:rgba(255,79,216,.13); }
     .scroll { max-height:330px; overflow:auto; border:1px solid rgba(33,68,95,.6); border-radius:5px; }
     .pill { display:inline-block; padding:2px 7px; border:1px solid var(--line); border-radius:4px; }
+    #hoverSpectrum { width:100%; height:260px; display:block; border:1px solid #1d5f7a; border-radius:6px; background:rgba(4,10,20,.94); }
   </style>
 </head>
 <body>
@@ -5357,6 +5358,11 @@ def _umap_html() -> str:
       <canvas id="map"></canvas>
       <div id="tip"></div>
     </div>
+    <section style="padding:8px; margin-top:10px">
+      <h3>Hover Spectrum</h3>
+      <canvas id="hoverSpectrum"></canvas>
+      <div id="hoverMeta" class="small">Move over a point to preview its aperture and PSF spectrum. Click a point to pin it below.</div>
+    </section>
     <div class="row" style="margin-top:10px">
       <section style="padding:8px">
         <h3>Selected Point</h3>
@@ -5377,6 +5383,11 @@ let selectedIndex = -1;
 let timer = null;
 const canvas = document.getElementById('map');
 const tip = document.getElementById('tip');
+const hoverSpectrum = document.getElementById('hoverSpectrum');
+const spectrumCache = new Map();
+let hoverIndex = -1;
+let hoverTimer = null;
+let hoverRequestSeq = 0;
 
 function val(id){ return document.getElementById(id).value; }
 function setVal(id,v){ document.getElementById(id).value = v || ''; }
@@ -5496,7 +5507,7 @@ function colorFor(r){
   const mode = val('color');
   if (mode === 'gmag') return ramp(Number(r.phot_g_mean_mag), 5, 17);
   if (mode === 'bprp') return ramp(Number(r.bp_rp), -0.5, 4);
-  if (mode === 'quality') return ramp(Number(r.spectrum_quality_score), 0, 1);
+  if (mode === 'quality') return ramp(Number(r.spectrum_quality_score), 0, 100);
   if (mode === 'flags') return ramp(1 - Number(r.flag_fraction || 0), 0, 1);
   const id = Number(r.cluster_id);
   const hue = Number.isFinite(id) ? (id * 47) % 360 : 190;
@@ -5534,6 +5545,117 @@ function selectPoint(i){
     <div style="margin-top:6px"><a href="${esc(r.spectra_url)}">spectra</a> · <a href="${esc(r.similar_url)}">similar spectra</a></div>`;
   draw();
 }
+function maybePreviewSpectrum(i){
+  if (i < 0 || i === hoverIndex) return;
+  hoverIndex = i;
+  clearTimeout(hoverTimer);
+  hoverTimer = setTimeout(() => previewSpectrum(i), 55);
+}
+async function previewSpectrum(i){
+  const r = (data.points || [])[i];
+  if (!r) return;
+  const key = `${r.run_name}::${r.target_id}`;
+  document.getElementById('hoverMeta').innerHTML = `<span class="mono">${esc(r.target_id)}</span> · loading spectrum`;
+  const seq = ++hoverRequestSeq;
+  try {
+    let rows = spectrumCache.get(key);
+    if (!rows) {
+      const payload = await getJSON('/api/spectrum/' + encodeURIComponent(r.target_id) + '?run=' + encodeURIComponent(r.run_name || ''));
+      rows = payload.rows || [];
+      spectrumCache.set(key, rows);
+      if (spectrumCache.size > 260) spectrumCache.delete(spectrumCache.keys().next().value);
+    }
+    if (seq !== hoverRequestSeq) return;
+    drawHoverSpectrum(rows, r);
+  } catch (err) {
+    if (seq !== hoverRequestSeq) return;
+    document.getElementById('hoverMeta').innerHTML = `<span style="color:#fecdd3">spectrum load failed:</span> ${esc(err.message || err)}`;
+    drawHoverSpectrum([], r);
+  }
+}
+function drawHoverSpectrum(rows, point){
+  const rect = hoverSpectrum.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  hoverSpectrum.width = Math.max(600, Math.floor(rect.width * dpr));
+  hoverSpectrum.height = Math.max(220, Math.floor(rect.height * dpr));
+  const ctx = hoverSpectrum.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  const w = rect.width, h = rect.height;
+  ctx.clearRect(0,0,w,h);
+  ctx.fillStyle = '#040a14';
+  ctx.fillRect(0,0,w,h);
+  const m = {l:58,r:18,t:22,b:34};
+  const ap = rows.map(r => ({x:Number(r.cwave_um), y:Number(r.aperture_flux_uJy), bad:!!r.fatal_flag_present})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+  const psf = rows.map(r => ({x:Number(r.cwave_um), y:Number(r.psf_flux_uJy), bad:!!r.fatal_flag_present})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+  const all = ap.concat(psf);
+  drawSpectrumGrid(ctx, w, h, m);
+  if (!all.length) {
+    ctx.fillStyle = '#91a8c2';
+    ctx.textAlign = 'center';
+    ctx.fillText('No spectrum rows for hover target', w/2, h/2);
+    return;
+  }
+  const xmin = Math.min(...all.map(p=>p.x)), xmax = Math.max(...all.map(p=>p.x));
+  const ys = all.map(p=>p.y).sort((a,b)=>a-b);
+  const lo = quant(ys, .02), hi = quant(ys, .98), pad = (hi-lo || 1)*.12;
+  const ymin = lo - pad, ymax = hi + pad;
+  const sx = x => m.l + (x-xmin)/(xmax-xmin || 1)*(w-m.l-m.r);
+  const sy = y => h-m.b - (y-ymin)/(ymax-ymin || 1)*(h-m.t-m.b);
+  drawSpectrumLine(ctx, ap.filter(p=>!p.bad), sx, sy, '#22c55e', 1.8);
+  drawSpectrumLine(ctx, psf.filter(p=>!p.bad), sx, sy, '#c084fc', 1.4);
+  drawSpectrumPoints(ctx, ap, sx, sy, '#22c55e');
+  drawSpectrumPoints(ctx, psf, sx, sy, '#c084fc');
+  ctx.fillStyle = '#e8f4ff';
+  ctx.textAlign = 'left';
+  ctx.fillText(`${point.target_id || ''}`, m.l, 15);
+  ctx.fillStyle = '#22c55e';
+  ctx.fillText('aperture', w - 150, 15);
+  ctx.fillStyle = '#c084fc';
+  ctx.fillText('PSF', w - 82, 15);
+  document.getElementById('hoverMeta').innerHTML = `<span class="mono">${esc(point.target_id)}</span> · ${esc(point.run_name || '')}<br>cluster ${esc(point.cluster_id)} · G ${fmt(point.phot_g_mean_mag,2)} · ${rows.length} measurements · cache ${spectrumCache.size}`;
+}
+function drawSpectrumGrid(ctx,w,h,m){
+  ctx.strokeStyle = 'rgba(33,68,95,.55)';
+  ctx.lineWidth = 1;
+  for(let i=0;i<=6;i++){ const x=m.l+i/6*(w-m.l-m.r); ctx.beginPath(); ctx.moveTo(x,m.t); ctx.lineTo(x,h-m.b); ctx.stroke(); }
+  for(let i=0;i<=4;i++){ const y=m.t+i/4*(h-m.t-m.b); ctx.beginPath(); ctx.moveTo(m.l,y); ctx.lineTo(w-m.r,y); ctx.stroke(); }
+  ctx.strokeStyle = 'rgba(145,168,194,.8)';
+  ctx.beginPath(); ctx.moveTo(m.l,h-m.b); ctx.lineTo(w-m.r,h-m.b); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(m.l,m.t); ctx.lineTo(m.l,h-m.b); ctx.stroke();
+  ctx.fillStyle = '#91a8c2';
+  ctx.textAlign = 'center';
+  ctx.fillText('wavelength (um)', w/2, h-10);
+  ctx.save();
+  ctx.translate(14, h/2);
+  ctx.rotate(-Math.PI/2);
+  ctx.fillText('flux (uJy)', 0, 0);
+  ctx.restore();
+}
+function drawSpectrumLine(ctx, pts, sx, sy, color, width){
+  const clean = [...pts].sort((a,b)=>a.x-b.x);
+  if (clean.length < 2) return;
+  ctx.strokeStyle = color;
+  ctx.lineWidth = width;
+  ctx.globalAlpha = .9;
+  ctx.beginPath();
+  clean.forEach((p,i) => { const x=sx(p.x), y=sy(p.y); if (i) ctx.lineTo(x,y); else ctx.moveTo(x,y); });
+  ctx.stroke();
+  ctx.globalAlpha = 1;
+}
+function drawSpectrumPoints(ctx, pts, sx, sy, color){
+  for (const p of pts) {
+    ctx.beginPath();
+    ctx.arc(sx(p.x), sy(p.y), p.bad ? 2.1 : 2.6, 0, Math.PI*2);
+    ctx.fillStyle = p.bad ? '#f97316' : color;
+    ctx.globalAlpha = p.bad ? .35 : .72;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+function quant(sorted, q){
+  if (!sorted.length) return NaN;
+  return sorted[Math.min(sorted.length-1, Math.max(0, Math.floor(q*(sorted.length-1))))];
+}
 canvas.addEventListener('mousemove', ev => {
   const i = nearest(ev), r = (data.points || [])[i];
   if (!r) { tip.style.display='none'; return; }
@@ -5542,10 +5664,11 @@ canvas.addEventListener('mousemove', ev => {
   tip.style.left = Math.min(rect.width - 430, Math.max(8, ev.clientX - rect.left + 12)) + 'px';
   tip.style.top = Math.min(rect.height - 120, Math.max(8, ev.clientY - rect.top + 12)) + 'px';
   tip.innerHTML = `<div class="mono">${esc(r.target_id)}</div><div>${esc(r.run_name || '')}</div><div>cluster ${esc(r.cluster_id)} · G ${fmt(r.phot_g_mean_mag,2)} · quality ${fmt(r.spectrum_quality_score,2)}</div>`;
+  maybePreviewSpectrum(i);
 });
-canvas.addEventListener('mouseleave', () => { tip.style.display='none'; });
+canvas.addEventListener('mouseleave', () => { tip.style.display='none'; hoverIndex = -1; });
 canvas.addEventListener('click', ev => { const i = nearest(ev); if (i >= 0) selectPoint(i); });
-window.addEventListener('resize', () => draw());
+window.addEventListener('resize', () => { draw(); if (hoverIndex >= 0) previewSpectrum(hoverIndex); });
 function escAttr(v){ return String(v ?? '').replace(/['\\\\]/g, '\\\\$&').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 setVal('embedding', initial.get('embedding') || '');
 setVal('q', initial.get('q') || '');
