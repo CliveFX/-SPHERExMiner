@@ -120,11 +120,28 @@ Arcturus spline sample:
   --output-dir /mnt/niroseti/spherex_cache/runs/arcturus_mag_calibration_g5_16_n100_f220_cwave_gpu_w8/benchmarks/psf_correctness_gpu_grid_spline_mag11_16
 ```
 
-## Next Integration Step
+## Production Integration Status
 
-The main miner currently supports aperture photometry backends (`cpu_numpy`, `warp_calibrated`) and an older
-experimental `--enable-psf` path. The new `gpu_spline` grid PSF path is proven in the comparison harness but is not yet
-wired into production `run-depth-test`.
+The GPU spline grid path is now the preferred production PSF backend in
+`run-depth-test`:
 
-The next step is to add a production PSF backend that reuses the per-frame coefficient cube and keeps per-candidate
-kernel creation, fitting, and grid reduction on the GPU.
+```bash
+--enable-psf \
+--psf-photometry-backend warp_grid \
+--psf-kernel-build-mode gpu_spline \
+--psf-grid-half-range-pix 1.0 \
+--psf-grid-step-pix 0.5 \
+--psf-grid-metric snr
+```
+
+The current target-centered campaign runner uses this path for both baseline
+and injected spectra runs. It still launches relatively small per-field GPU
+jobs, so GPU occupancy remains low; the future frame-scale survey engine should
+batch whole frames and large target arrays more aggressively.
+
+Remaining PSF work:
+
+- Continue comparing PSF and aperture spectra for injected recovery.
+- Add stricter science validation against SPExPI/reference cases.
+- Profile PSF setup versus fit/reduction time in full campaign runs.
+- Consider larger frame-batched GPU scheduling before any cloud-scale survey.

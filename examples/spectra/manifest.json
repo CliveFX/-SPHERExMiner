@@ -1,0 +1,46 @@
+{
+  "examples": [
+    {
+      "name": "ucs_0972_gpu_psf_sample",
+      "run_dir": "/mnt/niroseti/spherex_cache/runs/gpu_psf_ucs0972_g11_16_n5000_f500_live",
+      "target_id": "ucs_0972",
+      "description": "Ultracool brown dwarf/manual target sample from a GPU aperture+PSF run.",
+      "source_spectra": "/mnt/niroseti/spherex_cache/runs/gpu_psf_ucs0972_g11_16_n5000_f500_live/spectra/target_spectra.parquet",
+      "csv": "examples/spectra/ucs_0972_gpu_psf_sample.csv",
+      "rows": 133,
+      "columns": [
+        "target_id",
+        "wavelength_bin_um",
+        "cwave_um",
+        "cband_um",
+        "aperture_flux_uJy",
+        "aperture_flux_unc_uJy",
+        "psf_flux_uJy",
+        "psf_flux_unc_uJy",
+        "measurement_count"
+      ],
+      "note": "Median-binned, nonfatal measurements only. Intended for documentation/UI examples, not science analysis."
+    },
+    {
+      "name": "arcturus_anchor_threepart_baseline_sample",
+      "run_dir": "/mnt/niroseti/spherex_cache/runs/cv_june_g11_16_f500_threepart_v1_cvj_arcturus_gaia_1233967198192238208_baseline",
+      "target_id": "cvj_arcturus_gaia_1233967198192238208",
+      "description": "Safe Gaia anchor near Arcturus from the three-part campaign baseline run.",
+      "source_spectra": "/mnt/niroseti/spherex_cache/runs/cv_june_g11_16_f500_threepart_v1_cvj_arcturus_gaia_1233967198192238208_baseline/spectra/target_spectra.parquet",
+      "csv": "examples/spectra/arcturus_anchor_threepart_baseline_sample.csv",
+      "rows": 143,
+      "columns": [
+        "target_id",
+        "wavelength_bin_um",
+        "cwave_um",
+        "cband_um",
+        "aperture_flux_uJy",
+        "aperture_flux_unc_uJy",
+        "psf_flux_uJy",
+        "psf_flux_unc_uJy",
+        "measurement_count"
+      ],
+      "note": "Median-binned, nonfatal measurements only. Intended for documentation/UI examples, not science analysis."
+    }
+  ]
+}

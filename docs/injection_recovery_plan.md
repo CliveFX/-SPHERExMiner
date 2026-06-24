@@ -811,51 +811,51 @@ Exit criteria:
 - False positives are measurable, not hand-waved.
 - Any bad wavelength families or detector regions are visible.
 
-### Phase 7: First 20k-Star Runs
+### Phase 7: Current Deep Campaign Runs
 
-Goal: measure false positives and recovery behavior at a scale large enough to be meaningful.
+Goal: measure science false positives and injected recovery behavior at a scale
+large enough to stress the viewers and scorer, while staying within the current
+target-centered architecture.
 
-Run A: baseline 20k-star control
-
-```text
-targets: 20,000 Gaia/SPHEREx stars
-injections: none
-purpose: false-positive baseline
-```
-
-Run B: sparse injected 20k-star run
+Current live campaign:
 
 ```text
-targets: same 20,000 stars
-injected targets: 100-500
-line families: 1064 nm first
-strengths: 3, 5, 8, 12, 20 sigma
-purpose: recovery versus false positives
+campaign: cv_june_g11_16_f500_threepart_v1
+anchors: 16 resolved safe Gaia anchors from the Castro Valley June list
+targets per anchor: up to 6000 Gaia sources
+magnitude range: G=11..16
+fields per anchor: up to 500
+photometry: GPU aperture plus GPU PSF
+blind grid: 1.0 nm
+injection strengths: 0.5,1,2,3,5,8,12 sigma
+line flux cap: 50000 uJy
 ```
 
-Run C: wavelength-family stress run
+For each anchor the campaign produces three distinct scoring products:
 
 ```text
-targets: 20,000 stars
-injected targets: 100-500
-line families: several predicted laser lines
-offsets around each family
-purpose: identify artifact-prone wavelengths
+science raw baseline candidates
+injected raw candidates and focused truth-target raw recovery
+paired-delta sanity recovery
 ```
 
-Candidate line families to include after 1064 nm:
+Candidate line families currently used by the mixed-laser planner:
 
+- 808 nm
+- 980 nm
 - 1064 nm
+- 1310 nm
 - 1550 nm
-- 532 nm if usable in SPHEREx coverage/products
-- other literature/predicted laser lines after review
+- 2000 nm
 
 Exit criteria:
 
-- Classifier throughput is acceptable.
-- False-positive rate is quantified at 20k-star scale.
-- Injection recovery curves exist for at least one line family.
-- We can decide whether to scale to full-survey mining.
+- Science raw false-positive counts are visible in `candidate-summary`.
+- Focused blind raw recovery reports recovery versus injected strength.
+- Paired-delta recovery remains available as an optimistic sanity check.
+- Viewers can handle campaign outputs without choking.
+- We can decide whether to keep extending the target-centered prototype or
+  start the frame-scale survey scheduler.
 
 ### Phase 8: Threshold and Triage Viewer
 
