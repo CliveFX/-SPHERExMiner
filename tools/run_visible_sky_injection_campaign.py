@@ -132,11 +132,13 @@ def _none_if_nan(value: Any) -> float | None:
 
 
 def _write_resolved_targets(centers: list[dict[str, Any]], args: argparse.Namespace, campaign_root: Path) -> Path:
-    if not args.resolve_gaia_anchors:
-        return args.targets
-    resolved = [_resolve_gaia_anchor(center, args) for center in centers]
     path = campaign_root / "resolved_gaia_anchor_targets.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
+    if not args.resolve_gaia_anchors:
+        path.write_text(yaml.safe_dump({"targets": centers}, sort_keys=False), encoding="utf-8")
+        print(f"copied {len(centers)} resolved Gaia anchors -> {path}", flush=True)
+        return path
+    resolved = [_resolve_gaia_anchor(center, args) for center in centers]
     path.write_text(yaml.safe_dump({"targets": resolved}, sort_keys=False), encoding="utf-8")
     print(f"resolved {len(resolved)} safe Gaia anchors -> {path}", flush=True)
     return path
