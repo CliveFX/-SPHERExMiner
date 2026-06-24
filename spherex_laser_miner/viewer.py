@@ -6,6 +6,7 @@ import subprocess
 import threading
 import urllib.parse
 import time
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 import yaml
 import astropy.units as u
 from astropy.coordinates import SkyCoord
@@ -25,6 +27,7 @@ from spherex_laser_miner.coarse_status import read_coarse_summary, tail_events
 
 
 _COMPLETED_TARGET_CACHE: dict[tuple[str, str, float, float], list[dict[str, object]]] = {}
+_SCIENCE_EMBEDDING_CACHE: dict[str, tuple[float, pd.DataFrame, np.ndarray, list[str]]] = {}
 LIVE_TARGET_OVERLAY_LIMIT_PER_FRAME = 1200
 
 
@@ -48,12 +51,22 @@ def _make_handler(run_dir: Path):
             try:
                 if path == "/":
                     self._send_html(_index_html())
+                elif path == "/dashboards":
+                    self._send_html(_dashboards_html())
                 elif path == "/live":
                     self._send_html(_simple_status_html())
                 elif path == "/simple-status":
                     self._send_html(_simple_status_html())
                 elif path == "/spectra":
                     self._send_html(_spectra_html())
+                elif path == "/spectrum-quality":
+                    self._send_html(_spectrum_quality_html())
+                elif path == "/ml-training":
+                    self._send_html(_ml_training_html())
+                elif path == "/similar-spectra":
+                    self._send_html(_similar_spectra_html())
+                elif path == "/umap":
+                    self._send_html(_umap_html())
                 elif path == "/injections":
                     self._send_html(_injections_html())
                 elif path == "/blind-candidates":
@@ -89,6 +102,14 @@ def _make_handler(run_dir: Path):
                     self._send_json(_field_targets(active_run_dir, idx))
                 elif path == "/api/targets":
                     self._send_json(_targets(active_run_dir, params))
+                elif path == "/api/spectrum-quality":
+                    self._send_json(_spectrum_quality(active_run_dir, params))
+                elif path == "/api/ml-training":
+                    self._send_json(_ml_training_status(runs_root.parent / "ml_runs", params))
+                elif path == "/api/similar-spectra":
+                    self._send_json(_similar_spectra(runs_root.parent / "ml_outputs" / "science_embeddings", params))
+                elif path == "/api/umap":
+                    self._send_json(_umap_payload(runs_root.parent / "ml_outputs" / "science_embeddings", params))
                 elif path.startswith("/api/spectrum/"):
                     target_id = urllib.parse.unquote(path.removeprefix("/api/spectrum/"))
                     self._send_json(_spectrum(active_run_dir, target_id))
@@ -175,6 +196,7 @@ def _runs(runs_root: Path, active_run_dir: Path) -> list[dict[str, object]]:
         return rows
     for path in sorted([p for p in runs_root.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True):
         assembly_path = path / "spectra" / "assembly_summary.json"
+        quality_path = path / "spectra" / "spectrum_quality.parquet"
         summary = _read_json(assembly_path)
         status = _read_json(path / "run_summary.json")
         trial_path = path / "simp_field_trials.json"
@@ -186,6 +208,7 @@ def _runs(runs_root: Path, active_run_dir: Path) -> list[dict[str, object]]:
                 "mtime": path.stat().st_mtime,
                 "mtime_iso": _format_time(path.stat().st_mtime),
                 "has_spectra": assembly_path.exists(),
+                "has_spectrum_quality": quality_path.exists(),
                 "has_trials": trial_path.exists(),
                 "target": status.get("target") if isinstance(status, dict) else None,
                 "measurement_rows": summary.get("measurement_rows") if isinstance(summary, dict) else None,
@@ -243,6 +266,7 @@ def _campaign_status(runs_root: Path, params: dict[str, list[str]]) -> dict[str,
                 "recovery_url": f"/recovery-summary?campaign={urllib.parse.quote(campaign_name)}",
             }
         )
+    metrics = _campaign_metrics(runs_root, campaign_name, rows)
     summary = {
         "campaign": campaign_name,
         "campaign_root": str(campaign_root),
@@ -252,10 +276,137 @@ def _campaign_status(runs_root: Path, params: dict[str, list[str]]) -> dict[str,
         "error_targets": sum(1 for row in rows if row["status"] == "error"),
         "waiting_targets": sum(1 for row in rows if row["status"] == "waiting"),
         "stage_totals": stage_totals,
+        "stage_timing": _campaign_stage_timing(rows),
+        "metrics": metrics,
         "manifest_exists": (campaign_root / "campaign_manifest.json").exists(),
         "manifest_rows": len(_read_json(campaign_root / "campaign_manifest.json") or []),
     }
     return {"campaigns": campaigns, "summary": summary, "targets": rows}
+
+
+def _campaign_metrics(runs_root: Path, campaign_name: str, target_rows: list[dict[str, object]]) -> dict[str, object]:
+    metrics: dict[str, object] = {
+        "baseline_runs": 0,
+        "injected_runs": 0,
+        "baseline_star_spectra": 0,
+        "injected_star_spectra": 0,
+        "baseline_measurements": 0,
+        "injected_measurements": 0,
+        "field_shards": 0,
+        "injected_signals": 0,
+        "gpu_raw_recovered": 0,
+        "gpu_quality_recovered": 0,
+        "paired_recovered": 0,
+        "raw_baseline_candidates": 0,
+        "raw_injected_candidates": 0,
+        "quality_baseline_candidates": 0,
+        "quality_injected_candidates": 0,
+        "candidate_grades": {},
+        "score_kernel_sec": 0.0,
+        "score_total_sec": 0.0,
+    }
+    grade_counts: dict[str, int] = {}
+    for row in target_rows:
+        target_id = str(row.get("target_id") or "")
+        base = runs_root / f"{campaign_name}_{target_id}_baseline"
+        inj = runs_root / f"{campaign_name}_{target_id}_injected"
+        if base.exists():
+            metrics["baseline_runs"] = int(metrics["baseline_runs"]) + 1
+            _add_assembly_metrics(metrics, base, "baseline")
+            _add_candidate_metrics(metrics, base / "narrowband_detector_raw", "baseline", grade_counts)
+        if inj.exists():
+            metrics["injected_runs"] = int(metrics["injected_runs"]) + 1
+            _add_assembly_metrics(metrics, inj, "injected")
+            _add_candidate_metrics(metrics, inj / "narrowband_detector_raw", "injected", grade_counts)
+            _add_truth_recovery_metrics(metrics, inj / "narrowband_detector_truth" / "narrowband_recovery.parquet")
+            _add_paired_recovery_metrics(metrics, inj / "recovery_score_mixed_lasers" / "recovery_summary.json")
+    metrics["candidate_grades"] = dict(sorted(grade_counts.items()))
+    raw = int(metrics["gpu_raw_recovered"])
+    total = int(metrics["injected_signals"])
+    quality = int(metrics["gpu_quality_recovered"])
+    paired = int(metrics["paired_recovered"])
+    metrics["gpu_raw_recovery_fraction"] = float(raw / total) if total else None
+    metrics["gpu_quality_recovery_fraction"] = float(quality / total) if total else None
+    metrics["paired_recovery_fraction"] = float(paired / total) if total else None
+    return metrics
+
+
+def _add_assembly_metrics(metrics: dict[str, object], run_dir: Path, prefix: str) -> None:
+    summary = _read_json(run_dir / "spectra" / "assembly_summary.json")
+    if not isinstance(summary, dict):
+        return
+    metrics[f"{prefix}_star_spectra"] = int(metrics.get(f"{prefix}_star_spectra", 0) or 0) + int(summary.get("target_count") or 0)
+    metrics[f"{prefix}_measurements"] = int(metrics.get(f"{prefix}_measurements", 0) or 0) + int(summary.get("measurement_rows") or 0)
+    metrics["field_shards"] = int(metrics.get("field_shards", 0) or 0) + int(summary.get("shard_count") or 0)
+
+
+def _add_candidate_metrics(metrics: dict[str, object], detector_dir: Path, prefix: str, grade_counts: dict[str, int]) -> None:
+    summary = _read_json(detector_dir / "narrowband_detector_summary.json")
+    if isinstance(summary, dict):
+        metrics[f"raw_{prefix}_candidates"] = int(metrics.get(f"raw_{prefix}_candidates", 0) or 0) + int(summary.get("candidate_count") or 0)
+        metrics[f"quality_{prefix}_candidates"] = int(metrics.get(f"quality_{prefix}_candidates", 0) or 0) + int(summary.get("quality_pass_count") or 0)
+        metrics["score_kernel_sec"] = float(metrics.get("score_kernel_sec", 0.0) or 0.0) + float(summary.get("score_kernel_sec") or 0.0)
+        metrics["score_total_sec"] = float(metrics.get("score_total_sec", 0.0) or 0.0) + float(summary.get("total_sec") or 0.0)
+    path = detector_dir / "narrowband_candidates.parquet"
+    if not path.exists():
+        return
+    try:
+        df = pd.read_parquet(path, columns=["review_grade"])
+    except Exception:
+        return
+    if "review_grade" not in df:
+        return
+    for grade, count in df["review_grade"].fillna("").astype(str).value_counts().to_dict().items():
+        if grade:
+            grade_counts[grade] = grade_counts.get(grade, 0) + int(count)
+
+
+def _add_truth_recovery_metrics(metrics: dict[str, object], path: Path) -> None:
+    if not path.exists():
+        return
+    try:
+        df = pd.read_parquet(path, columns=["gpu_narrowband_match", "gpu_narrowband_quality_match"])
+    except Exception:
+        return
+    metrics["injected_signals"] = int(metrics.get("injected_signals", 0) or 0) + int(len(df))
+    if "gpu_narrowband_match" in df:
+        metrics["gpu_raw_recovered"] = int(metrics.get("gpu_raw_recovered", 0) or 0) + int(df["gpu_narrowband_match"].fillna(False).astype(bool).sum())
+    if "gpu_narrowband_quality_match" in df:
+        metrics["gpu_quality_recovered"] = int(metrics.get("gpu_quality_recovered", 0) or 0) + int(
+            df["gpu_narrowband_quality_match"].fillna(False).astype(bool).sum()
+        )
+
+
+def _add_paired_recovery_metrics(metrics: dict[str, object], path: Path) -> None:
+    summary = _read_json(path)
+    if not isinstance(summary, dict):
+        return
+    metrics["paired_recovered"] = int(metrics.get("paired_recovered", 0) or 0) + int(summary.get("recovered_count") or 0)
+
+
+def _campaign_stage_timing(target_rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    by_stage: dict[str, list[float]] = {}
+    for row in target_rows:
+        for stage in row.get("stages") or []:
+            if not isinstance(stage, dict):
+                continue
+            elapsed = _maybe_float(stage.get("elapsed_sec"))
+            if elapsed is None or elapsed < 0:
+                continue
+            by_stage.setdefault(str(stage.get("stage") or ""), []).append(elapsed)
+    rows = []
+    for stage, values in by_stage.items():
+        arr = np.asarray(values, dtype=float)
+        rows.append(
+            {
+                "stage": stage,
+                "done": int(len(values)),
+                "total_sec": float(np.nansum(arr)),
+                "avg_sec": float(np.nanmean(arr)),
+                "max_sec": float(np.nanmax(arr)),
+            }
+        )
+    return rows
 
 
 def _campaign_names(campaigns_root: Path) -> list[str]:
@@ -354,6 +505,9 @@ def _campaign_stage_status(stage: str, output_path: Path | None, log_path: Path)
     log_exists = log_path.exists()
     tail = _tail_text(log_path, 6000) if log_exists else ""
     real_log = _campaign_log_has_real_run(log_path, tail) if log_exists else False
+    start_ts = _campaign_log_start_timestamp(log_path, tail) if real_log else None
+    end_ts = _path_mtime(output_path) if output_done and output_path is not None else (log_path.stat().st_mtime if real_log and log_exists else None)
+    elapsed_sec = float(end_ts - start_ts) if start_ts is not None and end_ts is not None and end_ts >= start_ts else None
     has_error = any(token in tail for token in ("Traceback", "command failed", "CalledProcessError", "Error:", "ERROR"))
     if output_done:
         status = "done"
@@ -371,6 +525,9 @@ def _campaign_stage_status(stage: str, output_path: Path | None, log_path: Path)
         "output": str(output_path) if output_path is not None else "",
         "log": str(log_path),
         "log_mtime": _format_time(log_path.stat().st_mtime) if real_log else "",
+        "start_time": _format_time(start_ts) if start_ts is not None else "",
+        "end_time": _format_time(end_ts) if end_ts is not None else "",
+        "elapsed_sec": elapsed_sec,
         "message": _last_nonempty_line(tail) if real_log else "",
     }
 
@@ -384,6 +541,35 @@ def _campaign_log_has_real_run(path: Path, tail: str) -> bool:
         return "=== 20" in head
     except Exception:
         return False
+
+
+def _campaign_log_start_timestamp(path: Path, tail: str) -> float | None:
+    text = tail
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(8192).decode("utf-8", errors="replace")
+        text = head + "\n" + tail
+    except Exception:
+        pass
+    marker = "=== "
+    for line in text.splitlines():
+        if marker not in line:
+            continue
+        part = line.split(marker, 1)[1].split(" ", 1)[0].strip()
+        try:
+            return datetime.fromisoformat(part).timestamp()
+        except Exception:
+            continue
+    return None
+
+
+def _path_mtime(path: Path | None) -> float | None:
+    if path is None:
+        return None
+    try:
+        return path.stat().st_mtime if path.exists() else None
+    except Exception:
+        return None
 
 
 def _tail_text(path: Path, max_bytes: int) -> str:
@@ -1261,6 +1447,433 @@ def _targets(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
     df = _sort_targets_df(df, sort)
     rows = df.iloc[offset : offset + limit].to_dict(orient="records")
     return {"rows": rows, "total": total, "limit": limit, "offset": offset, "sort": sort, "q": q}
+
+
+def _spectrum_quality(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    path = run_dir / "spectra" / "spectrum_quality.parquet"
+    if not path.exists():
+        return {
+            "rows": [],
+            "total": 0,
+            "limit": 0,
+            "offset": 0,
+            "sort": "score",
+            "category": "all",
+            "q": "",
+            "path": str(path),
+            "missing": True,
+        }
+    limit = min(500, max(25, _query_int(params, "limit", 200)))
+    offset = max(0, _query_int(params, "offset", 0))
+    sort = (params.get("sort") or ["score"])[0]
+    category = (params.get("category") or ["all"])[0].strip().lower()
+    q = (params.get("q") or [""])[0].strip().lower()
+    df = pd.read_parquet(path)
+    if category not in {"", "all"} and "spectrum_quality_category" in df:
+        df = df[df["spectrum_quality_category"].astype(str).str.lower().eq(category)]
+    if q:
+        mask = df["target_id"].astype(str).str.lower().str.contains(q, regex=False)
+        for col in ("object_name", "target_type", "spectrum_quality_reasons"):
+            if col in df:
+                mask |= df[col].astype(str).str.lower().str.contains(q, regex=False)
+        df = df[mask]
+    total = int(len(df))
+    df = _sort_spectrum_quality_df(df, sort)
+    rows = df.iloc[offset : offset + limit].copy()
+    run_name = run_dir.name
+    if not rows.empty:
+        rows["spectra_url"] = rows["target_id"].astype(str).map(
+            lambda target_id: f"/spectra?run={urllib.parse.quote(run_name)}&target={urllib.parse.quote(target_id)}"
+        )
+    summary = {
+        "run_name": run_name,
+        "path": str(path),
+        "total_rows": int(len(pd.read_parquet(path, columns=["target_id"]))),
+        "category_counts": df["spectrum_quality_category"].value_counts().sort_index().to_dict()
+        if "spectrum_quality_category" in df
+        else {},
+    }
+    return {
+        "rows": rows.to_dict(orient="records"),
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "sort": sort,
+        "category": category,
+        "q": q,
+        "summary": summary,
+        "missing": False,
+    }
+
+
+def _ml_training_status(ml_runs_root: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    limit = min(200, max(10, _query_int(params, "limit", 80)))
+    q = (params.get("q") or [""])[0].strip().lower()
+    rows: list[dict[str, object]] = []
+    if not ml_runs_root.exists():
+        return {"runs": [], "summary": {"ml_runs_root": str(ml_runs_root), "run_count": 0}, "metrics": []}
+    run_dirs = sorted([path for path in ml_runs_root.iterdir() if path.is_dir()], key=lambda path: path.stat().st_mtime, reverse=True)
+    for run_dir in run_dirs:
+        status = _read_json(run_dir / "training_status.json")
+        model_card = _read_json(run_dir / "model_card.json")
+        if not isinstance(status, dict):
+            status = {}
+        if not isinstance(model_card, dict):
+            model_card = {}
+        row = {
+            "run_name": run_dir.name,
+            "mtime": run_dir.stat().st_mtime,
+            "mtime_iso": _format_time(run_dir.stat().st_mtime),
+            "status": status.get("status", "unknown"),
+            "model_type": status.get("model_type") or model_card.get("model_type"),
+            "dataset_name": status.get("dataset_name") or Path(str(model_card.get("dataset_dir") or "")).name,
+            "model_version": status.get("model_version") or model_card.get("model_version"),
+            "epoch": status.get("epoch"),
+            "step": status.get("step"),
+            "examples": status.get("examples") or model_card.get("example_count"),
+            "positive_examples": status.get("positive_examples") or model_card.get("positive_example_count"),
+            "elapsed_sec": status.get("elapsed_sec"),
+            "latest_train_loss": status.get("latest_train_loss"),
+            "contrastive_retrieval_top1": status.get("contrastive_retrieval_top1"),
+            "recovered_injected_fraction": status.get("recovered_injected_fraction"),
+            "baseline_false_alarm_fraction": status.get("baseline_false_alarm_fraction"),
+            "device": status.get("device"),
+            "best_checkpoint": status.get("best_checkpoint") or model_card.get("checkpoint_path"),
+            "metrics_path": str(run_dir / "training_metrics.jsonl"),
+            "status_path": str(run_dir / "training_status.json"),
+        }
+        haystack = " ".join(str(row.get(col) or "").lower() for col in ("run_name", "model_type", "dataset_name", "model_version", "status"))
+        if q and q not in haystack:
+            continue
+        rows.append(row)
+        if len(rows) >= limit:
+            break
+    latest_metrics: list[dict[str, object]] = []
+    if rows:
+        latest_metrics = _read_jsonl_tail(Path(str(rows[0]["metrics_path"])), 80)
+    status_counts = pd.Series([row.get("status") for row in rows], dtype=str).value_counts().sort_index().to_dict() if rows else {}
+    model_counts = pd.Series([row.get("model_type") for row in rows], dtype=str).value_counts().sort_index().to_dict() if rows else {}
+    return {
+        "runs": rows,
+        "metrics": latest_metrics,
+        "summary": {
+            "ml_runs_root": str(ml_runs_root),
+            "run_count": len(rows),
+            "status_counts": status_counts,
+            "model_counts": model_counts,
+        },
+    }
+
+
+def _similar_spectra(embeddings_root: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    embedding_dirs = _science_embedding_dirs(embeddings_root)
+    requested_embedding = (params.get("embedding") or [""])[0].strip()
+    embedding_dir = None
+    if requested_embedding:
+        requested = embeddings_root / Path(requested_embedding).name
+        if (requested / "embeddings.parquet").exists():
+            embedding_dir = requested
+    if embedding_dir is None and embedding_dirs:
+        embedding_dir = embedding_dirs[0]
+    if embedding_dir is None:
+        return {
+            "rows": [],
+            "query": None,
+            "embeddings": [],
+            "missing": True,
+            "message": f"No embeddings.parquet found under {embeddings_root}",
+        }
+
+    embeddings_path = embedding_dir / "embeddings.parquet"
+    status = _read_json(embedding_dir / "export_status.json")
+    if not embeddings_path.exists():
+        return {
+            "rows": [],
+            "query": None,
+            "embeddings": [_embedding_dir_row(path) for path in embedding_dirs],
+            "active_embedding": embedding_dir.name,
+            "missing": True,
+            "message": f"{embeddings_path} is not written yet",
+            "export_status": status if isinstance(status, dict) else {},
+        }
+
+    df, matrix, embedding_cols = _load_science_embeddings(embeddings_path)
+    target = (params.get("target") or [""])[0].strip()
+    run_name = (params.get("source_run") or params.get("run_name") or [""])[0].strip()
+    q = (params.get("q") or [""])[0].strip().lower()
+    limit = min(250, max(5, _query_int(params, "limit", 60)))
+
+    suggestions: list[dict[str, object]] = []
+    if q:
+        mask = df["target_id"].astype(str).str.lower().str.contains(q, regex=False)
+        if "object_name" in df:
+            mask |= df["object_name"].astype(str).str.lower().str.contains(q, regex=False)
+        if "source_id" in df:
+            mask |= df["source_id"].astype(str).str.lower().str.contains(q, regex=False)
+        suggestions = df[mask].head(limit)[_embedding_display_cols(df)].to_dict(orient="records")
+    if not target and suggestions:
+        target = str(suggestions[0]["target_id"])
+        run_name = str(suggestions[0].get("run_name") or "")
+    if not target:
+        return {
+            "rows": [],
+            "query": None,
+            "suggestions": suggestions,
+            "embeddings": [_embedding_dir_row(path) for path in embedding_dirs],
+            "active_embedding": embedding_dir.name,
+            "embedding_rows": int(len(df)),
+            "missing": False,
+            "message": "Provide target=<target_id> or q=<search text>",
+        }
+
+    candidate_mask = df["target_id"].astype(str).eq(str(target))
+    if run_name:
+        candidate_mask &= df["run_name"].astype(str).eq(str(run_name))
+    query_rows = df[candidate_mask]
+    if query_rows.empty:
+        query_rows = df[df["target_id"].astype(str).eq(str(target))]
+    if query_rows.empty:
+        return {
+            "rows": [],
+            "query": None,
+            "suggestions": suggestions,
+            "embeddings": [_embedding_dir_row(path) for path in embedding_dirs],
+            "active_embedding": embedding_dir.name,
+            "embedding_rows": int(len(df)),
+            "missing": False,
+            "message": f"Target {target} is not in {embedding_dir.name}",
+        }
+
+    query_index = int(query_rows.index[0])
+    query_vector = matrix[query_index]
+    sims = matrix @ query_vector
+    order = np.argsort(-sims)[:limit]
+    rows = df.iloc[order].copy()
+    rows["embedding_similarity"] = sims[order]
+    rows["rank"] = np.arange(1, len(rows) + 1)
+    rows["spectra_url"] = rows.apply(
+        lambda row: f"/spectra?run={urllib.parse.quote(str(row['run_name']))}&target={urllib.parse.quote(str(row['target_id']))}",
+        axis=1,
+    )
+    rows["similar_url"] = rows.apply(
+        lambda row: f"/similar-spectra?embedding={urllib.parse.quote(embedding_dir.name)}&source_run={urllib.parse.quote(str(row['run_name']))}&target={urllib.parse.quote(str(row['target_id']))}",
+        axis=1,
+    )
+    display_cols = ["rank", "embedding_similarity", *_embedding_display_cols(rows), "spectra_url", "similar_url"]
+    query_payload = df.iloc[[query_index]][_embedding_display_cols(df)].to_dict(orient="records")[0]
+    query_payload["embedding_similarity"] = 1.0
+    return {
+        "rows": rows[display_cols].to_dict(orient="records"),
+        "query": query_payload,
+        "suggestions": suggestions,
+        "embeddings": [_embedding_dir_row(path) for path in embedding_dirs],
+        "active_embedding": embedding_dir.name,
+        "embedding_rows": int(len(df)),
+        "embedding_cols": embedding_cols,
+        "missing": False,
+        "export_status": status if isinstance(status, dict) else {},
+    }
+
+
+def _umap_payload(embeddings_root: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    embedding_dirs = _science_embedding_dirs(embeddings_root)
+    requested_embedding = (params.get("embedding") or [""])[0].strip()
+    embedding_dir = None
+    if requested_embedding:
+        requested = embeddings_root / Path(requested_embedding).name
+        if (requested / "umap_projection.parquet").exists() or (requested / "umap_status.json").exists():
+            embedding_dir = requested
+    if embedding_dir is None:
+        for path in embedding_dirs:
+            if (path / "umap_projection.parquet").exists() or (path / "umap_status.json").exists():
+                embedding_dir = path
+                break
+    if embedding_dir is None:
+        return {"points": [], "clusters": [], "embeddings": [_embedding_dir_row(path) for path in embedding_dirs], "missing": True}
+
+    projection_path = embedding_dir / "umap_projection.parquet"
+    status = _read_json(embedding_dir / "umap_status.json")
+    if not projection_path.exists():
+        return {
+            "points": [],
+            "clusters": [],
+            "embeddings": [_embedding_dir_row(path) for path in embedding_dirs],
+            "active_embedding": embedding_dir.name,
+            "missing": True,
+            "umap_status": status if isinstance(status, dict) else {},
+        }
+
+    limit = min(50000, max(1000, _query_int(params, "limit", 30000)))
+    cluster = (params.get("cluster") or ["all"])[0].strip().lower()
+    color = (params.get("color") or ["cluster"])[0].strip().lower()
+    q = (params.get("q") or [""])[0].strip().lower()
+    df = pd.read_parquet(projection_path)
+    if q:
+        mask = df["target_id"].astype(str).str.lower().str.contains(q, regex=False)
+        for col in ("run_name", "source_id", "object_name", "spectrum_quality_category"):
+            if col in df:
+                mask |= df[col].astype(str).str.lower().str.contains(q, regex=False)
+        df = df[mask]
+
+    cluster_rows: list[dict[str, object]] = []
+    if "cluster_id" in df:
+        agg = df.groupby("cluster_id", dropna=False).agg(
+            count=("target_id", "size"),
+            median_g=("phot_g_mean_mag", "median") if "phot_g_mean_mag" in df else ("target_id", "size"),
+            median_bp_rp=("bp_rp", "median") if "bp_rp" in df else ("target_id", "size"),
+            median_quality=("spectrum_quality_score", "median") if "spectrum_quality_score" in df else ("target_id", "size"),
+        ).reset_index()
+        cluster_rows = agg.sort_values("count", ascending=False).to_dict(orient="records")
+
+    if cluster not in {"", "all"} and "cluster_id" in df:
+        try:
+            df = df[df["cluster_id"].astype(int).eq(int(cluster))]
+        except Exception:
+            pass
+    total = int(len(df))
+    if len(df) > limit:
+        df = df.sample(limit, random_state=42).copy()
+    display_cols = [
+        col
+        for col in (
+            "umap_x",
+            "umap_y",
+            "cluster_id",
+            "cluster_size",
+            "target_id",
+            "run_name",
+            "source_id",
+            "object_name",
+            "split_id",
+            "phot_g_mean_mag",
+            "bp_rp",
+            "parallax_mas",
+            "spectrum_quality_score",
+            "spectrum_quality_category",
+            "n_input_points",
+            "flag_fraction",
+            "smoothness_score",
+        )
+        if col in df.columns
+    ]
+    points = df[display_cols].to_dict(orient="records")
+    for row in points:
+        row["spectra_url"] = f"/spectra?run={urllib.parse.quote(str(row.get('run_name') or ''))}&target={urllib.parse.quote(str(row.get('target_id') or ''))}"
+        row["similar_url"] = f"/similar-spectra?embedding={urllib.parse.quote(embedding_dir.name)}&source_run={urllib.parse.quote(str(row.get('run_name') or ''))}&target={urllib.parse.quote(str(row.get('target_id') or ''))}"
+
+    return {
+        "points": points,
+        "clusters": cluster_rows,
+        "embeddings": [_embedding_dir_row(path) for path in embedding_dirs],
+        "active_embedding": embedding_dir.name,
+        "missing": False,
+        "total_filtered": total,
+        "returned": len(points),
+        "color": color,
+        "umap_status": status if isinstance(status, dict) else {},
+    }
+
+
+def _science_embedding_dirs(root: Path) -> list[Path]:
+    if not root.exists():
+        return []
+    return sorted(
+        [path for path in root.iterdir() if path.is_dir() and ((path / "embeddings.parquet").exists() or (path / "export_status.json").exists())],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def _embedding_dir_row(path: Path) -> dict[str, object]:
+    parquet = path / "embeddings.parquet"
+    status = _read_json(path / "export_status.json")
+    return {
+        "name": path.name,
+        "path": str(path),
+        "has_embeddings": parquet.exists(),
+        "rows": int(pq.ParquetFile(parquet).metadata.num_rows) if parquet.exists() else None,
+        "status": status.get("status") if isinstance(status, dict) else None,
+        "mtime_iso": _format_time(path.stat().st_mtime),
+    }
+
+
+def _load_science_embeddings(path: Path) -> tuple[pd.DataFrame, np.ndarray, list[str]]:
+    mtime = path.stat().st_mtime
+    key = str(path)
+    cached = _SCIENCE_EMBEDDING_CACHE.get(key)
+    if cached and cached[0] == mtime:
+        return cached[1], cached[2], cached[3]
+    df = pd.read_parquet(path)
+    embedding_cols = sorted([col for col in df.columns if col.startswith("shape_embedding_")])
+    if not embedding_cols:
+        raise ValueError(f"{path} has no shape_embedding_* columns")
+    matrix = df[embedding_cols].to_numpy(dtype=np.float32)
+    norms = np.linalg.norm(matrix, axis=1, keepdims=True)
+    matrix = matrix / np.clip(norms, 1e-12, None)
+    _SCIENCE_EMBEDDING_CACHE.clear()
+    _SCIENCE_EMBEDDING_CACHE[key] = (mtime, df, matrix, embedding_cols)
+    return df, matrix, embedding_cols
+
+
+def _embedding_display_cols(df: pd.DataFrame) -> list[str]:
+    return [
+        col
+        for col in (
+            "run_name",
+            "run_kind",
+            "target_id",
+            "source_id",
+            "object_name",
+            "split_id",
+            "n_input_points",
+            "phot_g_mean_mag",
+            "bp_rp",
+            "parallax_mas",
+            "spectrum_quality_score",
+            "spectrum_quality_category",
+            "n_measurements",
+            "flag_fraction",
+            "smoothness_score",
+        )
+        if col in df.columns
+    ]
+
+
+def _read_jsonl_tail(path: Path, limit: int) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()[-limit:]
+    rows: list[dict[str, object]] = []
+    for line in lines:
+        try:
+            value = json.loads(line)
+        except Exception:
+            continue
+        if isinstance(value, dict):
+            rows.append(value)
+    return rows
+
+
+def _sort_spectrum_quality_df(df: pd.DataFrame, sort: str) -> pd.DataFrame:
+    if df.empty:
+        return df
+    work = df.copy()
+    sort_map = {
+        "score": [("spectrum_quality_score", False), ("n_usable_measurements", False)],
+        "smooth": [("smoothness_score", False), ("spectrum_quality_score", False)],
+        "flags": [("flag_fraction", True), ("spectrum_quality_score", False)],
+        "agreement": [("aperture_psf_agreement_score", False), ("aperture_psf_corr", False)],
+        "snr": [("median_abs_aperture_snr", False), ("spectrum_quality_score", False)],
+        "measurements": [("n_usable_measurements", False), ("spectrum_quality_score", False)],
+        "mag": [("phot_g_mean_mag", True), ("spectrum_quality_score", False)],
+        "target": [("target_id", True)],
+    }
+    spec = sort_map.get(sort, sort_map["score"])
+    cols = [col for col, _ascending in spec if col in work]
+    if not cols:
+        return work
+    ascending = [ascending for col, ascending in spec if col in work]
+    return work.sort_values(cols, ascending=ascending, na_position="last", kind="mergesort")
 
 
 def _injection_manifest_candidates(run_dir: Path) -> list[Path]:
@@ -2246,6 +2859,50 @@ def _clean_json(value: object) -> object:
     return value
 
 
+def _dashboards_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LuxQuarry Dashboards</title>
+  <style>
+    :root { --bg:#04070d; --panel:#07111f; --line:#164e63; --text:#dffcff; --muted:#7dd3fc; --cyan:#22d3ee; --amber:#f59e0b; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:14px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing:0; }
+    header { padding:18px 20px; border-bottom:1px solid var(--line); background:rgba(4,7,13,.96); }
+    h1 { margin:0; color:var(--cyan); font-size:22px; }
+    .sub { color:var(--muted); margin-top:6px; }
+    main { padding:18px; display:grid; grid-template-columns:repeat(auto-fit,minmax(260px,1fr)); gap:12px; }
+    a.card { display:block; min-height:112px; padding:14px; color:var(--text); text-decoration:none; border:1px solid var(--line); border-radius:6px; background:rgba(7,17,31,.92); }
+    a.card:hover { border-color:var(--cyan); box-shadow:0 0 18px rgba(34,211,238,.18); }
+    .title { color:var(--cyan); font-weight:700; font-size:16px; }
+    .desc { color:#b8d7e8; margin-top:8px; line-height:1.35; }
+    .tag { display:inline-block; margin-top:10px; color:var(--amber); font:12px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>LuxQuarry Dashboards</h1>
+  <div class="sub">Master link tree for local SPHEREx/LuxQuarry review surfaces.</div>
+</header>
+<main>
+  <a class="card" href="/campaign-status"><div class="title">Campaign Status</div><div class="desc">Campaign stage progress, aggregate recovery/candidate statistics, and timing cards.</div><div class="tag">/campaign-status</div></a>
+  <a class="card" href="/simple-status"><div class="title">Simple Run Status</div><div class="desc">Field-worker progress, throughput, recent events, and per-field worker timing.</div><div class="tag">/simple-status</div></a>
+  <a class="card" href="/spectra"><div class="title">Spectra Browser</div><div class="desc">Per-target aperture and PSF spectra, flags, injections, and point metadata.</div><div class="tag">/spectra</div></a>
+  <a class="card" href="/spectrum-quality"><div class="title">Spectrum Quality</div><div class="desc">Ranked good/review/bad spectra using flags, smoothness, aperture/PSF agreement, and usable coverage.</div><div class="tag">/spectrum-quality</div></a>
+  <a class="card" href="/ml-training"><div class="title">ML Training</div><div class="desc">Science embedding and narrowband model training status, losses, checkpoints, and smoke-run metrics.</div><div class="tag">/ml-training</div></a>
+  <a class="card" href="/similar-spectra"><div class="title">Similar Spectra</div><div class="desc">Science-embedding nearest-neighbor browser for spectra with similar learned shapes.</div><div class="tag">/similar-spectra</div></a>
+  <a class="card" href="/umap"><div class="title">UMAP Map</div><div class="desc">Sampled embedding map with MiniBatchKMeans clusters, target search, and spectra links.</div><div class="tag">/umap</div></a>
+  <a class="card" href="/injections"><div class="title">Injection Recovery Browser</div><div class="desc">Injected signal truth, recovered/missed status, target candidates, and synthetic injected response pane.</div><div class="tag">/injections</div></a>
+  <a class="card" href="/blind-candidates"><div class="title">Blind Candidate Browser</div><div class="desc">Raw and paired candidate review with spectrum and matched-filter line plots.</div><div class="tag">/blind-candidates</div></a>
+  <a class="card" href="/candidate-summary"><div class="title">Candidate Summary</div><div class="desc">Cross-run candidate table with tier, quality, source, campaign, and spectra/blind links.</div><div class="tag">/candidate-summary</div></a>
+  <a class="card" href="/recovery-summary"><div class="title">Recovery Summary</div><div class="desc">Campaign injection recovery rates by run, strength, line family, and false-positive review links.</div><div class="tag">/recovery-summary</div></a>
+  <a class="card" href="/"><div class="title">Field Viewer</div><div class="desc">FITS field previews, selected targets, field-level metadata, and target overlays.</div><div class="tag">/</div></a>
+</main>
+</body>
+</html>"""
+
+
 def _index_html() -> str:
     return """<!doctype html>
 <html>
@@ -2267,7 +2924,7 @@ def _index_html() -> str:
   </style>
 </head>
 <body>
-<header><strong>SPHEREx Field Miner Viewer</strong></header>
+<header><strong>SPHEREx Field Miner Viewer</strong> · <a style="color:white" href="/dashboards">Dashboards</a></header>
 <main>
   <section>
     <h3>Run</h3>
@@ -2473,6 +3130,7 @@ def _campaign_status_html() -> str:
     .card { padding:10px; min-width:0; }
     .k { color:var(--muted); text-transform:uppercase; font-size:10px; }
     .v { margin-top:4px; font:20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow:hidden; text-overflow:ellipsis; }
+    .sub { margin-top:3px; color:var(--grey); font-size:11px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
     section { padding:10px; min-width:0; }
     h2 { margin:0 0 8px; color:var(--cyan); font-size:13px; }
     table { width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed; }
@@ -2496,6 +3154,7 @@ def _campaign_status_html() -> str:
   <div>
     <select id="campaign" onchange="switchCampaign()"></select>
     <button id="refreshButton" type="button" onclick="manualRefresh()">Refresh</button>
+    <a href="/dashboards">Dashboards</a>
     <a href="/candidate-summary">Candidates</a>
     <a href="/recovery-summary">Recovery</a>
     <a href="/simple-status">Run Status</a>
@@ -2510,9 +3169,29 @@ def _campaign_status_html() -> str:
     <div class="card"><div class="k">Waiting</div><div id="waiting" class="v waiting">-</div></div>
     <div class="card"><div class="k">Manifest Rows</div><div id="manifest" class="v">-</div></div>
   </div>
+  <div class="cards">
+    <div class="card"><div class="k">Star Spectra</div><div id="starSpectra" class="v">-</div><div id="starSpectraSub" class="sub"></div></div>
+    <div class="card"><div class="k">Measurements</div><div id="measurements" class="v">-</div><div id="measurementSub" class="sub"></div></div>
+    <div class="card"><div class="k">Injected Signals</div><div id="injectedSignals" class="v">-</div><div id="injectedSignalsSub" class="sub"></div></div>
+    <div class="card"><div class="k">GPU Raw Recovery</div><div id="gpuRecovered" class="v done">-</div><div id="gpuRecoveredSub" class="sub"></div></div>
+    <div class="card"><div class="k">Quality Recovery</div><div id="qualityRecovered" class="v active">-</div><div id="qualityRecoveredSub" class="sub"></div></div>
+    <div class="card"><div class="k">Paired Recovery</div><div id="pairedRecovered" class="v">-</div><div id="pairedRecoveredSub" class="sub"></div></div>
+  </div>
+  <div class="cards">
+    <div class="card"><div class="k">Baseline Candidates</div><div id="baselineCandidates" class="v">-</div><div id="baselineCandidatesSub" class="sub"></div></div>
+    <div class="card"><div class="k">Injected Candidates</div><div id="injectedCandidates" class="v">-</div><div id="injectedCandidatesSub" class="sub"></div></div>
+    <div class="card"><div class="k">Detected Symbols</div><div id="detectedSymbols" class="v">-</div><div id="detectedSymbolsSub" class="sub"></div></div>
+    <div class="card"><div class="k">Score Kernel</div><div id="scoreKernel" class="v">-</div><div id="scoreKernelSub" class="sub"></div></div>
+    <div class="card"><div class="k">Score Total</div><div id="scoreTotal" class="v">-</div><div id="scoreTotalSub" class="sub"></div></div>
+    <div class="card"><div class="k">Field Shards</div><div id="fieldShards" class="v">-</div><div class="sub">baseline + injected</div></div>
+  </div>
   <section>
     <h2>Stage Totals</h2>
     <div id="stageTotals"></div>
+  </section>
+  <section>
+    <h2>Stage Timing</h2>
+    <div id="stageTiming"></div>
   </section>
   <section>
     <h2>Targets</h2>
@@ -2564,12 +3243,44 @@ async function refresh() {
   setText('errors', fmtInt(s.error_targets));
   setText('waiting', fmtInt(s.waiting_targets));
   setText('manifest', fmtInt(s.manifest_rows));
+  renderMetricCards(s.metrics || {});
   renderStageTotals(s.stage_totals || {});
+  renderStageTiming(s.stage_timing || []);
   renderTargets(data.targets || []);
+}
+function renderMetricCards(m) {
+  setText('starSpectra', fmtInt(m.baseline_star_spectra));
+  setText('starSpectraSub', `${fmtInt(m.injected_star_spectra)} injected spectra`);
+  setText('measurements', fmtInt(m.baseline_measurements));
+  setText('measurementSub', `${fmtInt(m.injected_measurements)} injected measurements`);
+  setText('injectedSignals', fmtInt(m.injected_signals));
+  setText('injectedSignalsSub', `${fmtInt(m.injected_runs)} injected runs`);
+  setText('gpuRecovered', `${fmtInt(m.gpu_raw_recovered)} / ${fmtInt(m.injected_signals)}`);
+  setText('gpuRecoveredSub', pct(m.gpu_raw_recovery_fraction));
+  setText('qualityRecovered', `${fmtInt(m.gpu_quality_recovered)} / ${fmtInt(m.injected_signals)}`);
+  setText('qualityRecoveredSub', pct(m.gpu_quality_recovery_fraction));
+  setText('pairedRecovered', `${fmtInt(m.paired_recovered)} / ${fmtInt(m.injected_signals)}`);
+  setText('pairedRecoveredSub', pct(m.paired_recovery_fraction));
+  setText('baselineCandidates', fmtInt(m.raw_baseline_candidates));
+  setText('baselineCandidatesSub', `${fmtInt(m.quality_baseline_candidates)} quality pass`);
+  setText('injectedCandidates', fmtInt(m.raw_injected_candidates));
+  setText('injectedCandidatesSub', `${fmtInt(m.quality_injected_candidates)} quality pass`);
+  const grades = m.candidate_grades || {};
+  setText('detectedSymbols', `S ${fmtInt(grades.S || 0)} / A ${fmtInt(grades.A || 0)}`);
+  setText('detectedSymbolsSub', `B ${fmtInt(grades.B || 0)} · C ${fmtInt(grades.C || 0)} · D ${fmtInt(grades.D || 0)}`);
+  setText('scoreKernel', fmtDuration(m.score_kernel_sec));
+  setText('scoreKernelSub', 'GPU kernel time');
+  setText('scoreTotal', fmtDuration(m.score_total_sec));
+  setText('scoreTotalSub', 'scorer wall time');
+  setText('fieldShards', fmtInt(m.field_shards));
 }
 function renderStageTotals(totals) {
   const rows = Object.entries(totals).map(([stage, v]) => ({stage, done:v.done||0, active:v.active||0, error:v.error||0, waiting:v.waiting||0}));
   document.getElementById('stageTotals').innerHTML = table(rows, ['stage','done','active','error','waiting']);
+}
+function renderStageTiming(rows) {
+  const out = (rows || []).map(r => ({stage:r.stage, done:r.done, total:fmtDuration(r.total_sec), avg:fmtDuration(r.avg_sec), max:fmtDuration(r.max_sec)}));
+  document.getElementById('stageTiming').innerHTML = table(out, ['stage','done','total','avg','max']);
 }
 function renderTargets(rows) {
   if (!rows.length) {
@@ -2589,7 +3300,7 @@ function renderTargets(rows) {
 }
 function stageCard(s) {
   const msg = s.message || s.log_mtime || '';
-  return `<div class="stage ${esc(s.status)}" title="${esc(msg)}"><div class="name">${esc(s.stage)}</div><div class="state ${esc(s.status)}">${esc(s.status)}</div></div>`;
+  return `<div class="stage ${esc(s.status)}" title="${esc(msg)}"><div class="name">${esc(s.stage)}</div><div class="state ${esc(s.status)}">${esc(s.status)}</div><div class="sub">${esc(fmtDuration(s.elapsed_sec))}</div></div>`;
 }
 function table(rows, cols) {
   if (!rows.length) return '<div class="waiting">No rows</div>';
@@ -2600,6 +3311,14 @@ function table(rows, cols) {
 function setText(id, value) { document.getElementById(id).textContent = value; }
 function fmtInt(v) { return Number.isFinite(Number(v)) ? Number(v).toLocaleString() : '-'; }
 function fmt(v) { if (v === null || v === undefined || v === '') return ''; return typeof v === 'number' ? v.toFixed(2) : String(v); }
+function pct(v) { return Number.isFinite(Number(v)) ? (100 * Number(v)).toFixed(1) + '%' : '-'; }
+function fmtDuration(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return '-';
+  if (n < 60) return n.toFixed(1) + 's';
+  if (n < 3600) return Math.floor(n / 60) + 'm ' + Math.round(n % 60) + 's';
+  return Math.floor(n / 3600) + 'h ' + Math.round((n % 3600) / 60) + 'm';
+}
 function esc(v) { return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
 init().catch(e => { document.body.insertAdjacentHTML('beforeend', `<pre class="error">${esc(e.stack || e)}</pre>`); });
 </script>
@@ -2655,6 +3374,7 @@ def _simple_status_html() -> str:
   <div>
     <select id="runSelect" onchange="switchRun()"></select>
     <button id="refreshButton" class="refreshButton" type="button" onclick="manualRefresh()">Refresh</button>
+    <a href="/dashboards">Dashboards</a>
     <a id="spectraLink" href="/spectra">Spectra</a>
   </div>
 </header>
@@ -3158,6 +3878,7 @@ def _recovery_summary_html() -> str:
     <select id="campaign" onchange="refresh()"><option value="">All campaigns</option></select>
     <input id="query" placeholder="filter target/campaign" oninput="scheduleRefresh()">
     <button type="button" onclick="refresh()">Refresh</button>
+    <a href="/dashboards">Dashboards</a>
     <a href="/simple-status">Status</a>
     <a href="/spectra">Spectra</a>
     <a href="/injections">Injections</a>
@@ -3301,7 +4022,7 @@ def _candidate_summary_html() -> str:
 <body>
 <header>
   <h1>Candidate Summary</h1>
-  <div class="small"><a href="/blind-candidates">Blind Candidates</a> · <a href="/spectra">Spectra</a> · <a href="/recovery-summary">Recovery</a> · <a href="/simple-status">Status</a></div>
+  <div class="small"><a href="/dashboards">Dashboards</a> · <a href="/blind-candidates">Blind Candidates</a> · <a href="/spectra">Spectra</a> · <a href="/recovery-summary">Recovery</a> · <a href="/simple-status">Status</a></div>
 </header>
 <main>
   <section>
@@ -3467,7 +4188,7 @@ def _injections_html() -> str:
 <body>
 <header>
   <h1>Injection Recovery Browser</h1>
-  <div class="small"><a href="/spectra">Spectra</a> · <a href="/simple-status">Status</a> · <a href="/">Fields</a></div>
+  <div class="small"><a href="/dashboards">Dashboards</a> · <a href="/spectra">Spectra</a> · <a href="/simple-status">Status</a> · <a href="/">Fields</a></div>
 </header>
 <main>
   <section>
@@ -3828,7 +4549,7 @@ def _blind_candidates_html() -> str:
 <body>
 <header>
   <h1>SPHEREx Blind Candidate Browser</h1>
-  <div class="small"><a href="/spectra">Spectra</a> · <a href="/injections">Injections</a> · <a href="/recovery-summary">Recovery</a></div>
+  <div class="small"><a href="/dashboards">Dashboards</a> · <a href="/spectra">Spectra</a> · <a href="/injections">Injections</a> · <a href="/recovery-summary">Recovery</a></div>
 </header>
 <main>
   <section>
@@ -4036,6 +4757,807 @@ refreshAll();
 </html>"""
 
 
+def _spectrum_quality_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SPHEREx Spectrum Quality</title>
+  <style>
+    :root { --bg:#06101d; --panel:#0d1a2b; --line:#22415f; --text:#e5eefb; --muted:#91a8c2; --cyan:#38bdf8; --green:#22c55e; --amber:#f59e0b; --red:#fb7185; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:linear-gradient(90deg,rgba(56,189,248,.045) 1px,transparent 1px),linear-gradient(rgba(244,114,182,.035) 1px,transparent 1px),var(--bg); background-size:44px 44px; color:var(--text); font:13px system-ui,sans-serif; letter-spacing:0; }
+    header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--line); background:rgba(8,17,31,.94); }
+    h1 { margin:0; font-size:18px; color:var(--cyan); }
+    main { padding:12px; display:grid; gap:12px; }
+    section { background:rgba(13,26,43,.92); border:1px solid var(--line); border-radius:6px; padding:10px; }
+    .controls { display:grid; grid-template-columns: minmax(280px,1.5fr) repeat(5,minmax(120px,1fr)); gap:8px; align-items:end; }
+    label { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
+    input, select, button { width:100%; padding:8px; color:var(--text); background:#07111f; border:1px solid var(--line); border-radius:4px; }
+    button { cursor:pointer; }
+    button:hover { border-color:var(--cyan); }
+    .cards { display:grid; grid-template-columns:repeat(5,minmax(140px,1fr)); gap:8px; }
+    .card { border:1px solid var(--line); border-radius:6px; padding:10px; background:rgba(7,17,31,.88); }
+    .k { color:var(--muted); font-size:11px; text-transform:uppercase; }
+    .v { margin-top:3px; font-size:20px; color:var(--cyan); }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th, td { border-bottom:1px solid var(--line); padding:6px; text-align:left; vertical-align:top; }
+    th { color:#7dd3fc; position:sticky; top:0; background:#0d1a2b; z-index:1; }
+    a { color:#7dd3fc; }
+    .pill { display:inline-block; min-width:54px; text-align:center; padding:2px 7px; border-radius:4px; border:1px solid var(--line); }
+    .good { color:#bbf7d0; border-color:rgba(34,197,94,.55); background:rgba(34,197,94,.12); }
+    .review { color:#fde68a; border-color:rgba(245,158,11,.55); background:rgba(245,158,11,.12); }
+    .bad { color:#fecdd3; border-color:rgba(251,113,133,.55); background:rgba(251,113,133,.12); }
+    .small { color:var(--muted); font-size:12px; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Spectrum Quality</h1>
+  <div class="small"><a href="/dashboards">Dashboards</a> · <a href="/spectra">Spectra</a> · <a href="/simple-status">Status</a></div>
+</header>
+<main>
+  <section class="controls">
+    <div><label>Run</label><select id="runSelect" onchange="switchRun()"></select></div>
+    <div><label>Category</label><select id="category" onchange="refresh(0)"><option value="all">All</option><option value="good" selected>Good</option><option value="review">Review</option><option value="bad">Bad</option></select></div>
+    <div><label>Sort</label><select id="sort" onchange="refresh(0)"><option value="score" selected>Quality score</option><option value="smooth">Smoothness</option><option value="agreement">Aperture/PSF</option><option value="flags">Fewest flags</option><option value="snr">Median SNR</option><option value="measurements">Usable points</option><option value="mag">G magnitude</option><option value="target">Target id</option></select></div>
+    <div><label>Search</label><input id="q" placeholder="target, reason..." oninput="scheduleRefresh()"></div>
+    <div><label>Limit</label><select id="limit" onchange="refresh(0)"><option>100</option><option selected>200</option><option>500</option></select></div>
+    <div><button onclick="refresh(0)">Refresh</button></div>
+  </section>
+  <section>
+    <div class="cards" id="cards"></div>
+    <div style="margin-top:8px;display:grid;grid-template-columns:120px 120px 1fr;gap:8px;align-items:center">
+      <button onclick="page(-1)">Prev</button>
+      <button onclick="page(1)">Next</button>
+      <div id="pageInfo" class="small"></div>
+    </div>
+  </section>
+  <section>
+    <div id="table"></div>
+  </section>
+</main>
+<script>
+let activeRun = new URLSearchParams(window.location.search).get('run') || '';
+let offset = 0;
+let total = 0;
+let limit = 200;
+let timer = null;
+
+function runQS(extra) {
+  const p = new URLSearchParams(extra || '');
+  if (activeRun) p.set('run', activeRun);
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
+async function getJSON(url) {
+  const r = await fetch(url, {cache:'no-store'});
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+function val(id) { return document.getElementById(id).value; }
+function fmt(v, d=3) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '';
+  if (Math.abs(n) >= 100) return n.toFixed(1);
+  if (Math.abs(n) >= 10) return n.toFixed(2);
+  return n.toFixed(d);
+}
+function esc(v) {
+  return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+async function init() {
+  const runs = await getJSON('/api/runs' + runQS());
+  const qualityRun = runs.find(r => r.has_spectrum_quality);
+  const selectedRun = runs.find(r => r.name === activeRun);
+  if (runs.length && (!activeRun || (selectedRun && !selectedRun.has_spectrum_quality && qualityRun))) {
+    activeRun = (qualityRun || runs[0]).name;
+  }
+  const rs = document.getElementById('runSelect');
+  rs.innerHTML = runs.map(r => `<option value="${esc(r.name)}">${r.has_spectrum_quality ? '◆ ' : ''}${esc(r.name)} ${r.has_spectra ? '['+(r.measurement_rows||0)+' rows]' : ''}${r.has_spectrum_quality ? ' quality' : ''}</option>`).join('');
+  rs.value = activeRun;
+  await refresh(0);
+}
+function switchRun() {
+  activeRun = val('runSelect');
+  offset = 0;
+  refresh(0);
+}
+function scheduleRefresh() {
+  clearTimeout(timer);
+  timer = setTimeout(() => refresh(0), 180);
+}
+function params(nextOffset) {
+  const p = new URLSearchParams();
+  p.set('category', val('category'));
+  p.set('sort', val('sort'));
+  p.set('q', val('q'));
+  p.set('limit', val('limit'));
+  p.set('offset', nextOffset || 0);
+  if (activeRun) p.set('run', activeRun);
+  return '?' + p.toString();
+}
+async function refresh(nextOffset) {
+  offset = Math.max(0, nextOffset || 0);
+  const data = await getJSON('/api/spectrum-quality' + params(offset));
+  total = data.total || 0;
+  limit = data.limit || Number(val('limit')) || 200;
+  offset = data.offset || 0;
+  renderCards(data);
+  renderTable(data.rows || []);
+  const start = total ? offset + 1 : 0;
+  const end = Math.min(total, offset + (data.rows || []).length);
+  document.getElementById('pageInfo').textContent = `${start}-${end} of ${total} · ${data.missing ? 'run has no spectrum_quality.parquet yet' : data.summary.path}`;
+}
+function page(dir) {
+  const next = Math.min(Math.max(0, offset + dir * limit), Math.max(0, total - 1));
+  refresh(next);
+}
+function renderCards(data) {
+  const rows = data.rows || [];
+  const good = rows.filter(r => r.spectrum_quality_category === 'good').length;
+  const review = rows.filter(r => r.spectrum_quality_category === 'review').length;
+  const bad = rows.filter(r => r.spectrum_quality_category === 'bad').length;
+  const med = arr => {
+    const xs = arr.map(Number).filter(Number.isFinite).sort((a,b)=>a-b);
+    return xs.length ? xs[Math.floor(xs.length/2)] : null;
+  };
+  const cards = [
+    ['Shown', rows.length],
+    ['Total Filtered', data.total || 0],
+    ['Good / Review / Bad', `${good} / ${review} / ${bad}`],
+    ['Median Score', fmt(med(rows.map(r => r.spectrum_quality_score)))],
+    ['Median Flags', fmt(med(rows.map(r => r.flag_fraction)))],
+  ];
+  document.getElementById('cards').innerHTML = cards.map(([k,v]) => `<div class="card"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
+}
+function renderTable(rows) {
+  const cols = ['category','score','target','G','usable','flags','smooth','ap/psf','snr','reasons','links'];
+  if (!rows.length) {
+    document.getElementById('table').innerHTML = '<div class="small">No quality rows for this run. Generate them with:<br><span class="mono">.venv/bin/python tools/score_spectrum_quality.py --run-dir /mnt/niroseti/spherex_cache/runs/' + esc(activeRun) + '</span></div>';
+    return;
+  }
+  document.getElementById('table').innerHTML = '<table><thead><tr>' + cols.map(c=>`<th>${esc(c)}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map(r => `<tr>
+      <td><span class="pill ${esc(r.spectrum_quality_category)}">${esc(r.spectrum_quality_category)}</span></td>
+      <td>${fmt(r.spectrum_quality_score,2)}</td>
+      <td class="mono">${esc(r.target_id)}</td>
+      <td>${fmt(r.phot_g_mean_mag,2)}</td>
+      <td>${esc(r.n_usable_measurements || '')}/${esc(r.n_measurements || '')}</td>
+      <td>${fmt(r.flag_fraction,3)}</td>
+      <td>${fmt(r.smoothness_score,3)}</td>
+      <td>${fmt(r.aperture_psf_corr,3)}</td>
+      <td>${fmt(r.median_abs_aperture_snr,2)}</td>
+      <td>${esc(r.spectrum_quality_reasons || '')}</td>
+      <td><a href="${esc(r.spectra_url || '#')}">spectra</a></td>
+    </tr>`).join('') + '</tbody></table>';
+}
+init().catch(err => { document.body.innerHTML = '<pre style="color:#fecdd3;padding:20px">' + esc(err.stack || err) + '</pre>'; });
+</script>
+</body>
+</html>"""
+
+
+def _ml_training_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LuxQuarry ML Training</title>
+  <style>
+    :root { --bg:#05080f; --panel:#0b1424; --line:#1f4b67; --text:#e5f7ff; --muted:#8fb8cc; --cyan:#36e7ff; --green:#22c55e; --amber:#f59e0b; --red:#fb7185; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:linear-gradient(90deg,rgba(54,231,255,.035) 1px,transparent 1px),linear-gradient(rgba(244,114,182,.03) 1px,transparent 1px),var(--bg); background-size:42px 42px; color:var(--text); font:13px system-ui,sans-serif; letter-spacing:0; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); background:rgba(5,8,15,.94); }
+    h1 { margin:0; font-size:18px; color:var(--cyan); }
+    main { padding:12px; display:grid; gap:12px; }
+    section { background:rgba(11,20,36,.92); border:1px solid var(--line); border-radius:6px; padding:10px; }
+    a { color:#7dd3fc; }
+    .controls { display:grid; grid-template-columns:minmax(240px,1fr) 120px 120px; gap:8px; align-items:end; }
+    input, select, button { width:100%; padding:8px; color:var(--text); background:#07111f; border:1px solid var(--line); border-radius:4px; }
+    button { cursor:pointer; }
+    button:hover { border-color:var(--cyan); }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:8px; }
+    .card { border:1px solid var(--line); border-radius:6px; background:rgba(7,17,31,.88); padding:10px; }
+    .k { color:var(--muted); font-size:11px; text-transform:uppercase; }
+    .v { color:var(--cyan); font-size:19px; margin-top:4px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th, td { border-bottom:1px solid var(--line); padding:6px; text-align:left; vertical-align:top; }
+    th { color:#7dd3fc; }
+    .pill { display:inline-block; padding:2px 7px; border:1px solid var(--line); border-radius:4px; }
+    .running { color:#fde68a; border-color:rgba(245,158,11,.55); }
+    .done { color:#bbf7d0; border-color:rgba(34,197,94,.55); }
+    .error { color:#fecdd3; border-color:rgba(251,113,133,.55); }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    .small { color:var(--muted); font-size:12px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>ML Training</h1>
+  <div class="small"><a href="/dashboards">Dashboards</a> · <a href="/spectrum-quality">Quality</a> · <a href="/spectra">Spectra</a></div>
+</header>
+<main>
+  <section class="controls">
+    <div><label>Filter</label><input id="q" placeholder="run, model, dataset..." oninput="scheduleRefresh()"></div>
+    <div><label>Limit</label><select id="limit" onchange="refresh()"><option>25</option><option selected>80</option><option>200</option></select></div>
+    <div><button onclick="refresh()">Refresh</button></div>
+  </section>
+  <section><div id="cards" class="cards"></div></section>
+  <section>
+    <h2>Training Runs</h2>
+    <div id="runs"></div>
+  </section>
+  <section>
+    <h2>Latest Run Metrics</h2>
+    <div id="metrics"></div>
+  </section>
+</main>
+<script>
+let timer = null;
+function val(id){ return document.getElementById(id).value; }
+function qs(){
+  const p = new URLSearchParams();
+  if (val('q')) p.set('q', val('q'));
+  p.set('limit', val('limit'));
+  return '?' + p.toString();
+}
+async function getJSON(url){
+  const r = await fetch(url, {cache:'no-store'});
+  if(!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+function scheduleRefresh(){ clearTimeout(timer); timer=setTimeout(refresh, 200); }
+async function refresh(){
+  const data = await getJSON('/api/ml-training' + qs());
+  renderCards(data.summary || {});
+  renderRuns(data.runs || []);
+  renderMetrics(data.metrics || []);
+}
+function renderCards(s){
+  const status = s.status_counts || {}, models = s.model_counts || {};
+  const cards = [
+    ['Runs', s.run_count],
+    ['Running', status.running || 0],
+    ['Done', status.done || 0],
+    ['Science Models', models.science_embedding || 0],
+    ['Narrowband Models', models.narrowband_signal || 0],
+    ['Root', s.ml_runs_root || '']
+  ];
+  document.getElementById('cards').innerHTML = cards.map(([k,v]) => `<div class="card"><div class="k">${esc(k)}</div><div class="v">${esc(v ?? '-')}</div></div>`).join('');
+}
+function renderRuns(rows){
+  const cols = ['status','run_name','model_type','dataset_name','epoch','step','examples','positive_examples','loss','metric','elapsed','device','checkpoint'];
+  const mapped = rows.map(r => ({
+    status:`<span class="pill ${esc(r.status)}">${esc(r.status)}</span>`,
+    run_name: `<span class="mono">${esc(r.run_name)}</span><div class="small">${esc(r.mtime_iso || '')}</div>`,
+    model_type:r.model_type,
+    dataset_name:r.dataset_name,
+    epoch:r.epoch ?? '',
+    step:r.step ?? '',
+    examples:r.examples ?? '',
+    positive_examples:r.positive_examples ?? '',
+    loss:fmt(r.latest_train_loss),
+    metric: metricText(r),
+    elapsed:fmtDuration(r.elapsed_sec),
+    device:r.device || '',
+    checkpoint:`<span class="mono">${esc(r.best_checkpoint || '')}</span>`
+  }));
+  document.getElementById('runs').innerHTML = table(mapped, cols, true);
+}
+function metricText(r){
+  if (r.model_type === 'science_embedding') return 'retrieval ' + pct(r.contrastive_retrieval_top1);
+  if (r.model_type === 'narrowband_signal') return 'recover ' + pct(r.recovered_injected_fraction) + ' / false ' + pct(r.baseline_false_alarm_fraction);
+  return '';
+}
+function renderMetrics(rows){
+  const cols = ['step','epoch','train_loss','contrastive_retrieval_top1','injected_recovered_fraction','baseline_false_alarm_fraction','injected_recovered','injected_missed','baseline_false_alarms','baseline_correct','device'];
+  document.getElementById('metrics').innerHTML = table(rows.slice().reverse(), cols, false);
+}
+function table(rows, cols, html){
+  if(!rows.length) return '<div class="small">No rows</div>';
+  return '<table><thead><tr>' + cols.map(c=>`<th>${esc(c)}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map(r => '<tr>' + cols.map(c => `<td>${html ? (r[c] ?? '') : esc(formatCell(r[c]))}</td>`).join('') + '</tr>').join('') + '</tbody></table>';
+}
+function formatCell(v){ return typeof v === 'number' ? fmt(v) : (v ?? ''); }
+function fmt(v){ const n=Number(v); if(!Number.isFinite(n)) return ''; return Math.abs(n) >= 100 ? n.toFixed(1) : n.toFixed(4); }
+function pct(v){ const n=Number(v); if(!Number.isFinite(n)) return '-'; return (100*n).toFixed(1)+'%'; }
+function fmtDuration(v){ const n=Number(v); if(!Number.isFinite(n)) return '-'; if(n<60)return n.toFixed(1)+'s'; if(n<3600)return Math.floor(n/60)+'m '+Math.round(n%60)+'s'; return Math.floor(n/3600)+'h '+Math.round((n%3600)/60)+'m'; }
+function esc(v){ return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+refresh().catch(e => { document.body.insertAdjacentHTML('beforeend','<pre class="error">'+esc(e.stack || String(e))+'</pre>'); });
+setInterval(refresh, 3000);
+</script>
+</body>
+</html>"""
+
+
+def _similar_spectra_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LuxQuarry Similar Spectra</title>
+  <style>
+    :root { --bg:#06101d; --panel:#0d1a2b; --line:#22415f; --text:#e5eefb; --muted:#91a8c2; --cyan:#38bdf8; --pink:#ff4fd8; --green:#22c55e; --amber:#f59e0b; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:linear-gradient(90deg,rgba(56,189,248,.045) 1px,transparent 1px),linear-gradient(rgba(244,114,182,.035) 1px,transparent 1px),var(--bg); background-size:44px 44px; color:var(--text); font:13px system-ui,sans-serif; letter-spacing:0; }
+    header { display:flex; align-items:center; justify-content:space-between; padding:12px 16px; border-bottom:1px solid var(--line); background:rgba(8,17,31,.94); }
+    h1 { margin:0; font-size:18px; color:var(--cyan); }
+    main { padding:12px; display:grid; grid-template-columns:380px minmax(760px,1fr); gap:12px; }
+    section { background:rgba(13,26,43,.92); border:1px solid var(--line); border-radius:6px; padding:10px; min-width:0; }
+    label { display:block; color:var(--muted); font-size:12px; margin:8px 0 4px; }
+    input, select, button { width:100%; padding:8px; color:var(--text); background:#07111f; border:1px solid var(--line); border-radius:4px; }
+    button { cursor:pointer; }
+    button:hover { border-color:var(--cyan); }
+    a { color:#7dd3fc; }
+    .small { color:var(--muted); font-size:12px; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:8px; margin-bottom:10px; }
+    .card { border:1px solid var(--line); border-radius:6px; padding:10px; background:rgba(7,17,31,.88); }
+    .k { color:var(--muted); font-size:11px; text-transform:uppercase; }
+    .v { color:var(--cyan); font-size:17px; margin-top:4px; overflow-wrap:anywhere; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th, td { border-bottom:1px solid var(--line); padding:6px; text-align:left; vertical-align:top; }
+    th { color:#7dd3fc; position:sticky; top:0; background:#0d1a2b; z-index:1; }
+    tr.selected { background:rgba(255,79,216,.12); }
+    #plot { width:100%; height:460px; background:rgba(5,11,20,.92); border:1px solid #1d5f7a; border-radius:6px; margin-bottom:10px; }
+    .hint { color:#fde68a; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Similar Spectra</h1>
+  <div class="small"><a href="/dashboards">Dashboards</a> · <a href="/spectra">Spectra</a> · <a href="/ml-training">ML Training</a></div>
+</header>
+<main>
+  <section>
+    <button onclick="refresh()">Refresh</button>
+    <label>Embedding Set</label>
+    <select id="embedding" onchange="refresh()"></select>
+    <label>Search Target</label>
+    <input id="q" placeholder="ucs, gaia id, source id..." oninput="scheduleSearch()">
+    <label>Exact Target ID</label>
+    <input id="target" placeholder="gaia_dr3_..." onkeydown="if(event.key==='Enter') refresh()">
+    <label>Source Run Name</label>
+    <input id="sourceRun" placeholder="optional; disambiguates repeated targets" onkeydown="if(event.key==='Enter') refresh()">
+    <label>Neighbors</label>
+    <select id="limit"><option>20</option><option selected>60</option><option>120</option><option>250</option></select>
+    <button style="margin-top:8px" onclick="refresh()">Find Similar</button>
+    <div id="queryCard" style="margin-top:10px"></div>
+    <div id="suggestions" style="margin-top:10px"></div>
+  </section>
+  <section>
+    <div id="cards" class="cards"></div>
+    <svg id="plot" viewBox="0 0 1100 460"></svg>
+    <div id="neighbors"></div>
+  </section>
+</main>
+<script>
+const initial = new URLSearchParams(location.search);
+let activeEmbedding = initial.get('embedding') || '';
+let activeRows = [];
+let selectedRow = null;
+
+function val(id){ return document.getElementById(id).value; }
+function setVal(id, v){ document.getElementById(id).value = v || ''; }
+function esc(v){ return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function num(v){ const n=Number(v); return Number.isFinite(n) ? n : NaN; }
+function fmt(v,d=3){ const n=Number(v); if(!Number.isFinite(n)) return ''; if(Math.abs(n)>=100) return n.toFixed(1); if(Math.abs(n)>=10) return n.toFixed(2); return n.toFixed(d); }
+async function getJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); return await r.json(); }
+
+let timer=null;
+function scheduleSearch(){ clearTimeout(timer); timer=setTimeout(refresh, 220); }
+function params(){
+  const p = new URLSearchParams();
+  if (val('embedding')) p.set('embedding', val('embedding'));
+  if (val('target')) p.set('target', val('target'));
+  if (val('sourceRun')) p.set('source_run', val('sourceRun'));
+  if (val('q')) p.set('q', val('q'));
+  p.set('limit', val('limit'));
+  return '?' + p.toString();
+}
+async function refresh(){
+  const data = await getJSON('/api/similar-spectra' + params());
+  syncEmbeddings(data.embeddings || [], data.active_embedding || '');
+  renderCards(data);
+  renderQuery(data.query, data.message);
+  renderSuggestions(data.suggestions || []);
+  activeRows = data.rows || [];
+  renderNeighbors(activeRows);
+  if (activeRows.length) selectNeighbor(0);
+  history.replaceState(null, '', '/similar-spectra' + params());
+}
+function syncEmbeddings(rows, active){
+  const sel = document.getElementById('embedding');
+  const old = sel.value || activeEmbedding || active;
+  sel.innerHTML = rows.map(r => `<option value="${esc(r.name)}">${r.has_embeddings ? '◆ ' : '… '}${esc(r.name)} ${r.rows ? '['+r.rows.toLocaleString()+']' : ''} ${r.status || ''}</option>`).join('');
+  sel.value = rows.some(r => r.name === old) ? old : active;
+  activeEmbedding = sel.value;
+}
+function renderCards(data){
+  const status = data.export_status || {};
+  const cards = [
+    ['Embedding rows', data.embedding_rows || 0],
+    ['Active set', data.active_embedding || ''],
+    ['Export status', status.status || (data.missing ? 'missing' : 'ready')],
+    ['Model', status.model_version || ''],
+    ['Neighbors', (data.rows || []).length],
+  ];
+  document.getElementById('cards').innerHTML = cards.map(([k,v]) => `<div class="card"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
+}
+function renderQuery(query, message){
+  const el = document.getElementById('queryCard');
+  if (!query) {
+    el.innerHTML = `<div class="card"><div class="k">Query</div><div class="v hint">${esc(message || 'Search or enter a target id')}</div></div>`;
+    return;
+  }
+  setVal('target', query.target_id);
+  setVal('sourceRun', query.run_name);
+  el.innerHTML = `<div class="card"><div class="k">Query</div><div class="v mono">${esc(query.target_id)}</div><div class="small">${esc(query.run_name || '')}<br>G ${fmt(query.phot_g_mean_mag,2)} · BP/RP ${fmt(query.bp_rp,3)} · quality ${fmt(query.spectrum_quality_score,2)}</div></div>`;
+}
+function renderSuggestions(rows){
+  if (!rows.length) { document.getElementById('suggestions').innerHTML = ''; return; }
+  document.getElementById('suggestions').innerHTML = '<div class="small">Search matches</div><table><tbody>' +
+    rows.slice(0,12).map(r => `<tr onclick="chooseTarget('${escAttr(r.run_name)}','${escAttr(r.target_id)}')"><td class="mono">${esc(r.target_id)}</td><td>${esc(r.run_name)}</td><td>${fmt(r.spectrum_quality_score,2)}</td></tr>`).join('') +
+    '</tbody></table>';
+}
+function chooseTarget(runName, targetId){ setVal('sourceRun', runName); setVal('target', targetId); refresh(); }
+function renderNeighbors(rows){
+  const cols = ['rank','similarity','target','run','G','BP/RP','quality','points','links'];
+  if (!rows.length) { document.getElementById('neighbors').innerHTML = '<div class="small">No neighbors yet.</div>'; return; }
+  document.getElementById('neighbors').innerHTML = '<table><thead><tr>' + cols.map(c=>`<th>${esc(c)}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map((r,i) => `<tr id="neighbor_${i}" onclick="selectNeighbor(${i})">
+      <td>${r.rank}</td>
+      <td>${fmt(r.embedding_similarity,5)}</td>
+      <td class="mono">${esc(r.target_id)}</td>
+      <td class="mono">${esc(r.run_name)}</td>
+      <td>${fmt(r.phot_g_mean_mag,2)}</td>
+      <td>${fmt(r.bp_rp,3)}</td>
+      <td>${fmt(r.spectrum_quality_score,2)} ${esc(r.spectrum_quality_category || '')}</td>
+      <td>${esc(r.n_input_points || r.n_measurements || '')}</td>
+      <td><a href="${esc(r.spectra_url)}" onclick="event.stopPropagation()">spectra</a> · <a href="${esc(r.similar_url)}" onclick="event.stopPropagation()">use</a></td>
+    </tr>`).join('') + '</tbody></table>';
+}
+async function selectNeighbor(index){
+  selectedRow = activeRows[index];
+  document.querySelectorAll('#neighbors tr').forEach(tr => tr.classList.remove('selected'));
+  const tr = document.getElementById('neighbor_' + index);
+  if (tr) tr.classList.add('selected');
+  if (!selectedRow) return;
+  const qRun = val('sourceRun'), qTarget = val('target');
+  const querySpectrum = await getJSON('/api/spectrum/' + encodeURIComponent(qTarget) + '?run=' + encodeURIComponent(qRun));
+  const neighborSpectrum = await getJSON('/api/spectrum/' + encodeURIComponent(selectedRow.target_id) + '?run=' + encodeURIComponent(selectedRow.run_name));
+  drawCompare(querySpectrum.rows || [], neighborSpectrum.rows || [], selectedRow);
+}
+function drawCompare(queryRows, neighborRows, neighbor){
+  const svg = document.getElementById('plot'); svg.innerHTML = '';
+  const W=1100,H=460,m={l:88,r:28,t:28,b:50};
+  const qs = series(queryRows), ns = series(neighborRows);
+  const all = qs.concat(ns).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y));
+  if (!all.length) return;
+  const xs = all.map(p=>p.x), ys = all.map(p=>p.y);
+  const x0=Math.min(...xs), x1=Math.max(...xs);
+  const yq = quantile(ys, .02), yr = quantile(ys, .98), pad=(yr-yq || 1)*.08, y0=yq-pad, y1=yr+pad;
+  const sx=x=>m.l+(x-x0)/(x1-x0||1)*(W-m.l-m.r), sy=y=>H-m.b-(y-y0)/(y1-y0||1)*(H-m.t-m.b);
+  add(svg,'rect',{x:0,y:0,width:W,height:H,fill:'rgba(5,11,20,.92)'});
+  for(let i=0;i<=6;i++){ const x=m.l+i/6*(W-m.l-m.r); add(svg,'line',{x1:x,y1:m.t,x2:x,y2:H-m.b,stroke:'#1d3550','stroke-width':1}); }
+  for(let i=0;i<=5;i++){ const y=m.t+i/5*(H-m.t-m.b); add(svg,'line',{x1:m.l,y1:y,x2:W-m.r,y2:y,stroke:'#1d3550','stroke-width':1}); }
+  drawLine(svg, qs, sx, sy, '#36e7ff', 2.0);
+  drawLine(svg, ns, sx, sy, '#ff4fd8', 1.8);
+  add(svg,'text',{x:m.l,y:18,fill:'#36e7ff'},`query ${qLabel()}`);
+  add(svg,'text',{x:m.l+430,y:18,fill:'#ff4fd8'},`neighbor ${neighbor.target_id} sim=${fmt(neighbor.embedding_similarity,5)}`);
+  add(svg,'text',{x:W/2,y:H-12,fill:'#9fb6cc','text-anchor':'middle'},'wavelength (um)');
+  add(svg,'text',{x:16,y:H/2,fill:'#9fb6cc',transform:`rotate(-90 16 ${H/2})`},'robust-normalized aperture flux');
+}
+function series(rows){
+  const pts = rows.map(r => ({x:num(r.cwave_um), y:num(r.aperture_flux_uJy)})).filter(p => Number.isFinite(p.x) && Number.isFinite(p.y)).sort((a,b)=>a.x-b.x);
+  if (!pts.length) return pts;
+  const med = quantile(pts.map(p=>p.y), .5), scale = Math.max(1e-9, quantile(pts.map(p=>Math.abs(p.y-med)), .5)*1.4826);
+  return pts.map(p => ({x:p.x, y:Math.max(-8, Math.min(8, (p.y-med)/scale))}));
+}
+function drawLine(svg, pts, sx, sy, color, width){
+  if (!pts.length) return;
+  const d = pts.map((p,i)=>(i?'L':'M') + sx(p.x).toFixed(1) + ' ' + sy(p.y).toFixed(1)).join(' ');
+  add(svg,'path',{d,fill:'none',stroke:color,'stroke-width':width,'stroke-linejoin':'round','stroke-linecap':'round'});
+}
+function quantile(values, q){ const xs=values.filter(Number.isFinite).sort((a,b)=>a-b); if(!xs.length)return NaN; return xs[Math.min(xs.length-1, Math.max(0, Math.floor(q*(xs.length-1))))]; }
+function add(svg, name, attrs){ const el=document.createElementNS('http://www.w3.org/2000/svg', name); for(const [k,v] of Object.entries(attrs)) el.setAttribute(k,v); svg.appendChild(el); return el; }
+function qLabel(){ return val('target'); }
+function escAttr(v){ return String(v ?? '').replace(/['\\\\]/g, '\\\\$&').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+setVal('embedding', initial.get('embedding') || '');
+setVal('target', initial.get('target') || '');
+setVal('sourceRun', initial.get('source_run') || '');
+setVal('q', initial.get('q') || '');
+refresh().catch(e => { document.body.insertAdjacentHTML('beforeend','<pre style="color:#fecdd3;padding:20px">'+esc(e.stack || String(e))+'</pre>'); });
+</script>
+</body>
+</html>"""
+
+
+def _umap_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LuxQuarry UMAP Map</title>
+  <style>
+    :root { --bg:#050914; --panel:#0b1424; --line:#21445f; --text:#e8f4ff; --muted:#91a8c2; --cyan:#36e7ff; --pink:#ff4fd8; --amber:#f59e0b; --green:#22c55e; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:linear-gradient(90deg,rgba(54,231,255,.035) 1px,transparent 1px),linear-gradient(rgba(244,114,182,.03) 1px,transparent 1px),radial-gradient(circle at 80% 10%,rgba(54,231,255,.11),transparent 32%),var(--bg); background-size:44px 44px,44px 44px,auto; color:var(--text); font:13px system-ui,sans-serif; letter-spacing:0; }
+    header { display:flex; justify-content:space-between; align-items:center; padding:12px 16px; border-bottom:1px solid var(--line); background:rgba(5,9,20,.94); }
+    h1 { margin:0; font-size:18px; color:var(--cyan); }
+    a { color:#7dd3fc; }
+    main { display:grid; grid-template-columns:340px minmax(720px,1fr); gap:12px; padding:12px; }
+    section { min-width:0; background:rgba(11,20,36,.92); border:1px solid var(--line); border-radius:6px; padding:10px; box-shadow:0 0 22px rgba(2,6,23,.34), inset 0 0 0 1px rgba(54,231,255,.03); }
+    label { display:block; color:var(--muted); font-size:12px; margin:8px 0 4px; }
+    input, select, button { width:100%; padding:8px; background:#07111f; color:var(--text); border:1px solid var(--line); border-radius:4px; }
+    button { cursor:pointer; }
+    button:hover { border-color:var(--cyan); }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:8px; margin-bottom:10px; }
+    .card { border:1px solid var(--line); background:rgba(7,17,31,.88); border-radius:6px; padding:9px; }
+    .k { color:var(--muted); font-size:11px; text-transform:uppercase; }
+    .v { color:var(--cyan); font-size:18px; margin-top:4px; overflow-wrap:anywhere; }
+    .small { color:var(--muted); font-size:12px; }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    #mapWrap { position:relative; height:640px; border:1px solid #1d5f7a; border-radius:6px; background:rgba(4,10,20,.94); overflow:hidden; }
+    #map { width:100%; height:100%; display:block; }
+    #tip { position:absolute; display:none; pointer-events:none; max-width:420px; padding:8px; border:1px solid var(--line); border-radius:4px; background:rgba(5,9,20,.96); box-shadow:0 0 18px rgba(54,231,255,.16); }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th, td { border-bottom:1px solid var(--line); padding:6px; text-align:left; vertical-align:top; }
+    th { color:#7dd3fc; position:sticky; top:0; background:#0b1424; z-index:1; }
+    tr.selected { background:rgba(255,79,216,.13); }
+    .scroll { max-height:330px; overflow:auto; border:1px solid rgba(33,68,95,.6); border-radius:5px; }
+    .pill { display:inline-block; padding:2px 7px; border:1px solid var(--line); border-radius:4px; }
+  </style>
+</head>
+<body>
+<header>
+  <h1>UMAP Embedding Map</h1>
+  <div class="small"><a href="/dashboards">Dashboards</a> · <a href="/similar-spectra">Similar Spectra</a> · <a href="/spectra">Spectra</a> · <a href="/ml-training">ML Training</a></div>
+</header>
+<main>
+  <section>
+    <button onclick="refresh()">Refresh</button>
+    <label>Embedding Set</label>
+    <select id="embedding" onchange="refresh()"></select>
+    <label>Search / Filter</label>
+    <input id="q" placeholder="target id, run, source id, quality..." oninput="scheduleRefresh()">
+    <div class="row">
+      <div>
+        <label>Cluster</label>
+        <select id="cluster" onchange="refresh()"><option value="all">All</option></select>
+      </div>
+      <div>
+        <label>Color</label>
+        <select id="color" onchange="draw()">
+          <option value="cluster">Cluster</option>
+          <option value="gmag">G magnitude</option>
+          <option value="bprp">BP/RP</option>
+          <option value="quality">Quality</option>
+          <option value="flags">Flag fraction</option>
+        </select>
+      </div>
+    </div>
+    <label>Browser Point Cap</label>
+    <select id="limit" onchange="refresh()">
+      <option>5000</option>
+      <option selected>12000</option>
+      <option>30000</option>
+      <option>50000</option>
+    </select>
+    <div id="detail" style="margin-top:10px"></div>
+    <h3>Clusters</h3>
+    <div id="clusters" class="scroll"></div>
+  </section>
+  <section>
+    <div id="cards" class="cards"></div>
+    <div id="mapWrap">
+      <canvas id="map"></canvas>
+      <div id="tip"></div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <section style="padding:8px">
+        <h3>Selected Point</h3>
+        <div id="selected" class="small">Click a point.</div>
+      </section>
+      <section style="padding:8px">
+        <h3>Visible Sample</h3>
+        <div id="points" class="scroll"></div>
+      </section>
+    </div>
+  </section>
+</main>
+<script>
+const initial = new URLSearchParams(location.search);
+let data = {points:[], clusters:[]};
+let bounds = null;
+let selectedIndex = -1;
+let timer = null;
+const canvas = document.getElementById('map');
+const tip = document.getElementById('tip');
+
+function val(id){ return document.getElementById(id).value; }
+function setVal(id,v){ document.getElementById(id).value = v || ''; }
+function esc(v){ return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function fmt(v,d=3){ const n=Number(v); if(!Number.isFinite(n)) return ''; if(Math.abs(n)>=1000) return n.toExponential(3); if(Math.abs(n)>=100) return n.toFixed(1); if(Math.abs(n)>=10) return n.toFixed(2); return n.toFixed(d); }
+async function getJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); return await r.json(); }
+function scheduleRefresh(){ clearTimeout(timer); timer=setTimeout(refresh, 220); }
+function qs(){
+  const p = new URLSearchParams();
+  if (val('embedding')) p.set('embedding', val('embedding'));
+  if (val('q')) p.set('q', val('q'));
+  if (val('cluster') && val('cluster') !== 'all') p.set('cluster', val('cluster'));
+  p.set('color', val('color'));
+  p.set('limit', val('limit'));
+  return '?' + p.toString();
+}
+async function refresh(){
+  data = await getJSON('/api/umap' + qs());
+  syncEmbeddings(data.embeddings || [], data.active_embedding || '');
+  syncClusters(data.clusters || []);
+  renderCards();
+  renderClusters(data.clusters || []);
+  renderPoints(data.points || []);
+  draw();
+  history.replaceState(null, '', '/umap' + qs());
+}
+function syncEmbeddings(rows, active){
+  const sel = document.getElementById('embedding');
+  const old = sel.value || initial.get('embedding') || active;
+  sel.innerHTML = rows.map(r => `<option value="${esc(r.name)}">${r.has_embeddings ? '◆ ' : '… '}${esc(r.name)} ${r.rows ? '[' + Number(r.rows).toLocaleString() + ']' : ''}</option>`).join('');
+  sel.value = rows.some(r => r.name === old) ? old : active;
+}
+function syncClusters(rows){
+  const sel = document.getElementById('cluster');
+  const old = sel.value || initial.get('cluster') || 'all';
+  sel.innerHTML = '<option value="all">All</option>' + rows.map(r => `<option value="${esc(r.cluster_id)}">cluster ${esc(r.cluster_id)} · ${Number(r.count || 0).toLocaleString()}</option>`).join('');
+  sel.value = [...sel.options].some(o => o.value === old) ? old : 'all';
+}
+function renderCards(){
+  const st = data.umap_status || {};
+  const cards = [
+    ['Returned', data.returned || 0],
+    ['Filtered Total', data.total_filtered || 0],
+    ['Projection Rows', st.row_count || ''],
+    ['Method', st.projection_method || ''],
+    ['Clusters', st.cluster_count || (data.clusters || []).length],
+    ['Embedding Set', data.active_embedding || '']
+  ];
+  document.getElementById('cards').innerHTML = cards.map(([k,v]) => `<div class="card"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
+  document.getElementById('detail').innerHTML = data.missing ? `<div class="card"><div class="k">Missing</div><div class="v">${esc(JSON.stringify(st))}</div></div>` : `<div class="small">Offline projection is sampled and clustered; the browser receives at most ${esc(val('limit'))} points.</div>`;
+}
+function renderClusters(rows){
+  if (!rows.length) { document.getElementById('clusters').innerHTML = '<div class="small">No clusters.</div>'; return; }
+  document.getElementById('clusters').innerHTML = '<table><thead><tr><th>cluster</th><th>n</th><th>G</th><th>BP/RP</th><th>quality</th></tr></thead><tbody>' +
+    rows.map(r => `<tr onclick="setCluster('${escAttr(r.cluster_id)}')"><td><span class="pill">${esc(r.cluster_id)}</span></td><td>${Number(r.count || 0).toLocaleString()}</td><td>${fmt(r.median_g,2)}</td><td>${fmt(r.median_bp_rp,3)}</td><td>${fmt(r.median_quality,2)}</td></tr>`).join('') +
+    '</tbody></table>';
+}
+function setCluster(id){ setVal('cluster', id); refresh(); }
+function renderPoints(rows){
+  const shown = rows.slice(0, 80);
+  if (!shown.length) { document.getElementById('points').innerHTML = '<div class="small">No visible points.</div>'; return; }
+  document.getElementById('points').innerHTML = '<table><thead><tr><th>cluster</th><th>target</th><th>G</th><th>quality</th></tr></thead><tbody>' +
+    shown.map((r,i) => `<tr id="pointrow_${i}" onclick="selectPoint(${i})"><td>${esc(r.cluster_id)}</td><td class="mono">${esc(r.target_id)}</td><td>${fmt(r.phot_g_mean_mag,2)}</td><td>${fmt(r.spectrum_quality_score,2)}</td></tr>`).join('') +
+    '</tbody></table>';
+}
+function draw(){
+  const rows = data.points || [];
+  const rect = canvas.parentElement.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.max(600, Math.floor(rect.width * dpr));
+  canvas.height = Math.max(400, Math.floor(rect.height * dpr));
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.clearRect(0,0,rect.width,rect.height);
+  ctx.fillStyle = '#040a14';
+  ctx.fillRect(0,0,rect.width,rect.height);
+  grid(ctx, rect.width, rect.height);
+  if (!rows.length) {
+    ctx.fillStyle = '#91a8c2';
+    ctx.textAlign = 'center';
+    ctx.fillText(data.missing ? 'No UMAP projection found yet.' : 'No points match the filter.', rect.width/2, rect.height/2);
+    return;
+  }
+  bounds = makeBounds(rows);
+  for (let i=0; i<rows.length; i++) {
+    const r = rows[i], p = xy(r, rect.width, rect.height);
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, i === selectedIndex ? 4.2 : 2.2, 0, Math.PI*2);
+    ctx.fillStyle = colorFor(r);
+    ctx.globalAlpha = i === selectedIndex ? 1.0 : 0.72;
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+function grid(ctx,w,h){
+  ctx.strokeStyle = 'rgba(33,68,95,.55)';
+  ctx.lineWidth = 1;
+  for(let i=0;i<=10;i++){ const x=i*w/10; ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,h); ctx.stroke(); }
+  for(let i=0;i<=8;i++){ const y=i*h/8; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+}
+function makeBounds(rows){
+  const xs = rows.map(r=>Number(r.umap_x)).filter(Number.isFinite);
+  const ys = rows.map(r=>Number(r.umap_y)).filter(Number.isFinite);
+  const x0=Math.min(...xs), x1=Math.max(...xs), y0=Math.min(...ys), y1=Math.max(...ys);
+  const xp=(x1-x0 || 1)*.05, yp=(y1-y0 || 1)*.05;
+  return {x0:x0-xp,x1:x1+xp,y0:y0-yp,y1:y1+yp};
+}
+function xy(r,w,h){
+  return {
+    x: (Number(r.umap_x)-bounds.x0)/(bounds.x1-bounds.x0 || 1)*w,
+    y: h - (Number(r.umap_y)-bounds.y0)/(bounds.y1-bounds.y0 || 1)*h
+  };
+}
+function colorFor(r){
+  const mode = val('color');
+  if (mode === 'gmag') return ramp(Number(r.phot_g_mean_mag), 5, 17);
+  if (mode === 'bprp') return ramp(Number(r.bp_rp), -0.5, 4);
+  if (mode === 'quality') return ramp(Number(r.spectrum_quality_score), 0, 1);
+  if (mode === 'flags') return ramp(1 - Number(r.flag_fraction || 0), 0, 1);
+  const id = Number(r.cluster_id);
+  const hue = Number.isFinite(id) ? (id * 47) % 360 : 190;
+  return `hsl(${hue} 86% 62%)`;
+}
+function ramp(v, lo, hi){
+  if (!Number.isFinite(v)) return 'rgba(145,168,194,.62)';
+  const t = Math.max(0, Math.min(1, (v-lo)/(hi-lo || 1)));
+  const h = 215 - 170*t;
+  return `hsl(${h} 88% 62%)`;
+}
+function nearest(ev){
+  const rows = data.points || [];
+  if (!rows.length || !bounds) return -1;
+  const rect = canvas.getBoundingClientRect();
+  const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+  let best=-1, bestD=Infinity;
+  for(let i=0;i<rows.length;i++){
+    const p = xy(rows[i], rect.width, rect.height);
+    const d = (p.x-mx)*(p.x-mx)+(p.y-my)*(p.y-my);
+    if (d < bestD) { bestD=d; best=i; }
+  }
+  return bestD <= 144 ? best : -1;
+}
+function selectPoint(i){
+  selectedIndex = i;
+  const r = (data.points || [])[i];
+  document.querySelectorAll('#points tr').forEach(tr => tr.classList.remove('selected'));
+  const tr = document.getElementById('pointrow_' + i);
+  if (tr) tr.classList.add('selected');
+  if (!r) return;
+  document.getElementById('selected').innerHTML = `<div class="mono">${esc(r.target_id)}</div>
+    <div>${esc(r.run_name || '')}</div>
+    <div>cluster ${esc(r.cluster_id)} · G ${fmt(r.phot_g_mean_mag,2)} · BP/RP ${fmt(r.bp_rp,3)} · quality ${fmt(r.spectrum_quality_score,2)}</div>
+    <div style="margin-top:6px"><a href="${esc(r.spectra_url)}">spectra</a> · <a href="${esc(r.similar_url)}">similar spectra</a></div>`;
+  draw();
+}
+canvas.addEventListener('mousemove', ev => {
+  const i = nearest(ev), r = (data.points || [])[i];
+  if (!r) { tip.style.display='none'; return; }
+  const rect = canvas.getBoundingClientRect();
+  tip.style.display='block';
+  tip.style.left = Math.min(rect.width - 430, Math.max(8, ev.clientX - rect.left + 12)) + 'px';
+  tip.style.top = Math.min(rect.height - 120, Math.max(8, ev.clientY - rect.top + 12)) + 'px';
+  tip.innerHTML = `<div class="mono">${esc(r.target_id)}</div><div>${esc(r.run_name || '')}</div><div>cluster ${esc(r.cluster_id)} · G ${fmt(r.phot_g_mean_mag,2)} · quality ${fmt(r.spectrum_quality_score,2)}</div>`;
+});
+canvas.addEventListener('mouseleave', () => { tip.style.display='none'; });
+canvas.addEventListener('click', ev => { const i = nearest(ev); if (i >= 0) selectPoint(i); });
+window.addEventListener('resize', () => draw());
+function escAttr(v){ return String(v ?? '').replace(/['\\\\]/g, '\\\\$&').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+setVal('embedding', initial.get('embedding') || '');
+setVal('q', initial.get('q') || '');
+setVal('cluster', initial.get('cluster') || 'all');
+setVal('color', initial.get('color') || 'cluster');
+setVal('limit', initial.get('limit') || '12000');
+refresh().catch(e => { document.body.insertAdjacentHTML('beforeend','<pre style="color:#fecdd3;padding:20px">'+esc(e.stack || String(e))+'</pre>'); });
+</script>
+</body>
+</html>"""
+
+
 def _spectra_html() -> str:
     return """<!doctype html>
 <html>
@@ -4100,7 +5622,7 @@ def _spectra_html() -> str:
 <body>
 <header>
   <h1>SPHEREx Spectra Browser</h1>
-  <div class="small"><a style="color:#93c5fd" href="/simple-status">Status</a> · <a style="color:#93c5fd" href="/">Field viewer</a></div>
+  <div class="small"><a style="color:#93c5fd" href="/dashboards">Dashboards</a> · <a style="color:#93c5fd" href="/similar-spectra">Similar</a> · <a style="color:#93c5fd" href="/spectrum-quality">Quality</a> · <a style="color:#93c5fd" href="/simple-status">Status</a> · <a style="color:#93c5fd" href="/">Field viewer</a></div>
 </header>
 <main>
   <section>

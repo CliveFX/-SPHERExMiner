@@ -27,6 +27,16 @@ from spherex_laser_miner.field_worker import (
 from spherex_laser_miner.spectra import assemble_spectra_from_jobs
 from spherex_laser_miner.viewer import serve_viewer
 
+try:
+    from tools.score_spectrum_quality import score_run as score_spectrum_quality_run
+except ModuleNotFoundError:
+    import sys
+
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
+    from tools.score_spectrum_quality import score_run as score_spectrum_quality_run
+
 app = typer.Typer(no_args_is_help=True)
 logging.getLogger("astropy").setLevel(logging.ERROR)
 
@@ -321,12 +331,14 @@ def run_multifield_smoke_test(
         max_field_workers=max_field_workers,
     )
     assembly = assemble_spectra_from_jobs(cfg.smoke_run_dir, jobs)
+    spectrum_quality = _score_spectrum_quality_stage(cfg.smoke_run_dir, cfg.status_mode)
     summary = {
         "target": target,
         "release": release,
         "trial_count": len(trials),
         "field_job_count": len(jobs),
         "assembly": assembly,
+        "spectrum_quality": spectrum_quality,
         "run_dir": str(cfg.smoke_run_dir),
         "viewer_hint": "spherex-mine viewer --host 0.0.0.0 --port 8765",
     }
@@ -597,6 +609,7 @@ def _run_depth_pipeline(
     error_path = cfg.smoke_run_dir / "field_errors.json"
     field_errors = _read_json_file(error_path) if error_path.exists() else []
     assembly = assemble_spectra_from_jobs(cfg.smoke_run_dir, jobs)
+    spectrum_quality = _score_spectrum_quality_stage(cfg.smoke_run_dir, cfg.status_mode)
     summary = {
         "target": target,
         "release": release,
@@ -624,6 +637,7 @@ def _run_depth_pipeline(
         "fixed_targets_path": str(fixed_targets_path) if fixed_targets_path is not None else None,
         "field_launch_stagger_sec": field_launch_stagger_sec,
         "assembly": assembly,
+        "spectrum_quality": spectrum_quality,
         "run_dir": str(cfg.smoke_run_dir),
     }
     (cfg.smoke_run_dir / "run_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
@@ -701,6 +715,41 @@ def _load_fixed_targets(path: Path) -> list[dict[str, object]]:
     if df.empty:
         raise typer.BadParameter("Fixed target file is empty")
     return df.where(pd.notna(df), None).to_dict(orient="records")
+
+
+def _score_spectrum_quality_stage(run_dir: Path, status_mode: str) -> dict[str, object]:
+    started = time.perf_counter()
+    if status_mode == "jsonl":
+        append_status_event(run_dir, "spectrum_quality_start")
+    try:
+        scored = score_spectrum_quality_run(run_dir)
+        elapsed = time.perf_counter() - started
+        category_counts = scored["spectrum_quality_category"].value_counts().sort_index().to_dict() if not scored.empty else {}
+        summary = {
+            "status": "done",
+            "elapsed_sec": elapsed,
+            "target_count": int(len(scored)),
+            "good_count": int(category_counts.get("good", 0)),
+            "review_count": int(category_counts.get("review", 0)),
+            "bad_count": int(category_counts.get("bad", 0)),
+            "category_counts": {str(key): int(value) for key, value in category_counts.items()},
+            "spectrum_quality_path": str(run_dir / "spectra" / "spectrum_quality.parquet"),
+            "spectrum_quality_summary_path": str(run_dir / "spectra" / "spectrum_quality_summary.json"),
+        }
+        if status_mode == "jsonl":
+            append_status_event(run_dir, "spectrum_quality_done", **summary)
+        return summary
+    except Exception as exc:
+        elapsed = time.perf_counter() - started
+        summary = {
+            "status": "error",
+            "elapsed_sec": elapsed,
+            "error": f"{type(exc).__name__}: {exc}",
+            "spectrum_quality_path": str(run_dir / "spectra" / "spectrum_quality.parquet"),
+        }
+        if status_mode == "jsonl":
+            append_status_event(run_dir, "spectrum_quality_error", **summary)
+        return summary
 
 
 def _read_json_file(path: Path) -> object:

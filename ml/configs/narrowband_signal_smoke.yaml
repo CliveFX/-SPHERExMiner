@@ -1,0 +1,7 @@
+# Smoke config placeholder for the narrowband signal model.
+dataset_name: smoke_injections
+model_type: narrowband_signal
+embedding_dim: 64
+batch_size: 256
+epochs: 5
+use_science_embedding_context: false

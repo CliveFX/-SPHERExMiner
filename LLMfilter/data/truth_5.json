@@ -1,0 +1,65 @@
+{
+  "packet_id": "cv_june_g11_16_f500_diag_overnight_v1_challenge_5",
+  "truth": [
+    {
+      "decoy_of_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_injected::gaia_dr3_4493185602989442816",
+      "find_me_snr": null,
+      "gpu_narrowband_match": null,
+      "gpu_narrowband_quality_match": null,
+      "injected_line_nm": null,
+      "is_injected": false,
+      "is_paired_decoy_uninjected_same_target": true,
+      "line_family": null,
+      "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_baseline::gaia_dr3_4493185602989442816",
+      "target_id": "gaia_dr3_4493185602989442816"
+    },
+    {
+      "decoy_of_signal_id": null,
+      "find_me_snr": 3.0,
+      "gpu_narrowband_match": true,
+      "gpu_narrowband_quality_match": false,
+      "injected_line_nm": 808.0,
+      "is_injected": true,
+      "is_paired_decoy_uninjected_same_target": false,
+      "line_family": "diode_808",
+      "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_enif_gaia_1765433696998462976_injected::gaia_dr3_1766558089371075968",
+      "target_id": "gaia_dr3_1766558089371075968"
+    },
+    {
+      "decoy_of_signal_id": null,
+      "find_me_snr": null,
+      "gpu_narrowband_match": null,
+      "gpu_narrowband_quality_match": null,
+      "injected_line_nm": null,
+      "is_injected": false,
+      "is_paired_decoy_uninjected_same_target": false,
+      "line_family": null,
+      "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2097932679025974656",
+      "target_id": "gaia_dr3_2097932679025974656"
+    },
+    {
+      "decoy_of_signal_id": null,
+      "find_me_snr": 8.0,
+      "gpu_narrowband_match": true,
+      "gpu_narrowband_quality_match": false,
+      "injected_line_nm": 980.0,
+      "is_injected": true,
+      "is_paired_decoy_uninjected_same_target": false,
+      "line_family": "diode_980",
+      "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1240096906786904064",
+      "target_id": "gaia_dr3_1240096906786904064"
+    },
+    {
+      "decoy_of_signal_id": null,
+      "find_me_snr": null,
+      "gpu_narrowband_match": null,
+      "gpu_narrowband_quality_match": null,
+      "injected_line_nm": null,
+      "is_injected": false,
+      "is_paired_decoy_uninjected_same_target": false,
+      "line_family": null,
+      "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070306938288108160",
+      "target_id": "gaia_dr3_2070306938288108160"
+    }
+  ]
+}

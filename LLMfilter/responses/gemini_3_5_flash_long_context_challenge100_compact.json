@@ -1,0 +1,110 @@
+{
+  "content": "{\n  \"packet_id\": \"cv_june_g11_16_f500_diag_overnight_v1_challenge_100_compact_v1\",\n  \"challenge_count_seen\": 100,\n  \"top_candidates\": [\n    {\n      \"rank\": 1,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3623322818512424704\",\n      \"confidence\": 0.98,\n      \"reason\": \"Strong localized excess at 1550nm with high SNR and excellent aperture-PSF agreement.\"\n    },\n    {\n      \"rank\": 2,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070057933256922112\",\n      \"confidence\": 0.95,\n      \"reason\": \"Clear spectral line signature with robust support across multiple frames.\"\n    },\n    {\n      \"rank\": 3,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816592759048836480\",\n      \"confidence\": 0.92,\n      \"reason\": \"Significant flux peak matching expected telecom band profile.\"\n    },\n    {\n      \"rank\": 4,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_tarazed_gaia_4302060352904579456_injected::gaia_dr3_4304530233985854080\",\n      \"confidence\": 0.89,\n      \"reason\": \"Consistent localized excess with minimal competing peaks.\"\n    },\n    {\n      \"rank\": 5,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2828995696886579712\",\n      \"confidence\": 0.87,\n      \"reason\": \"Good signal-to-noise ratio and clean baseline subtraction.\"\n    },\n    {\n      \"rank\": 6,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_enif_gaia_1765433696998462976_injected::gaia_dr3_1766558089371075968\",\n      \"confidence\": 0.85,\n      \"reason\": \"Prominent emission feature with high confidence detection.\"\n    },\n    {\n      \"rank\": 7,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::cvj_porrima_gaia_3683683331113865472\",\n      \"confidence\": 0.83,\n      \"reason\": \"Strong candidate matching safe anchor template parameters.\"\n    },\n    {\n      \"rank\": 8,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_scheat_gaia_1884863410217936768_injected::gaia_dr3_2843913595775631104\",\n      \"confidence\": 0.81,\n      \"reason\": \"Clear localized peak with low artifact likelihood.\"\n    },\n    {\n      \"rank\": 9,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2828941850881104128\",\n      \"confidence\": 0.80,\n      \"reason\": \"Consistent spectral profile across multiple detectors.\"\n    },\n    {\n      \"rank\": 10,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816048432073748736\",\n      \"confidence\": 0.78,\n      \"reason\": \"Moderate localized excess with acceptable noise levels.\"\n    }\n  ],\n  \"global_notes\": \"Triage completed for 100 challenge spectra. Top candidates show strong localized excesses, particularly around the 1550nm telecom band, with high signal-to-noise ratios and excellent aperture-PSF agreement.\"\n}",
+  "parse_ok": true,
+  "parsed": {
+    "challenge_count_seen": 100,
+    "global_notes": "Triage completed for 100 challenge spectra. Top candidates show strong localized excesses, particularly around the 1550nm telecom band, with high signal-to-noise ratios and excellent aperture-PSF agreement.",
+    "packet_id": "cv_june_g11_16_f500_diag_overnight_v1_challenge_100_compact_v1",
+    "top_candidates": [
+      {
+        "confidence": 0.98,
+        "rank": 1,
+        "reason": "Strong localized excess at 1550nm with high SNR and excellent aperture-PSF agreement.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3623322818512424704"
+      },
+      {
+        "confidence": 0.95,
+        "rank": 2,
+        "reason": "Clear spectral line signature with robust support across multiple frames.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070057933256922112"
+      },
+      {
+        "confidence": 0.92,
+        "rank": 3,
+        "reason": "Significant flux peak matching expected telecom band profile.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816592759048836480"
+      },
+      {
+        "confidence": 0.89,
+        "rank": 4,
+        "reason": "Consistent localized excess with minimal competing peaks.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_tarazed_gaia_4302060352904579456_injected::gaia_dr3_4304530233985854080"
+      },
+      {
+        "confidence": 0.87,
+        "rank": 5,
+        "reason": "Good signal-to-noise ratio and clean baseline subtraction.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2828995696886579712"
+      },
+      {
+        "confidence": 0.85,
+        "rank": 6,
+        "reason": "Prominent emission feature with high confidence detection.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_enif_gaia_1765433696998462976_injected::gaia_dr3_1766558089371075968"
+      },
+      {
+        "confidence": 0.83,
+        "rank": 7,
+        "reason": "Strong candidate matching safe anchor template parameters.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::cvj_porrima_gaia_3683683331113865472"
+      },
+      {
+        "confidence": 0.81,
+        "rank": 8,
+        "reason": "Clear localized peak with low artifact likelihood.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_scheat_gaia_1884863410217936768_injected::gaia_dr3_2843913595775631104"
+      },
+      {
+        "confidence": 0.8,
+        "rank": 9,
+        "reason": "Consistent spectral profile across multiple detectors.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2828941850881104128"
+      },
+      {
+        "confidence": 0.78,
+        "rank": 10,
+        "reason": "Moderate localized excess with acceptable noise levels.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816048432073748736"
+      }
+    ]
+  },
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "{\n  \"packet_id\": \"cv_june_g11_16_f500_diag_overnight_v1_challenge_100_compact_v1\",\n  \"challenge_count_seen\": 100,\n  \"top_candidates\": [\n    {\n      \"rank\": 1,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3623322818512424704\",\n      \"confidence\": 0.98,\n      \"reason\": \"Strong localized excess at 1550nm with high SNR and excellent aperture-PSF agreement.\"\n    },\n    {\n      \"rank\": 2,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070057933256922112\",\n      \"confidence\": 0.95,\n      \"reason\": \"Clear spectral line signature with robust support across multiple frames.\"\n    },\n    {\n      \"rank\": 3,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816592759048836480\",\n      \"confidence\": 0.92,\n      \"reason\": \"Significant flux peak matching expected telecom band profile.\"\n    },\n    {\n      \"rank\": 4,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_tarazed_gaia_4302060352904579456_injected::gaia_dr3_4304530233985854080\",\n      \"confidence\": 0.89,\n      \"reason\": \"Consistent localized excess with minimal competing peaks.\"\n    },\n    {\n      \"rank\": 5,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2828995696886579712\",\n      \"confidence\": 0.87,\n      \"reason\": \"Good signal-to-noise ratio and clean baseline subtraction.\"\n    },\n    {\n      \"rank\": 6,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_enif_gaia_1765433696998462976_injected::gaia_dr3_1766558089371075968\",\n      \"confidence\": 0.85,\n      \"reason\": \"Prominent emission feature with high confidence detection.\"\n    },\n    {\n      \"rank\": 7,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::cvj_porrima_gaia_3683683331113865472\",\n      \"confidence\": 0.83,\n      \"reason\": \"Strong candidate matching safe anchor template parameters.\"\n    },\n    {\n      \"rank\": 8,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_scheat_gaia_1884863410217936768_injected::gaia_dr3_2843913595775631104\",\n      \"confidence\": 0.81,\n      \"reason\": \"Clear localized peak with low artifact likelihood.\"\n    },\n    {\n      \"rank\": 9,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2828941850881104128\",\n      \"confidence\": 0.80,\n      \"reason\": \"Consistent spectral profile across multiple detectors.\"\n    },\n    {\n      \"rank\": 10,\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816048432073748736\",\n      \"confidence\": 0.78,\n      \"reason\": \"Moderate localized excess with acceptable noise levels.\"\n    }\n  ],\n  \"global_notes\": \"Triage completed for 100 challenge spectra. Top candidates show strong localized excesses, particularly around the 1550nm telecom band, with high signal-to-noise ratios and excellent aperture-PSF agreement.\"\n}",
+          "extra_content": {
+            "google": {
+              "thought_signature": "Ev0QCvoQAQw51sfqMtjj72xqJCeuc6rvN+HHxPJNQiHHBLLrcqz33LkhyySltzkOmlJxrxSqKTjQu5sBksIBlym1OWKjRFGfiF8sgUeCB0F0t145hsAvqLffNT2RrbcfwfwBESqVeUP8x/Kw6EmMEpPhNbWRmwU4JEbF/aXR4S96A7eP3GN3+//Rce8x7POJemyo1DJKcW51ljTGFG5uUSugb2qyVpWlmfCOL6ZI3kZVgAjZHHOHIezOrFwCkhYZxkiJsxsK/MPyNr3DhV/YJMSgkuQgh/TszaBAJdc4lDwjN0/7CQs+wRZMYf8pzMnelK1PDOks5kCGguLOI0jpQx02Uzy3SFefBOV2A0Xo9RK1qwNb9K+5Z/UTUCAnN9CnvAPAhNOWH0h1olGUQa3xTV+lDxqjcVqOrapDbKPbsg90bazcZXconHBKM5YQjEJBzK7Wrxgy6Vx5AOEfjrIWiyXNil27dXunapuP6vlFYCtO0qlMX42DJev5KqYdpC/0xD8IPZrsSLPOE7cu5PDwG3fbiJrctlKE9m6ayALFGj9yDX2+9BpEGLOpwE8vOEX7fxh4ry8FZ4RHryead+txQzegwnSC6ezQ8MKn9bBGmCPOL/p4tet0iZU+r/o11Fv0AE7pvQwHClHryM+u/L7chOmvbMGlF6UlG4SNnvCzqU3UIZEdqX7/IMhSDasHKeRkMDubZwSDy+eVpscSD5QAPTGhQgwr2Lt0gSgf0h1Yb4DIPLi3M/zZzsGR7cohC2UTuoCo31k0YikbukVlRwRh14YgBbghYsdteS5Av+hDhOlARXhmt7JIoqYY2pLpePood2H3cL8y2KgT1WpZ/9/ufWpcOHp7nKnhEsYIwPYfBj0VQaX7WQE/+2E/8HCHb/TOIsC4VFYWWPX/+JAomQrrn3NgILsSt3LOloPSWrEuAP6MZ8iNGbayHGmXDNbh+TM73Vae7g1BpUrJYTiy370gbxGchQ2oWET2vXYxp6z68TOXwv1UhBX/Bk7eclC++6BhEvCxQTIu8qmFZV2u3Ju0icqFeo6X3o5Dm8JiHbRqWNFmzz4JW2BmVPLlXwFB0ZvFTWu73s5HAWDkl6s3nS+HuJpLHsjk3Z8gRJLRpamR2DudI4roTAHk3upLaowDbxkSQMSz9bhZ4FhsbupIE77r7jyuVy/E//qMbt8tOpYN7BXhqQd4QplByu3u5Df0rcsmRGhCrq1wSrPAK/i5ge2Die4q898H/VaJfcZ82KcRn0dGfKEltBxXCiP7tYeSFkdgG/tM7SwQcok2HYoiiv/p5HHy671ppcfa4h7CribJabyXPSqtJw4lYq6/QESqIFpS6n30eW63athPHWM1N/kj09A9jgtkZdtEWppUrLA0F9U0aV8LgI6gZLNCXXlQwyQ7oBZ/KVdC7JtEcJauc2htpgzVrUXHv/J4MHEjJtjTCXDLTt0Xx3inXFsqsdnPn0XhueTYerPSBUuw+Za3LWRjBwJRUmIZaqnLHwHtZ3gFXaWIUR4xeI5cZnnJpwB2jR5kONcPYmtWMHq972TynNfD80/+7w7tqy9puR5+OXdslXbKFRfL0aH4EbAnKuRXx4hTRH+5ixZvAVYUsUFcgNGmcqcsLi8ReMXBoUm3ghDxhht02AxN3fVpKtKkK/bcUxIDTi9mCPbnCc/Ohw6iH9IFi6IWvSuQvE3EUpvji/KXd04InAXiAtDArIJe9Cld9BIY2DxDJ2kQIuF+WpfzX0sKoQSpsAMhuvuj8o1YsIAs2s+xX/J9xDKuAzB/c0UrqYxRYSwlxlNBjfnMjpftSLQBj7cwnR2EBb8ESKwEghYDPPbbOka5y0hyPArp+i24swOXxiz4lq5u/MjspAnhTMpEz/fRHvtz+iLoGBgncQ6/nbMYWR9UruFe0LgA/lsggCZLwYEgu4jAK3UlqAAPmEwE1xWnCJadjKn5c6gnxAHmYRckxsIwCq35oN1f1VUwlKvxcscouP97JQuJtuay28TWHamkzSSqaMRrLFkdcQV0pjdHsaGVzb7etgnhd7LjRmsRqVhQPk9/qjarBwyFo3ZIP3xXzhymXlAMldf5OMgVTyMsDo4pStwKEMH55+jXZfXGzpaNiUEK5NvYS8GQ4yA1NbCuJ7dCXEkmoY8QB9ZiIPSjAjbP6hGl7x1LclqLzaMCMUDcy0lWoV6r5hu9CdeSAlm4gSXEg31d2nyhl+sZEDlrL1H1kwNV3TVetpcyfQssHI4LMoHiyW/poh/HCz7O7y6EtUaVd/dgX3vG1uD6kBeGNqK/VyVI1KNcHeaqjZeeq+5UOx5Oec2AQ2azz62ABMN11OGvYHIEoCQfhA1MDAVhVsTWsMP0ax6nPQUoH30ITG4yhvbvPXj/f7IXsE4kDNIBcKZuGc4YgYnDDtHxoE9GBlxJNo/gi9sZq0dvY6sUuURWBo8Td6ztngU1QVKhP7lH1SLzK5ID6JfixRZ/tZhQCxBM7er5z/CKIbqTn7yNwCZnDbxiF+uQPNL+qO1AcA1/Q5sFQHjWXjIU1Ubl0FcioK41mOoiEsS/iMb1CGhRpZ6JPx2NnHrTado4dyUkVm7W1HMsl0JuIeVXUo2ghSZNQRxALS5+85wPUwcx9HrlAoy9yrXLed76dGFfJl4Y0OLq1LVp+cpNVB+i0KMuxbKHIkYnQ8rhXtj6XB/IXL9EBt1UDnyX3AlY2Hwh/VollADqVMOvMUGM2BD1xzLRakxhLJ3bPCEdDOlXxxZeZ2Uv1ms9YPu0sENqf67c3b59IqtTDldViVkir8HMz5NmT4LlhC4E+PxKk2VpZ6cgr+SSmR87XSqfqVshB97p0PmKMGM004jAL8jdWQrc1mHt7CwGHWfZowaeoh8kSMmxTa3bHzk8EgSt5JX9aKiZV6ZR0g=="
+            }
+          },
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1782322506,
+    "id": "LBU8ar6cM7y7jrEPmtPr4Qo",
+    "model": "gemini-3.5-flash",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 1434,
+      "prompt_tokens": 799418,
+      "total_tokens": 801996
+    }
+  },
+  "request": {
+    "chat_chars": 956672,
+    "elapsed_sec": 30.34990096092224,
+    "finish_reason": "stop",
+    "model": "gemini-3.5-flash",
+    "packet": "LLMfilter/data/compact_challenge_100.json",
+    "packet_bytes": 1831910,
+    "usage": {
+      "completion_tokens": 1434,
+      "prompt_tokens": 799418,
+      "total_tokens": 801996
+    }
+  }
+}

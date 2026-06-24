@@ -1,0 +1,49 @@
+{
+  "runs": [
+    {
+      "seed": 42,
+      "tp": 2,
+      "fp": 0,
+      "tn": 3,
+      "fn": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "elapsed_sec": 30.495256662368774,
+      "prompt_tokens": 60559,
+      "completion_tokens": 975
+    },
+    {
+      "seed": 777,
+      "tp": 0,
+      "fp": 0,
+      "tn": 3,
+      "fn": 2,
+      "precision": null,
+      "recall": 0.0,
+      "elapsed_sec": 28.232975006103516,
+      "prompt_tokens": 61088,
+      "completion_tokens": 930
+    },
+    {
+      "seed": 2026,
+      "tp": 0,
+      "fp": 0,
+      "tn": 3,
+      "fn": 2,
+      "precision": null,
+      "recall": 0.0,
+      "elapsed_sec": 28.58680033683777,
+      "prompt_tokens": 61004,
+      "completion_tokens": 970
+    }
+  ],
+  "totals": {
+    "tp": 2,
+    "fp": 0,
+    "tn": 9,
+    "fn": 4
+  },
+  "precision": 1.0,
+  "recall": 0.3333333333333333,
+  "mean_elapsed_sec": 29.105010668436687
+}

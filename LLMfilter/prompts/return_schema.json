@@ -1,0 +1,27 @@
+{
+  "analyses": [
+    {
+      "artifact_likelihood": 0.0,
+      "beam_likelihood": 0.0,
+      "best_line_nm": 1064.0,
+      "confidence": 0.0,
+      "evidence_summary": "short sentence",
+      "has_anomalous_excess": true,
+      "line_family_guess": "nd_yag_1064|diode_808|diode_980|telecom_1310|telecom_1550|thulium_2000|unknown|null",
+      "priority": "S|A|B|C|D",
+      "reason_codes": [
+        "aperture_psf_agree",
+        "localized_excess",
+        "good_support",
+        "flags_present",
+        "too_many_competing_peaks"
+      ],
+      "recommended_next_check": "short sentence",
+      "signal_id": "string"
+    }
+  ],
+  "global_notes": "short string",
+  "model": "string",
+  "packet_id": "string",
+  "prompt_variant": "positive|negative"
+}

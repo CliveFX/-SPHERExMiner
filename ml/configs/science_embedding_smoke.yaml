@@ -1,0 +1,9 @@
+# Smoke config placeholder for the science embedding model.
+dataset_name: smoke
+model_type: science_embedding
+embedding_dim: 64
+batch_size: 256
+epochs: 5
+quality_categories:
+  - good
+  - review

@@ -1,0 +1,64 @@
+{
+  "rows": [
+    {
+      "chat_payload_chars": 157544,
+      "est_tokens_2p5char": 63018,
+      "est_tokens_3char": 52515,
+      "est_tokens_4char": 39386,
+      "format": "verbose",
+      "packet_bytes": 216812,
+      "path": "/home/clive/dev/NIROSETI_SPHEREx/LLMfilter/data/challenge_5.json",
+      "size": 5
+    },
+    {
+      "chat_payload_chars": 71657,
+      "est_tokens_2p5char": 28663,
+      "est_tokens_3char": 23886,
+      "est_tokens_4char": 17914,
+      "format": "compact-v1",
+      "packet_bytes": 131793,
+      "path": "/home/clive/dev/NIROSETI_SPHEREx/LLMfilter/data/compact_challenge_5.json",
+      "size": 5
+    },
+    {
+      "chat_payload_chars": 586936,
+      "est_tokens_2p5char": 234774,
+      "est_tokens_3char": 195645,
+      "est_tokens_4char": 146734,
+      "format": "verbose",
+      "packet_bytes": 816394,
+      "path": "/home/clive/dev/NIROSETI_SPHEREx/LLMfilter/data/challenge_25.json",
+      "size": 25
+    },
+    {
+      "chat_payload_chars": 259423,
+      "est_tokens_2p5char": 103769,
+      "est_tokens_3char": 86474,
+      "est_tokens_4char": 64856,
+      "format": "compact-v1",
+      "packet_bytes": 491986,
+      "path": "/home/clive/dev/NIROSETI_SPHEREx/LLMfilter/data/compact_challenge_25.json",
+      "size": 25
+    },
+    {
+      "chat_payload_chars": 2183404,
+      "est_tokens_2p5char": 873362,
+      "est_tokens_3char": 727801,
+      "est_tokens_4char": 545851,
+      "format": "verbose",
+      "packet_bytes": 3045742,
+      "path": "/home/clive/dev/NIROSETI_SPHEREx/LLMfilter/data/challenge_100.json",
+      "size": 100
+    },
+    {
+      "chat_payload_chars": 958042,
+      "est_tokens_2p5char": 383217,
+      "est_tokens_3char": 319347,
+      "est_tokens_4char": 239510,
+      "format": "compact-v1",
+      "packet_bytes": 1831910,
+      "path": "/home/clive/dev/NIROSETI_SPHEREx/LLMfilter/data/compact_challenge_100.json",
+      "size": 100
+    }
+  ]
+}

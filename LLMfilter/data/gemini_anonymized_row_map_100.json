@@ -1,0 +1,402 @@
+{
+  "c0000": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3623322818512424704",
+    "row_index": 0
+  },
+  "c0001": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070057933256922112",
+    "row_index": 1
+  },
+  "c0002": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816592759048836480",
+    "row_index": 2
+  },
+  "c0003": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_tarazed_gaia_4302060352904579456_injected::gaia_dr3_4304530233985854080",
+    "row_index": 3
+  },
+  "c0004": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2828995696886579712",
+    "row_index": 4
+  },
+  "c0005": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_enif_gaia_1765433696998462976_injected::gaia_dr3_1766558089371075968",
+    "row_index": 5
+  },
+  "c0006": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::cvj_porrima_gaia_3683683331113865472",
+    "row_index": 6
+  },
+  "c0007": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_scheat_gaia_1884863410217936768_injected::gaia_dr3_2843913595775631104",
+    "row_index": 7
+  },
+  "c0008": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2828941850881104128",
+    "row_index": 8
+  },
+  "c0009": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816048432073748736",
+    "row_index": 9
+  },
+  "c0010": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_izar_gaia_1279805219468003072_injected::gaia_dr3_1267418396347020672",
+    "row_index": 10
+  },
+  "c0011": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1222647519813783296",
+    "row_index": 11
+  },
+  "c0012": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sadr_gaia_2067519259693352832_injected::gaia_dr3_2067523833834407680",
+    "row_index": 12
+  },
+  "c0013": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_denebola_gaia_3923573919068194432_injected::gaia_dr3_3923765852566726400",
+    "row_index": 13
+  },
+  "c0014": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3682609005173952384",
+    "row_index": 14
+  },
+  "c0015": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::cvj_fomalhaut_gaia_6606107825251712896",
+    "row_index": 15
+  },
+  "c0016": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2092230096328393088",
+    "row_index": 16
+  },
+  "c0017": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_scheat_gaia_1884863410217936768_injected::gaia_dr3_1884855095161142272",
+    "row_index": 17
+  },
+  "c0018": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_antarest_gaia_6045631223238035712_injected::gaia_dr3_6045936062842903680",
+    "row_index": 18
+  },
+  "c0019": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_izar_gaia_1279805219468003072_injected::gaia_dr3_1279701659216344704",
+    "row_index": 19
+  },
+  "c0020": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1240096906786904064",
+    "row_index": 20
+  },
+  "c0021": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1240095498037627904",
+    "row_index": 21
+  },
+  "c0022": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_regulus_gaia_3880787832822526336_injected::gaia_dr3_3880787420505667328",
+    "row_index": 22
+  },
+  "c0023": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_denebola_gaia_3923573919068194432_injected::gaia_dr3_3923557181579864192",
+    "row_index": 23
+  },
+  "c0024": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_scheat_gaia_1884863410217936768_injected::gaia_dr3_1885407118717105024",
+    "row_index": 24
+  },
+  "c0025": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6606092706966822656",
+    "row_index": 25
+  },
+  "c0026": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_regulus_gaia_3880787832822526336_injected::gaia_dr3_3880735636084842624",
+    "row_index": 26
+  },
+  "c0027": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_izar_gaia_1279805219468003072_injected::gaia_dr3_1280720146285434752",
+    "row_index": 27
+  },
+  "c0028": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_tarazed_gaia_4302060352904579456_injected::gaia_dr3_4304530233985854080",
+    "row_index": 28
+  },
+  "c0029": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_regulus_gaia_3880787832822526336_injected::gaia_dr3_3880540923742094592",
+    "row_index": 29
+  },
+  "c0030": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_denebola_gaia_3923573919068194432_injected::gaia_dr3_3923760870404700416",
+    "row_index": 30
+  },
+  "c0031": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3689933642400776832",
+    "row_index": 31
+  },
+  "c0032": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6606093355507425664",
+    "row_index": 32
+  },
+  "c0033": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sadr_gaia_2067519259693352832_injected::gaia_dr3_2061306851512025216",
+    "row_index": 33
+  },
+  "c0034": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2097908730288351744",
+    "row_index": 34
+  },
+  "c0035": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_denebola_gaia_3923573919068194432_injected::gaia_dr3_3923571887547882112",
+    "row_index": 35
+  },
+  "c0036": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_regulus_gaia_3880787832822526336_injected::gaia_dr3_3880227047532329856",
+    "row_index": 36
+  },
+  "c0037": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090582963493595520",
+    "row_index": 37
+  },
+  "c0038": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_tarazed_gaia_4302060352904579456_injected::gaia_dr3_4302038637557416576",
+    "row_index": 38
+  },
+  "c0039": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_unukalhai_gaia_4429738254443894784_injected::gaia_dr3_4429785804028827264",
+    "row_index": 39
+  },
+  "c0040": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070311748651565056",
+    "row_index": 40
+  },
+  "c0041": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sadr_gaia_2067519259693352832_injected::gaia_dr3_2061519946290039296",
+    "row_index": 41
+  },
+  "c0042": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1222617008368821376",
+    "row_index": 42
+  },
+  "c0043": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_izar_gaia_1279805219468003072_injected::gaia_dr3_1279837655061124736",
+    "row_index": 43
+  },
+  "c0044": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2098188659076373248",
+    "row_index": 44
+  },
+  "c0045": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070210181262132992",
+    "row_index": 45
+  },
+  "c0046": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6606117995734280448",
+    "row_index": 46
+  },
+  "c0047": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3611813787923831808",
+    "row_index": 47
+  },
+  "c0048": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1224208242211819520",
+    "row_index": 48
+  },
+  "c0049": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2071361954056009728",
+    "row_index": 49
+  },
+  "c0050": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_izar_gaia_1279805219468003072_injected::gaia_dr3_1279836555549494272",
+    "row_index": 50
+  },
+  "c0051": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070308278317934080",
+    "row_index": 51
+  },
+  "c0052": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_antarest_gaia_6045631223238035712_injected::gaia_dr3_6045567657730792832",
+    "row_index": 52
+  },
+  "c0053": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_unukalhai_gaia_4429738254443894784_injected::gaia_dr3_4430498944691591808",
+    "row_index": 53
+  },
+  "c0054": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3683738989594005760",
+    "row_index": 54
+  },
+  "c0055": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090741430606041728",
+    "row_index": 55
+  },
+  "c0056": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_injected::gaia_dr3_4493935474217373312",
+    "row_index": 56
+  },
+  "c0057": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3623637008255931264",
+    "row_index": 57
+  },
+  "c0058": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2110234908470956416",
+    "row_index": 58
+  },
+  "c0059": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2166755754687995008",
+    "row_index": 59
+  },
+  "c0060": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sadr_gaia_2067519259693352832_injected::gaia_dr3_2061306851512025216",
+    "row_index": 60
+  },
+  "c0061": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070398472635896320",
+    "row_index": 61
+  },
+  "c0062": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2096279120916176000",
+    "row_index": 62
+  },
+  "c0063": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2829034866988285952",
+    "row_index": 63
+  },
+  "c0064": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3683483597954546688",
+    "row_index": 64
+  },
+  "c0065": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_injected::gaia_dr3_4492037992025830272",
+    "row_index": 65
+  },
+  "c0066": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1246273619513892480",
+    "row_index": 66
+  },
+  "c0067": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1224313623528908160",
+    "row_index": 67
+  },
+  "c0068": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_tarazed_gaia_4302060352904579456_injected::gaia_dr3_4301981084974870656",
+    "row_index": 68
+  },
+  "c0069": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_antarest_gaia_6045631223238035712_injected::gaia_dr3_6045811714942017792",
+    "row_index": 69
+  },
+  "c0070": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1222084672945677440",
+    "row_index": 70
+  },
+  "c0071": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_denebola_gaia_3923573919068194432_injected::gaia_dr3_3923971701759284224",
+    "row_index": 71
+  },
+  "c0072": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_izar_gaia_1279805219468003072_injected::gaia_dr3_1279798828556668672",
+    "row_index": 72
+  },
+  "c0073": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_baseline::gaia_dr3_4493185602989442816",
+    "row_index": 73
+  },
+  "c0074": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2097949210360594304",
+    "row_index": 74
+  },
+  "c0075": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sadr_gaia_2067519259693352832_injected::gaia_dr3_2068360115505267712",
+    "row_index": 75
+  },
+  "c0076": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_unukalhai_gaia_4429738254443894784_injected::gaia_dr3_4430329070149228800",
+    "row_index": 76
+  },
+  "c0077": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2098127052065493760",
+    "row_index": 77
+  },
+  "c0078": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3609544705161853312",
+    "row_index": 78
+  },
+  "c0079": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_regulus_gaia_3880787832822526336_injected::gaia_dr3_3877013484281860608",
+    "row_index": 79
+  },
+  "c0080": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090671164933844224",
+    "row_index": 80
+  },
+  "c0081": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_injected::gaia_dr3_4542540794472262144",
+    "row_index": 81
+  },
+  "c0082": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_tarazed_gaia_4302060352904579456_injected::gaia_dr3_4315169104181285120",
+    "row_index": 82
+  },
+  "c0083": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070306938288108160",
+    "row_index": 83
+  },
+  "c0084": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_antarest_gaia_6045631223238035712_injected::gaia_dr3_6044912486231640320",
+    "row_index": 84
+  },
+  "c0085": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2093134070986375808",
+    "row_index": 85
+  },
+  "c0086": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3683108630129779712",
+    "row_index": 86
+  },
+  "c0087": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_izar_gaia_1279805219468003072_injected::gaia_dr3_1267418396347020672",
+    "row_index": 87
+  },
+  "c0088": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3623369517692649344",
+    "row_index": 88
+  },
+  "c0089": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090632166638031488",
+    "row_index": 89
+  },
+  "c0090": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_antarest_gaia_6045631223238035712_injected::gaia_dr3_6044784766786472704",
+    "row_index": 90
+  },
+  "c0091": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3623638451364945024",
+    "row_index": 91
+  },
+  "c0092": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3689933848559922816",
+    "row_index": 92
+  },
+  "c0093": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_unukalhai_gaia_4429738254443894784_injected::gaia_dr3_4430306014764803072",
+    "row_index": 93
+  },
+  "c0094": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_injected::gaia_dr3_4493936058332915840",
+    "row_index": 94
+  },
+  "c0095": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2097932679025974656",
+    "row_index": 95
+  },
+  "c0096": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_regulus_gaia_3880787832822526336_injected::gaia_dr3_3880776425389887104",
+    "row_index": 96
+  },
+  "c0097": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_unukalhai_gaia_4429738254443894784_injected::gaia_dr3_4429734681031076352",
+    "row_index": 97
+  },
+  "c0098": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_regulus_gaia_3880787832822526336_injected::gaia_dr3_3880538827798057856",
+    "row_index": 98
+  },
+  "c0099": {
+    "original_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1240095841635012224",
+    "row_index": 99
+  }
+}

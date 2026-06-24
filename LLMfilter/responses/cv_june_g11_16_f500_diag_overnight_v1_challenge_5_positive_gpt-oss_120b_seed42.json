@@ -1,0 +1,187 @@
+{
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "{\n  \"packet_id\": \"cv_june_g11_16_f500_diag_overnight_v1_challenge_5\",\n  \"model\": \"anomaly_detector_v1\",\n  \"prompt_variant\": \"positive\",\n  \"analyses\": [\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3611813787923831808\",\n      \"has_anomalous_excess\": true,\n      \"confidence\": 0.92,\n      \"priority\": \"S\",\n      \"best_line_nm\": 1998.0,\n      \"line_family_guess\": \"thulium_2000\",\n      \"artifact_likelihood\": 0.04,\n      \"beam_likelihood\": 0.08,\n      \"reason_codes\": [\n        \"localized_excess\",\n        \"good_support\",\n        \"flags_present\"\n      ],\n      \"evidence_summary\": \"Narrowband line at ~1998\u202fnm detected with high rho and quality tier B.\",\n      \"recommended_next_check\": \"Verify PSF consistency across detectors.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1239969599660349696\",\n      \"has_anomalous_excess\": false,\n      \"confidence\": 0.15,\n      \"priority\": \"D\",\n      \"best_line_nm\": null,\n      \"line_family_guess\": null,\n      \"artifact_likelihood\": 0.35,\n      \"beam_likelihood\": 0.12,\n      \"reason_codes\": [\n        \"too_many_competing_peaks\",\n        \"flags_present\"\n      ],\n      \"evidence_summary\": \"No narrowband match; spectrum shows many competing peaks.\",\n      \"recommended_next_check\": \"Increase integration time to improve SNR.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_baseline::gaia_dr3_3683120243721340160\",\n      \"has_anomalous_excess\": false,\n      \"confidence\": 0.20,\n      \"priority\": \"C\",\n      \"best_line_nm\": null,\n      \"line_family_guess\": null,\n      \"artifact_likelihood\": 0.30,\n      \"beam_likelihood\": 0.10,\n      \"reason_codes\": [\n        \"flags_present\"\n      ],\n      \"evidence_summary\": \"Baseline spectrum; no injected line detected.\",\n      \"recommended_next_check\": \"Check for subtle excess near known laser lines.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1224328398216435968\",\n      \"has_anomalous_excess\": true,\n      \"confidence\": 0.45,\n      \"priority\": \"B\",\n      \"best_line_nm\": 2008.0,\n      \"line_family_guess\": \"thulium_2000\",\n      \"artifact_likelihood\": 0.25,\n      \"beam_likelihood\": 0.20,\n      \"reason_codes\": [\n        \"localized_excess\",\n        \"too_many_competing_peaks\"\n      ],\n      \"evidence_summary\": \"Possible line at ~2008\u202fnm but quality flags indicate competing peaks.\",\n      \"recommended_next_check\": \"Re\u2011observe with higher resolution.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6606100983369342592\",\n      \"has_anomalous_excess\": false,\n      \"confidence\": 0.10,\n      \"priority\": \"D\",\n      \"best_line_nm\": null,\n      \"line_family_guess\": null,\n      \"artifact_likelihood\": 0.40,\n      \"beam_likelihood\": 0.15,\n      \"reason_codes\": [\n        \"flags_present\"\n      ],\n      \"evidence_summary\": \"No narrowband signature detected.\",\n      \"recommended_next_check\": \"Monitor for transient events.\"\n    }\n  ],\n  \"global_notes\": \"Two spectra show clear injected lines (Spica, Alphecca), one is a suspicious detection, and the remaining three lack convincing excesses.\"\n}",
+          "reasoning": "We need to produce JSON with top-level fields: packet_id, model, prompt_variant, analyses (array for each challenge_signal_ids), global_notes.\n\nThe challenge_signal_ids list has 5 IDs. We must not include known examples as analyses. So we need to analyze each of the five challenge spectra provided in data_packet.challenge_spectra array. There are exactly 5 entries corresponding to those IDs? Let's verify order: first entry signal_id spica, second arcturus, third porrima, fourth alphecca, fifth fomalhaut. Yes.\n\nWe must decide has_anomalous_excess true/false, confidence (0-1), priority S/A/B/C/D, best_line_nm (maybe guessed line if excess). Also line_family_guess from list or null. artifact_likelihood and beam_likelihood probabilities. reason_codes array with appropriate codes. evidence_summary short sentence. recommended_next_check.\n\nWe need to be skeptical; only claim excess if strong narrowband detection indicated by known_detector_output fields (gpu_narrowband_match true etc.) For spica: known_detector_output has gpu_narrowband_joint_rho 32.177..., line_nm 1998, match true, quality_match true, tier B_review. So likely a real injected narrowband at ~1998 nm (near thulium? Thulium 2000). So we should mark has_anomalous_excess true with high confidence maybe 0.9. best_line_nm 1998. line_family_guess \"thulium_2000\". artifact_likelihood low e.g., 0.05, beam_likelihood maybe 0.1? priority S (high significance). reason_codes include \"localized_excess\",\"good_support\",\"flags_present\"? flags present? flags_summary many have flag bits but not fatal except some flagged fatal_flag false mostly. Use appropriate.\n\nArcturus: known_detector_output all null => no detection. So likely no excess. has_anomalous_excess false, confidence maybe 0.2 (uncertain). priority D. reason_codes maybe \"too_many_competing_peaks\"? Actually many measurements but no narrowband match; could be ambiguous due to many peaks? Use \"too_many_competing_peaks\". artifact_likelihood moderate 0.3, beam_likelihood low 0.1.\n\nPorrima: known_detector_output null => baseline (no injection). So false. Confidence low. reason_codes maybe none or \"flags_present\" because some fatal flags present. We'll set has_anomalous_excess false.\n\nAlphecca: known_detector_output has gpu_narrowband_joint_rho 14.49, line_nm 2008, match true but quality_match false with reject reasons too_many_competing_peaks tier C_suspicious_science. So suspicious; maybe not confident. Could set has_anomalous_excess true? But quality_match false indicates not reliable. We should be cautious: mark as possible excess but low confidence 0.4, priority B perhaps. line guess thulium_2000 (2008 close). artifact_likelihood higher 0.3, beam_likelihood moderate 0.2.\n\nFomalhaut: known_detector_output null => no injection. So false.\n\nNow produce JSON.\n\nNeed packet_id from data_packet? It has \"packet_id\"? Not directly; but return_schema expects packet_id string. Use maybe \"cv_june_g11_16_f500_diag_overnight_v1_challenge_5\". That's given at end of data_packet: \"packet_id\":\"cv_june_g11_16_f500_diag_overnight_v1_challenge_5\". So use that.\n\nmodel? Not specified; could be \"anomaly_detector_v1\". prompt_variant maybe \"positive\" (since we are looking for excess). Use \"positive\".\n\nglobal_notes short string summarizing overall.\n\nNow construct analyses array with 5 objects in same order as challenge_signal_ids.\n\nProvide fields: signal_id, has_anomalous_excess (bool), confidence (float), priority (\"S\",\"A\",\"B\",\"C\",\"D\"), best_line_nm (float or null), line_family_guess (string from list or null), artifact_likelihood (float), beam_likelihood (float), reason_codes (list of strings), evidence_summary, recommended_next_check.\n\nLet's craft each.\n\nSpica:\n\nhas_anomalous_excess true\nconfidence 0.92\npriority \"S\"\nbest_line_nm 1998.0\nline_family_guess \"thulium_2000\"\nartifact_likelihood 0.04\nbeam_likelihood 0.08\nreason_codes [\"localized_excess\",\"good_support\",\"flags_present\"]\nevidence_summary \"Narrowband line at ~1998\u202fnm detected with high rho and quality tier B.\"\nrecommended_next_check \"Verify PSF consistency across detectors.\"\n\nArcturus:\n\nhas_anomalous_excess false\nconfidence 0.15\npriority \"D\"\nbest_line_nm null\nline_family_guess null\nartifact_likelihood 0.35\nbeam_likelihood 0.12\nreason_codes [\"too_many_competing_peaks\",\"flags_present\"]\nevidence_summary \"No narrowband match; spectrum shows many competing peaks.\"\nrecommended_next_check \"Increase integration time to improve SNR.\"\n\nPorrima:\n\nhas_anomalous_excess false (baseline)\nconfidence 0.2\npriority \"C\"\nbest_line_nm null\nline_family_guess null\nartifact_likelihood 0.3\nbeam_likelihood 0.1\nreason_codes [\"flags_present\"]\nevidence_summary \"Baseline spectrum; no injected line detected.\"\nrecommended_next_check \"Check for subtle excess near known laser lines.\"\n\nAlphecca:\n\nhas_anomalous_excess true (suspicious)\nconfidence 0.45\npriority \"B\"\nbest_line_nm 2008.0\nline_family_guess \"thulium_2000\"\nartifact_likelihood 0.25\nbeam_likelihood 0.2\nreason_codes [\"localized_excess\",\"too_many_competing_peaks\"]\nevidence_summary \"Possible line at ~2008\u202fnm but quality flags indicate competing peaks.\"\nrecommended_next_check \"Re\u2011observe with higher resolution.\"\n\nFomalhaut:\n\nhas_anomalous_excess false\nconfidence 0.1\npriority \"D\"\nbest_line_nm null\nline_family_guess null\nartifact_likelihood 0.4\nbeam_likelihood 0.15\nreason_codes [\"flags_present\"]\nevidence_summary \"No narrowband signature detected.\"\nrecommended_next_check \"Monitor for transient events.\"\n\nNow produce JSON.\n\n",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1782321428,
+    "id": "chatcmpl-927",
+    "model": "gpt-oss:120b",
+    "object": "chat.completion",
+    "system_fingerprint": "fp_ollama",
+    "usage": {
+      "completion_tokens": 975,
+      "prompt_tokens": 60559,
+      "total_tokens": 61534
+    }
+  },
+  "request": {
+    "base_url": "http://192.168.1.26:11434/v1",
+    "challenge_size": 5,
+    "elapsed_sec": 30.495256662368774,
+    "model": "gpt-oss:120b",
+    "packet_format": "verbose",
+    "prompt_variant": "positive",
+    "usage": {
+      "completion_tokens": 975,
+      "prompt_tokens": 60559,
+      "total_tokens": 61534
+    }
+  },
+  "response": {
+    "analyses": [
+      {
+        "artifact_likelihood": 0.04,
+        "beam_likelihood": 0.08,
+        "best_line_nm": 1998.0,
+        "confidence": 0.92,
+        "evidence_summary": "Narrowband line at ~1998\u202fnm detected with high rho and quality tier B.",
+        "has_anomalous_excess": true,
+        "line_family_guess": "thulium_2000",
+        "priority": "S",
+        "reason_codes": [
+          "localized_excess",
+          "good_support",
+          "flags_present"
+        ],
+        "recommended_next_check": "Verify PSF consistency across detectors.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3611813787923831808"
+      },
+      {
+        "artifact_likelihood": 0.35,
+        "beam_likelihood": 0.12,
+        "best_line_nm": null,
+        "confidence": 0.15,
+        "evidence_summary": "No narrowband match; spectrum shows many competing peaks.",
+        "has_anomalous_excess": false,
+        "line_family_guess": null,
+        "priority": "D",
+        "reason_codes": [
+          "too_many_competing_peaks",
+          "flags_present"
+        ],
+        "recommended_next_check": "Increase integration time to improve SNR.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1239969599660349696"
+      },
+      {
+        "artifact_likelihood": 0.3,
+        "beam_likelihood": 0.1,
+        "best_line_nm": null,
+        "confidence": 0.2,
+        "evidence_summary": "Baseline spectrum; no injected line detected.",
+        "has_anomalous_excess": false,
+        "line_family_guess": null,
+        "priority": "C",
+        "reason_codes": [
+          "flags_present"
+        ],
+        "recommended_next_check": "Check for subtle excess near known laser lines.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_baseline::gaia_dr3_3683120243721340160"
+      },
+      {
+        "artifact_likelihood": 0.25,
+        "beam_likelihood": 0.2,
+        "best_line_nm": 2008.0,
+        "confidence": 0.45,
+        "evidence_summary": "Possible line at ~2008\u202fnm but quality flags indicate competing peaks.",
+        "has_anomalous_excess": true,
+        "line_family_guess": "thulium_2000",
+        "priority": "B",
+        "reason_codes": [
+          "localized_excess",
+          "too_many_competing_peaks"
+        ],
+        "recommended_next_check": "Re\u2011observe with higher resolution.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1224328398216435968"
+      },
+      {
+        "artifact_likelihood": 0.4,
+        "beam_likelihood": 0.15,
+        "best_line_nm": null,
+        "confidence": 0.1,
+        "evidence_summary": "No narrowband signature detected.",
+        "has_anomalous_excess": false,
+        "line_family_guess": null,
+        "priority": "D",
+        "reason_codes": [
+          "flags_present"
+        ],
+        "recommended_next_check": "Monitor for transient events.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6606100983369342592"
+      }
+    ],
+    "global_notes": "Two spectra show clear injected lines (Spica, Alphecca), one is a suspicious detection, and the remaining three lack convincing excesses.",
+    "model": "anomaly_detector_v1",
+    "packet_id": "cv_june_g11_16_f500_diag_overnight_v1_challenge_5",
+    "prompt_variant": "positive"
+  },
+  "score": {
+    "counts": {
+      "fn": 0,
+      "fp": 0,
+      "tn": 3,
+      "tp": 2
+    },
+    "details": [
+      {
+        "actual_injected": true,
+        "best_line_nm": 1998.0,
+        "confidence": 0.92,
+        "predicted_anomalous": true,
+        "priority": "S",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3611813787923831808",
+        "truth_line_family": "thulium_2000",
+        "truth_line_nm": 2000.0
+      },
+      {
+        "actual_injected": false,
+        "best_line_nm": null,
+        "confidence": 0.15,
+        "predicted_anomalous": false,
+        "priority": "D",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1239969599660349696",
+        "truth_line_family": null,
+        "truth_line_nm": null
+      },
+      {
+        "actual_injected": false,
+        "best_line_nm": null,
+        "confidence": 0.2,
+        "predicted_anomalous": false,
+        "priority": "C",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_baseline::gaia_dr3_3683120243721340160",
+        "truth_line_family": null,
+        "truth_line_nm": null
+      },
+      {
+        "actual_injected": true,
+        "best_line_nm": 2008.0,
+        "confidence": 0.45,
+        "predicted_anomalous": true,
+        "priority": "B",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1224328398216435968",
+        "truth_line_family": "thulium_2000",
+        "truth_line_nm": 2000.0
+      },
+      {
+        "actual_injected": false,
+        "best_line_nm": null,
+        "confidence": 0.1,
+        "predicted_anomalous": false,
+        "priority": "D",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6606100983369342592",
+        "truth_line_family": null,
+        "truth_line_nm": null
+      }
+    ],
+    "precision": 1.0,
+    "recall": 1.0
+  }
+}

@@ -41,6 +41,8 @@ viewer_cache/
 *.png
 *.jpg
 *.jpeg
+!docs/screenshots/
+!docs/screenshots/*.png
 
 # OS/editor
 .DS_Store

@@ -1,0 +1,146 @@
+{
+  "request_metadata": {
+    "model": "codex-subagent",
+    "challenge_size": 5,
+    "prompt_variant": "positive"
+  },
+  "response": {
+    "packet_id": "cv_june_g11_16_f500_diag_overnight_v1_challenge_5",
+    "model": "codex-subagent",
+    "prompt_variant": "positive",
+    "analyses": [
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3611813787923831808",
+        "has_anomalous_excess": true,
+        "best_line_nm": 2009.525,
+        "line_family_guess": "thulium_2000",
+        "confidence": 0.95,
+        "priority": "A",
+        "artifact_likelihood": 0.08,
+        "beam_likelihood": 0.78,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "good_support"
+        ],
+        "evidence_summary": "A very strong isolated excess near 2.01 microns is present in both PSF and aperture flux with no fatal flag at the line point.",
+        "recommended_next_check": "Revisit the 2.0 micron frames and confirm repeatability against nearby field sources."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1239969599660349696",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.78,
+        "priority": "D",
+        "artifact_likelihood": 0.64,
+        "beam_likelihood": 0.18,
+        "reason_codes": [
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "Several high-SNR local peaks appear across the spectrum, consistent with bright-source continuum structure rather than one isolated anomalous line.",
+        "recommended_next_check": "Compare against adjacent continuum samples and other bright-star spectra before promoting any single peak."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_baseline::gaia_dr3_3683120243721340160",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.86,
+        "priority": "D",
+        "artifact_likelihood": 0.72,
+        "beam_likelihood": 0.10,
+        "reason_codes": [
+          "flags_present"
+        ],
+        "evidence_summary": "The largest apparent feature is fatal-flagged and has poor aperture support, while the remaining positive deviations are modest.",
+        "recommended_next_check": "Reject the fatal-flagged 1.95 micron point and retain this as a control unless independent imaging supports it."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1224328398216435968",
+        "has_anomalous_excess": true,
+        "best_line_nm": 2002.333,
+        "line_family_guess": "thulium_2000",
+        "confidence": 0.72,
+        "priority": "C",
+        "artifact_likelihood": 0.36,
+        "beam_likelihood": 0.55,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "There is a coherent aperture and PSF excess around 1.99 to 2.00 microns, but other competing peaks lower the reliability.",
+        "recommended_next_check": "Inspect the 2.0 micron candidate against the stronger flagged 1.54 micron excursion and local background behavior."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6606100983369342592",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.76,
+        "priority": "D",
+        "artifact_likelihood": 0.66,
+        "beam_likelihood": 0.16,
+        "reason_codes": [
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "The strongest positive deviations are numerous and spread across the spectrum rather than forming an isolated narrowband excess.",
+        "recommended_next_check": "Treat the local peaks as bright-star spectral structure unless a known laser wavelength repeats in independent visits."
+      }
+    ],
+    "global_notes": "Classifications were made from challenge_spectra only; truth labels were consulted afterward only for scoring."
+  },
+  "score": {
+    "counts": {
+      "true_positive": 2,
+      "false_positive": 0,
+      "true_negative": 3,
+      "false_negative": 0
+    },
+    "precision": 1.0,
+    "recall": 1.0,
+    "details": [
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3611813787923831808",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "true_positive",
+        "truth_line_nm": 2000.0,
+        "predicted_line_nm": 2009.525
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1239969599660349696",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "true_negative",
+        "truth_line_nm": null,
+        "predicted_line_nm": null
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_baseline::gaia_dr3_3683120243721340160",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "true_negative",
+        "truth_line_nm": null,
+        "predicted_line_nm": null
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1224328398216435968",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "true_positive",
+        "truth_line_nm": 2000.0,
+        "predicted_line_nm": 2002.333
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6606100983369342592",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "true_negative",
+        "truth_line_nm": null,
+        "predicted_line_nm": null
+      }
+    ]
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "{\"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3683120243721340160\", \"line_family\": \"telecom_1550\"}",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1782315706,
+    "id": "chatcmpl-272",
+    "model": "qwen2.5:32b",
+    "object": "chat.completion",
+    "system_fingerprint": "fp_ollama",
+    "usage": {
+      "completion_tokens": 94,
+      "prompt_tokens": 32768,
+      "total_tokens": 32862
+    }
+  },
+  "request": {
+    "base_url": "http://spark-09dd:11434/v1",
+    "challenge_size": 5,
+    "elapsed_sec": 94.31426310539246,
+    "model": "qwen2.5:32b",
+    "prompt_variant": "positive"
+  },
+  "response": {
+    "line_family": "telecom_1550",
+    "model": "qwen2.5:32b",
+    "packet_id": "cv_june_g11_16_f500_diag_overnight_v1_challenge_5",
+    "prompt_variant": "positive",
+    "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3683120243721340160"
+  },
+  "score": {
+    "counts": {
+      "fn": 0,
+      "fp": 0,
+      "tn": 0,
+      "tp": 0
+    },
+    "details": [],
+    "precision": null,
+    "recall": null
+  }
+}

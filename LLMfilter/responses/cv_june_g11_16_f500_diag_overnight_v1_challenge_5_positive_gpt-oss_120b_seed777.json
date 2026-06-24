@@ -1,0 +1,183 @@
+{
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "{\n  \"packet_id\": \"cv_june_g11_16_f500_diag_overnight_v1_challenge_5\",\n  \"model\": \"anomaly_detector_v0\",\n  \"prompt_variant\": \"positive\",\n  \"analyses\": [\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_sadr_gaia_2067519259693352832_injected::gaia_dr3_2068593589931467776\",\n      \"has_anomalous_excess\": false,\n      \"confidence\": 0.2,\n      \"priority\": \"D\",\n      \"best_line_nm\": 0.0,\n      \"line_family_guess\": \"null\",\n      \"artifact_likelihood\": 0.1,\n      \"beam_likelihood\": 0.1,\n      \"reason_codes\": [\n        \"flags_present\"\n      ],\n      \"evidence_summary\": \"Flux declines smoothly with wavelength; no localized narrow spike.\",\n      \"recommended_next_check\": \"No further investigation required.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_antarest_gaia_6045631223238035712_injected::gaia_dr3_6045580851869231104\",\n      \"has_anomalous_excess\": false,\n      \"confidence\": 0.2,\n      \"priority\": \"D\",\n      \"best_line_nm\": 0.0,\n      \"line_family_guess\": \"null\",\n      \"artifact_likelihood\": 0.1,\n      \"beam_likelihood\": 0.1,\n      \"reason_codes\": [\n        \"flags_present\"\n      ],\n      \"evidence_summary\": \"Spectral shape is smooth; no distinct narrowband feature observed.\",\n      \"recommended_next_check\": \"No further investigation required.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090109280138269696\",\n      \"has_anomalous_excess\": false,\n      \"confidence\": 0.2,\n      \"priority\": \"D\",\n      \"best_line_nm\": 0.0,\n      \"line_family_guess\": \"null\",\n      \"artifact_likelihood\": 0.1,\n      \"beam_likelihood\": 0.1,\n      \"reason_codes\": [\n        \"flags_present\"\n      ],\n      \"evidence_summary\": \"Continuum varies gradually; no sharp excess detected.\",\n      \"recommended_next_check\": \"No further investigation required.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816499987755639424\",\n      \"has_anomalous_excess\": false,\n      \"confidence\": 0.2,\n      \"priority\": \"D\",\n      \"best_line_nm\": 0.0,\n      \"line_family_guess\": \"null\",\n      \"artifact_likelihood\": 0.1,\n      \"beam_likelihood\": 0.1,\n      \"reason_codes\": [\n        \"flags_present\"\n      ],\n      \"evidence_summary\": \"Spectral measurements show a smooth decline; no narrowband peak present.\",\n      \"recommended_next_check\": \"No further investigation required.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_baseline::gaia_dr3_2097782286450695296\",\n      \"has_anomalous_excess\": false,\n      \"confidence\": 0.2,\n      \"priority\": \"D\",\n      \"best_line_nm\": 0.0,\n      \"line_family_guess\": \"null\",\n      \"artifact_likelihood\": 0.1,\n      \"beam_likelihood\": 0.1,\n      \"reason_codes\": [\n        \"flags_present\"\n      ],\n      \"evidence_summary\": \"Flux distribution is smooth across the band; no injected line evident.\",\n      \"recommended_next_check\": \"No further investigation required.\"\n    }\n  ],\n  \"global_notes\": \"All five challenge spectra display smoothly varying fluxes with wavelength and lack any localized narrowband excess indicative of an injected signal.\"\n}",
+          "reasoning": "We need to produce JSON with top-level fields: packet_id, model, prompt_variant, analyses (array of objects for each challenge_signal_ids), global_notes.\n\nWe must not include known examples. The challenge_signal_ids list has 5 IDs:\n\n1. cv_june_g11_16_f500_diag_overnight_v1_cvj_sadr_gaia_2067519259693352832_injected::gaia_dr3_2068593589931467776\n2. ... antarest ...\n3. ... sheltan ...\n4. ... markab ...\n5. ... vega baseline ...\n\nWe have challenge spectra data for each of these in data_packet.challenge_spectra array (order matches? The first entry corresponds to sadr, second antarest, third sheltan, fourth markab, fifth ve ga). Indeed.\n\nOur job: analyze each spectrum and decide if has_anomalous_excess true/false. Use known examples for calibration: we have known_signal_examples includes a vega injected example (same as #5) with known detection? In that known signal example, truth indicates is_injected true, line_family telecom_1550 at 1550nm, find_me_snr=3.0. So the challenge spectrum for vega baseline likely also contains an injected narrowband excess? Wait it's \"baseline\" maybe control (no injection). The known_signal_examples includes that same ID but with _injected suffix? Actually known signal example id: cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2097782286450695296 . That's the injected version. The challenge spectrum for vega baseline is ..._baseline (not injected). So likely no excess.\n\nThus we need to evaluate each challenge spectrum for presence of narrowband excess.\n\nWe have data: each point includes aperture and psf fluxes across wavelengths. Look for localized spike relative to continuum.\n\nWe can approximate by checking if any point has significantly higher flux than neighboring points, especially with narrow bandwidth (small). For sadr (first), we see many measurements from 770nm up to ~5000 nm. The flux values around 80k uJy gradually decreasing? Actually median aperture ~20833, but early wavelengths have high ~80k then drop to few thousand at long wavelengths. No obvious sharp narrow spike; seems smooth continuum decreasing with wavelength. Likely no anomalous excess.\n\nAntarest (second) similar pattern, high early then decreasing, no spikes.\n\nSheltan (third) also similar.\n\nMarkab (fourth) many points up to 80k early then down to few thousand later, again smooth.\n\nVega baseline (fifth) has known injected line at 1550nm? But baseline likely no injection. The data shows flux around 744-5000 nm with values ~15k median, decreasing gradually; no spike near 1550nm (which is within range). At wave ~1550? Actually wavelengths: we have up to 4972 nm, but not include 1550 exactly maybe earlier region includes 1493 etc. No clear spike.\n\nThus likely all have has_anomalous_excess = false.\n\nBut need confidence values between 0 and 1. Provide moderate low confidence e.g., 0.2.\n\nPriority: S|A|B|C|D categories; maybe D for low priority (no excess). Use D.\n\nbest_line_nm: if no excess, set null? Schema expects number. Could set 0.0 or null? It says best_line_nm: 1064.0 default example. Probably set 0.0 when none.\n\nline_family_guess: \"null\" maybe string \"null\". Provide \"null\".\n\nartifact_likelihood and beam_likelihood low e.g., 0.1 each.\n\nreason_codes: list appropriate codes; for no excess maybe empty or include flags_present? Could include \"flags_present\" if any fatal flags present. Many spectra have fatal_flag counts >0. Use that.\n\nevidence_summary short sentence.\n\nrecommended_next_check: maybe \"no further check needed\".\n\nglobal_notes: overall note.\n\nNow produce JSON.\n\nNeed model and prompt_variant fields; not specified but we can fill with placeholder like \"analysis_v1\" and \"positive\". Not required? Schema requires them.\n\nWe'll set packet_id from data_packet.packet_id.\n\nmodel could be \"anomaly_detector_v0\". prompt_variant \"positive\".\n\nNow construct analyses array of 5 objects in order matching signal_ids.\n\nAll false.\n\nProvide best_line_nm: 0.0.\n\nline_family_guess: \"null\".\n\nartifact_likelihood 0.1, beam_likelihood 0.1.\n\nconfidence 0.2.\n\npriority \"D\".\n\nreason_codes include \"flags_present\" maybe also \"good_support\"? Not needed.\n\nevidence_summary: \"Flux varies smoothly with wavelength; no localized excess.\"\n\nrecommended_next_check: \"No further investigation required.\"\n\nNow produce JSON.",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1782321460,
+    "id": "chatcmpl-749",
+    "model": "gpt-oss:120b",
+    "object": "chat.completion",
+    "system_fingerprint": "fp_ollama",
+    "usage": {
+      "completion_tokens": 930,
+      "prompt_tokens": 61088,
+      "total_tokens": 62018
+    }
+  },
+  "request": {
+    "base_url": "http://192.168.1.26:11434/v1",
+    "challenge_size": 5,
+    "elapsed_sec": 28.232975006103516,
+    "model": "gpt-oss:120b",
+    "packet_format": "verbose",
+    "prompt_variant": "positive",
+    "usage": {
+      "completion_tokens": 930,
+      "prompt_tokens": 61088,
+      "total_tokens": 62018
+    }
+  },
+  "response": {
+    "analyses": [
+      {
+        "artifact_likelihood": 0.1,
+        "beam_likelihood": 0.1,
+        "best_line_nm": 0.0,
+        "confidence": 0.2,
+        "evidence_summary": "Flux declines smoothly with wavelength; no localized narrow spike.",
+        "has_anomalous_excess": false,
+        "line_family_guess": "null",
+        "priority": "D",
+        "reason_codes": [
+          "flags_present"
+        ],
+        "recommended_next_check": "No further investigation required.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sadr_gaia_2067519259693352832_injected::gaia_dr3_2068593589931467776"
+      },
+      {
+        "artifact_likelihood": 0.1,
+        "beam_likelihood": 0.1,
+        "best_line_nm": 0.0,
+        "confidence": 0.2,
+        "evidence_summary": "Spectral shape is smooth; no distinct narrowband feature observed.",
+        "has_anomalous_excess": false,
+        "line_family_guess": "null",
+        "priority": "D",
+        "reason_codes": [
+          "flags_present"
+        ],
+        "recommended_next_check": "No further investigation required.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_antarest_gaia_6045631223238035712_injected::gaia_dr3_6045580851869231104"
+      },
+      {
+        "artifact_likelihood": 0.1,
+        "beam_likelihood": 0.1,
+        "best_line_nm": 0.0,
+        "confidence": 0.2,
+        "evidence_summary": "Continuum varies gradually; no sharp excess detected.",
+        "has_anomalous_excess": false,
+        "line_family_guess": "null",
+        "priority": "D",
+        "reason_codes": [
+          "flags_present"
+        ],
+        "recommended_next_check": "No further investigation required.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090109280138269696"
+      },
+      {
+        "artifact_likelihood": 0.1,
+        "beam_likelihood": 0.1,
+        "best_line_nm": 0.0,
+        "confidence": 0.2,
+        "evidence_summary": "Spectral measurements show a smooth decline; no narrowband peak present.",
+        "has_anomalous_excess": false,
+        "line_family_guess": "null",
+        "priority": "D",
+        "reason_codes": [
+          "flags_present"
+        ],
+        "recommended_next_check": "No further investigation required.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816499987755639424"
+      },
+      {
+        "artifact_likelihood": 0.1,
+        "beam_likelihood": 0.1,
+        "best_line_nm": 0.0,
+        "confidence": 0.2,
+        "evidence_summary": "Flux distribution is smooth across the band; no injected line evident.",
+        "has_anomalous_excess": false,
+        "line_family_guess": "null",
+        "priority": "D",
+        "reason_codes": [
+          "flags_present"
+        ],
+        "recommended_next_check": "No further investigation required.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_baseline::gaia_dr3_2097782286450695296"
+      }
+    ],
+    "global_notes": "All five challenge spectra display smoothly varying fluxes with wavelength and lack any localized narrowband excess indicative of an injected signal.",
+    "model": "anomaly_detector_v0",
+    "packet_id": "cv_june_g11_16_f500_diag_overnight_v1_challenge_5",
+    "prompt_variant": "positive"
+  },
+  "score": {
+    "counts": {
+      "fn": 2,
+      "fp": 0,
+      "tn": 3,
+      "tp": 0
+    },
+    "details": [
+      {
+        "actual_injected": true,
+        "best_line_nm": 0.0,
+        "confidence": 0.2,
+        "predicted_anomalous": false,
+        "priority": "D",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sadr_gaia_2067519259693352832_injected::gaia_dr3_2068593589931467776",
+        "truth_line_family": "diode_808",
+        "truth_line_nm": 808.0
+      },
+      {
+        "actual_injected": false,
+        "best_line_nm": 0.0,
+        "confidence": 0.2,
+        "predicted_anomalous": false,
+        "priority": "D",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_antarest_gaia_6045631223238035712_injected::gaia_dr3_6045580851869231104",
+        "truth_line_family": null,
+        "truth_line_nm": null
+      },
+      {
+        "actual_injected": true,
+        "best_line_nm": 0.0,
+        "confidence": 0.2,
+        "predicted_anomalous": false,
+        "priority": "D",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090109280138269696",
+        "truth_line_family": "diode_980",
+        "truth_line_nm": 980.0
+      },
+      {
+        "actual_injected": false,
+        "best_line_nm": 0.0,
+        "confidence": 0.2,
+        "predicted_anomalous": false,
+        "priority": "D",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816499987755639424",
+        "truth_line_family": null,
+        "truth_line_nm": null
+      },
+      {
+        "actual_injected": false,
+        "best_line_nm": 0.0,
+        "confidence": 0.2,
+        "predicted_anomalous": false,
+        "priority": "D",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_baseline::gaia_dr3_2097782286450695296",
+        "truth_line_family": null,
+        "truth_line_nm": null
+      }
+    ],
+    "precision": null,
+    "recall": 0.0
+  }
+}

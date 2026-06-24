@@ -22,15 +22,32 @@ def assemble_spectra_from_jobs(run_dir: Path, jobs: list[dict[str, object]]) -> 
         empty.to_parquet(spectra_dir / "all_measurements.parquet", index=False)
         empty.to_parquet(spectra_dir / "target_spectra.parquet", index=False)
         empty.to_parquet(spectra_dir / "target_summary.parquet", index=False)
-        summary = {"measurement_rows": 0, "target_count": 0, "spectra_dir": str(spectra_dir)}
+        manifest_path = _find_injection_manifest(run_dir)
+        summary = {
+            "run_name": run_dir.name,
+            "run_kind": _run_kind_from_name(run_dir.name),
+            "run_injection_applied": bool(manifest_path is not None or _run_kind_from_name(run_dir.name) == "injected"),
+            "point_injection_applied_count": 0,
+            "injection_manifest_path": str(manifest_path) if manifest_path is not None else None,
+            "measurement_rows": 0,
+            "target_count": 0,
+            "spectra_dir": str(spectra_dir),
+        }
         (spectra_dir / "assembly_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
         return summary
 
     all_measurements = pd.concat(tables, ignore_index=True)
     all_measurements = all_measurements.sort_values(["target_id", "cwave_um", "obs_mid_time", "detector"])
+    provenance = _add_injection_provenance(run_dir, all_measurements)
     all_measurements.to_parquet(spectra_dir / "all_measurements.parquet", index=False)
 
     spectra_cols = [
+        "run_name",
+        "run_kind",
+        "run_injection_applied",
+        "point_injection_applied",
+        "injection_applied",
+        "injection_manifest_path",
         "target_id",
         "target_type",
         "source_id",
@@ -110,10 +127,36 @@ def assemble_spectra_from_jobs(run_dir: Path, jobs: list[dict[str, object]]) -> 
     snr_df["snr"] = snr
     snr_max = snr_df.groupby("target_id", dropna=False)["snr"].max().rename("max_snr_uJy").reset_index()
     target_summary = target_summary.drop(columns=["max_snr_uJy"]).merge(snr_max, on="target_id", how="left")
+    target_summary["run_name"] = provenance["run_name"]
+    target_summary["run_kind"] = provenance["run_kind"]
+    target_summary["run_injection_applied"] = provenance["run_injection_applied"]
+    target_summary["injection_manifest_path"] = provenance["injection_manifest_path"]
+    injection_counts = (
+        all_measurements.assign(point_injection_applied=all_measurements["point_injection_applied"].fillna(False).astype(bool))
+        .groupby("target_id", dropna=False)
+        .agg(
+            point_injection_applied_count=("point_injection_applied", "sum"),
+            point_measurement_count=("point_injection_applied", "size"),
+        )
+        .reset_index()
+    )
+    injection_counts["point_injection_applied_fraction"] = (
+        injection_counts["point_injection_applied_count"] / injection_counts["point_measurement_count"]
+    )
+    target_summary = target_summary.merge(
+        injection_counts.drop(columns=["point_measurement_count"]),
+        on="target_id",
+        how="left",
+    )
     target_summary = target_summary.sort_values(["n_measurements", "max_snr_uJy"], ascending=[False, False])
     target_summary.to_parquet(spectra_dir / "target_summary.parquet", index=False)
 
     summary = {
+        "run_name": provenance["run_name"],
+        "run_kind": provenance["run_kind"],
+        "run_injection_applied": provenance["run_injection_applied"],
+        "point_injection_applied_count": provenance["point_injection_applied_count"],
+        "injection_manifest_path": provenance["injection_manifest_path"],
         "measurement_rows": int(len(all_measurements)),
         "target_count": int(target_summary["target_id"].nunique()),
         "shard_count": int(len(tables)),
@@ -127,6 +170,66 @@ def assemble_spectra_from_jobs(run_dir: Path, jobs: list[dict[str, object]]) -> 
     }
     (spectra_dir / "assembly_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     return summary
+
+
+def _add_injection_provenance(run_dir: Path, df: pd.DataFrame) -> dict[str, object]:
+    run_name = run_dir.name
+    run_kind = _run_kind_from_name(run_name)
+    manifest_path = _find_injection_manifest(run_dir)
+
+    point_injected = pd.Series(False, index=df.index)
+    if "path_override_applied" in df.columns:
+        point_injected |= df["path_override_applied"].fillna(False).astype(bool)
+    if {"input_file_path", "original_input_file_path"} <= set(df.columns):
+        input_path = df["input_file_path"].fillna("").astype(str)
+        original_path = df["original_input_file_path"].fillna("").astype(str)
+        point_injected |= original_path.ne("") & input_path.ne(original_path)
+
+    run_injected = bool(run_kind == "injected" or point_injected.any() or manifest_path is not None)
+    df["run_name"] = run_name
+    df["run_kind"] = run_kind
+    df["run_injection_applied"] = run_injected
+    df["point_injection_applied"] = point_injected.astype(bool)
+    df["injection_applied"] = df["point_injection_applied"]
+    df["injection_manifest_path"] = str(manifest_path) if manifest_path is not None else None
+
+    return {
+        "run_name": run_name,
+        "run_kind": run_kind,
+        "run_injection_applied": run_injected,
+        "point_injection_applied_count": int(point_injected.sum()),
+        "injection_manifest_path": str(manifest_path) if manifest_path is not None else None,
+    }
+
+
+def _run_kind_from_name(run_name: str) -> str:
+    if run_name.endswith("_injected") or "_injected_" in run_name:
+        return "injected"
+    if run_name.endswith("_baseline") or "_baseline_" in run_name:
+        return "baseline"
+    return "unknown"
+
+
+def _find_injection_manifest(run_dir: Path) -> Path | None:
+    candidates = [
+        run_dir / "injection_manifest.json",
+        run_dir / "injections" / "injection_manifest.json",
+    ]
+    for summary_name in ("run_summary.json", "benchmark_summary.json"):
+        summary_path = run_dir / summary_name
+        if not summary_path.exists():
+            continue
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        overrides_path = summary.get("path_overrides_path")
+        if overrides_path:
+            candidates.append(Path(str(overrides_path)).parent / "injection_manifest.json")
+    for path in candidates:
+        if path.exists():
+            return path
+    return None
 
 
 def _unique_strings(df: pd.DataFrame, column: str) -> list[str]:

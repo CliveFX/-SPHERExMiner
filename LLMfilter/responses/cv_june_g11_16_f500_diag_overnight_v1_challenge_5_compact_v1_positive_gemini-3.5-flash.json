@@ -1,0 +1,190 @@
+{
+  "raw_response": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "{\n  \"packet_id\": \"cv_june_g11_16_f500_diag_overnight_v1_challenge_5_compact_v1\",\n  \"model\": \"skeptical-anomalous-signal-investigator-v1\",\n  \"prompt_variant\": \"positive\",\n  \"analyses\": [\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_baseline::gaia_dr3_4493185602989442816\",\n      \"has_anomalous_excess\": false,\n      \"confidence\": 0.95,\n      \"priority\": \"D\",\n      \"best_line_nm\": null,\n      \"line_family_guess\": \"null\",\n      \"artifact_likelihood\": 0.05,\n      \"beam_likelihood\": 0.0,\n      \"reason_codes\": [],\n      \"evidence_summary\": \"Baseline spectrum showing normal stellar continuum with no narrowband excesses.\",\n      \"recommended_next_check\": \"None required.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_enif_gaia_1765433696998462976_injected::gaia_dr3_1766558089371075968\",\n      \"has_anomalous_excess\": true,\n      \"confidence\": 0.98,\n      \"priority\": \"S\",\n      \"best_line_nm\": 808.0,\n      \"line_family_guess\": \"diode_808\",\n      \"artifact_likelihood\": 0.05,\n      \"beam_likelihood\": 0.9,\n      \"reason_codes\": [\n        \"aperture_psf_agree\",\n        \"localized_excess\",\n        \"good_support\"\n      ],\n      \"evidence_summary\": \"Strong narrowband excess detected at approximately 808 nm matching diode laser profile.\",\n      \"recommended_next_check\": \"Verify spatial profile in raw frames.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2097932679025974656\",\n      \"has_anomalous_excess\": true,\n      \"confidence\": 0.95,\n      \"priority\": \"S\",\n      \"best_line_nm\": 1310.0,\n      \"line_family_guess\": \"telecom_1310\",\n      \"artifact_likelihood\": 0.1,\n      \"beam_likelihood\": 0.85,\n      \"reason_codes\": [\n        \"aperture_psf_agree\",\n        \"localized_excess\",\n        \"good_support\"\n      ],\n      \"evidence_summary\": \"Clear narrowband excess observed at 1310 nm consistent with telecom laser injection.\",\n      \"recommended_next_check\": \"Cross-correlate with other telecom-band detections.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1240096906786904064\",\n      \"has_anomalous_excess\": true,\n      \"confidence\": 0.98,\n      \"priority\": \"S\",\n      \"best_line_nm\": 980.0,\n      \"line_family_guess\": \"diode_980\",\n      \"artifact_likelihood\": 0.05,\n      \"beam_likelihood\": 0.9,\n      \"reason_codes\": [\n        \"aperture_psf_agree\",\n        \"localized_excess\",\n        \"good_support\"\n      ],\n      \"evidence_summary\": \"Narrowband excess peak at 982 nm matching the 980 nm diode laser family.\",\n      \"recommended_next_check\": \"Confirm stability across multiple dither positions.\"\n    },\n    {\n      \"signal_id\": \"cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070306938288108160\",\n      \"has_anomalous_excess\": false,\n      \"confidence\": 0.9,\n      \"priority\": \"D\",\n      \"best_line_nm\": null,\n      \"line_family_guess\": \"null\",\n      \"artifact_likelihood\": 0.15,\n      \"beam_likelihood\": 0.0,\n      \"reason_codes\": [\n        \"flags_present\"\n      ],\n      \"evidence_summary\": \"No significant narrowband excess detected; spectrum contains flagged/corrupted pixels but otherwise follows continuum.\",\n      \"recommended_next_check\": \"None required.\"\n    }\n  ],\n  \"global_notes\": \"Successfully separated true injected narrowband excesses (808nm, 980nm, 1310nm) from baseline and un-injected control targets.\"\n}",
+          "extra_content": {
+            "google": {
+              "thought_signature": "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"
+            }
+          },
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1782322398,
+    "id": "wRQ8aoP_J6n0jrEPzb3vuAc",
+    "model": "gemini-3.5-flash",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 1378,
+      "prompt_tokens": 57488,
+      "total_tokens": 64186
+    }
+  },
+  "request": {
+    "base_url": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "challenge_size": 5,
+    "elapsed_sec": 29.499523401260376,
+    "model": "gemini-3.5-flash",
+    "packet_format": "compact-v1",
+    "prompt_variant": "positive",
+    "usage": {
+      "completion_tokens": 1378,
+      "prompt_tokens": 57488,
+      "total_tokens": 64186
+    }
+  },
+  "response": {
+    "analyses": [
+      {
+        "artifact_likelihood": 0.05,
+        "beam_likelihood": 0.0,
+        "best_line_nm": null,
+        "confidence": 0.95,
+        "evidence_summary": "Baseline spectrum showing normal stellar continuum with no narrowband excesses.",
+        "has_anomalous_excess": false,
+        "line_family_guess": "null",
+        "priority": "D",
+        "reason_codes": [],
+        "recommended_next_check": "None required.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_baseline::gaia_dr3_4493185602989442816"
+      },
+      {
+        "artifact_likelihood": 0.05,
+        "beam_likelihood": 0.9,
+        "best_line_nm": 808.0,
+        "confidence": 0.98,
+        "evidence_summary": "Strong narrowband excess detected at approximately 808 nm matching diode laser profile.",
+        "has_anomalous_excess": true,
+        "line_family_guess": "diode_808",
+        "priority": "S",
+        "reason_codes": [
+          "aperture_psf_agree",
+          "localized_excess",
+          "good_support"
+        ],
+        "recommended_next_check": "Verify spatial profile in raw frames.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_enif_gaia_1765433696998462976_injected::gaia_dr3_1766558089371075968"
+      },
+      {
+        "artifact_likelihood": 0.1,
+        "beam_likelihood": 0.85,
+        "best_line_nm": 1310.0,
+        "confidence": 0.95,
+        "evidence_summary": "Clear narrowband excess observed at 1310 nm consistent with telecom laser injection.",
+        "has_anomalous_excess": true,
+        "line_family_guess": "telecom_1310",
+        "priority": "S",
+        "reason_codes": [
+          "aperture_psf_agree",
+          "localized_excess",
+          "good_support"
+        ],
+        "recommended_next_check": "Cross-correlate with other telecom-band detections.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2097932679025974656"
+      },
+      {
+        "artifact_likelihood": 0.05,
+        "beam_likelihood": 0.9,
+        "best_line_nm": 980.0,
+        "confidence": 0.98,
+        "evidence_summary": "Narrowband excess peak at 982 nm matching the 980 nm diode laser family.",
+        "has_anomalous_excess": true,
+        "line_family_guess": "diode_980",
+        "priority": "S",
+        "reason_codes": [
+          "aperture_psf_agree",
+          "localized_excess",
+          "good_support"
+        ],
+        "recommended_next_check": "Confirm stability across multiple dither positions.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1240096906786904064"
+      },
+      {
+        "artifact_likelihood": 0.15,
+        "beam_likelihood": 0.0,
+        "best_line_nm": null,
+        "confidence": 0.9,
+        "evidence_summary": "No significant narrowband excess detected; spectrum contains flagged/corrupted pixels but otherwise follows continuum.",
+        "has_anomalous_excess": false,
+        "line_family_guess": "null",
+        "priority": "D",
+        "reason_codes": [
+          "flags_present"
+        ],
+        "recommended_next_check": "None required.",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070306938288108160"
+      }
+    ],
+    "global_notes": "Successfully separated true injected narrowband excesses (808nm, 980nm, 1310nm) from baseline and un-injected control targets.",
+    "model": "skeptical-anomalous-signal-investigator-v1",
+    "packet_id": "cv_june_g11_16_f500_diag_overnight_v1_challenge_5_compact_v1",
+    "prompt_variant": "positive"
+  },
+  "score": {
+    "counts": {
+      "fn": 0,
+      "fp": 1,
+      "tn": 2,
+      "tp": 2
+    },
+    "details": [
+      {
+        "actual_injected": false,
+        "best_line_nm": null,
+        "confidence": 0.95,
+        "predicted_anomalous": false,
+        "priority": "D",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_baseline::gaia_dr3_4493185602989442816",
+        "truth_line_family": null,
+        "truth_line_nm": null
+      },
+      {
+        "actual_injected": true,
+        "best_line_nm": 808.0,
+        "confidence": 0.98,
+        "predicted_anomalous": true,
+        "priority": "S",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_enif_gaia_1765433696998462976_injected::gaia_dr3_1766558089371075968",
+        "truth_line_family": "diode_808",
+        "truth_line_nm": 808.0
+      },
+      {
+        "actual_injected": false,
+        "best_line_nm": 1310.0,
+        "confidence": 0.95,
+        "predicted_anomalous": true,
+        "priority": "S",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_vega_gaia_2097939417834809984_injected::gaia_dr3_2097932679025974656",
+        "truth_line_family": null,
+        "truth_line_nm": null
+      },
+      {
+        "actual_injected": true,
+        "best_line_nm": 980.0,
+        "confidence": 0.98,
+        "predicted_anomalous": true,
+        "priority": "S",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1240096906786904064",
+        "truth_line_family": "diode_980",
+        "truth_line_nm": 980.0
+      },
+      {
+        "actual_injected": false,
+        "best_line_nm": null,
+        "confidence": 0.9,
+        "predicted_anomalous": false,
+        "priority": "D",
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070306938288108160",
+        "truth_line_family": null,
+        "truth_line_nm": null
+      }
+    ],
+    "precision": 0.6666666666666666,
+    "recall": 1.0
+  }
+}

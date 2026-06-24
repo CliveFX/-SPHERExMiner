@@ -314,6 +314,8 @@ These are median-binned documentation samples, not canonical science products.
 - [Injection/recovery plan](docs/injection_recovery_plan.md)
 - [GPU narrowband detector build spec](docs/gpu_narrowband_detector_spec.md)
 - [GPU response-template scorer design](docs/gpu_response_template_scorer.md)
+- [Two-model spectral ML plan](docs/ml_two_model_plan.md)
+- [ML workspace](ml/README.md)
 - [Blind candidate quality scoring](docs/blind_candidate_quality_scoring.md)
 - [GPU PSF grid notes](docs/gpu_psf_grid_notes.md)
 - [Arcturus magnitude calibration notes](docs/arcturus_magnitude_calibration_notes.md)

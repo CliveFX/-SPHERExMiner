@@ -1,0 +1,732 @@
+{
+  "request_metadata": {
+    "model": "codex-subagent",
+    "challenge_size": 25,
+    "prompt_variant": "positive"
+  },
+  "response": {
+    "packet_id": "cv_june_g11_16_f500_diag_overnight_v1_challenge_25",
+    "model": "codex-subagent",
+    "prompt_variant": "positive",
+    "analyses": [
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_regulus_gaia_3880787832822526336_injected::gaia_dr3_3880538827798057856",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.78,
+        "priority": "D",
+        "artifact_likelihood": 0.7,
+        "beam_likelihood": 0.12,
+        "reason_codes": [
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "Large local residuals are spread across multiple non-family wavelengths and PSF support is inconsistent, so no isolated line is promoted.",
+        "recommended_next_check": "Use this as a bright-source continuum control unless a repeat visit isolates one wavelength."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1224328398216435968",
+        "has_anomalous_excess": true,
+        "best_line_nm": 1992.973,
+        "line_family_guess": "thulium_2000",
+        "confidence": 0.72,
+        "priority": "C",
+        "artifact_likelihood": 0.36,
+        "beam_likelihood": 0.55,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "too_many_competing_peaks",
+          "flags_present"
+        ],
+        "evidence_summary": "A coherent excess appears near 2.0 microns in aperture and PSF, while a stronger 1.545 micron excursion is fatal-flagged.",
+        "recommended_next_check": "Inspect the 2.0 micron frames and reject the fatal-flagged 1.545 micron point from the candidate logic."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_baseline::gaia_dr3_3683120243721340160",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.86,
+        "priority": "D",
+        "artifact_likelihood": 0.66,
+        "beam_likelihood": 0.1,
+        "reason_codes": [
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "The paired baseline spectrum has only modest, non-family excursions and no coherent aperture-plus-PSF narrowband excess.",
+        "recommended_next_check": "Keep as a same-target decoy and compare against the injected counterpart only after classification."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6605924374314158336",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.75,
+        "priority": "D",
+        "artifact_likelihood": 0.67,
+        "beam_likelihood": 0.16,
+        "reason_codes": [
+          "too_many_competing_peaks",
+          "flags_present"
+        ],
+        "evidence_summary": "Several moderate positive deviations occur across the spectrum, including flagged points, without a unique narrowband candidate.",
+        "recommended_next_check": "Compare field-source behavior before treating any 1.55 or 2.0 micron bump as astrophysically unusual."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2815922052661183872",
+        "has_anomalous_excess": true,
+        "best_line_nm": 969.195,
+        "line_family_guess": "diode_980",
+        "confidence": 0.82,
+        "priority": "B",
+        "artifact_likelihood": 0.28,
+        "beam_likelihood": 0.66,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "good_support",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "The 0.97 to 0.99 micron region has a strong aperture and PSF excess consistent with a 980 nm diode candidate despite other peaks.",
+        "recommended_next_check": "Review the 980 nm visits and verify that the strong 822 nm excursion is not driving the detection."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_injected::gaia_dr3_4493933653151042048",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.82,
+        "priority": "D",
+        "artifact_likelihood": 0.74,
+        "beam_likelihood": 0.1,
+        "reason_codes": [
+          "too_many_competing_peaks",
+          "flags_present"
+        ],
+        "evidence_summary": "Extremely large residuals recur across many wavelengths and include fatal-flagged structure, consistent with continuum or extraction pathology.",
+        "recommended_next_check": "Do not promote the 1.075 micron structure unless neighboring spectra show a repeatable isolated feature."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1239969599660349696",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.8,
+        "priority": "D",
+        "artifact_likelihood": 0.69,
+        "beam_likelihood": 0.13,
+        "reason_codes": [
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "The largest deviations are distributed over unrelated wavelengths and the 2.0 micron neighborhood lacks PSF support.",
+        "recommended_next_check": "Treat as bright-star spectral structure pending repeatability checks."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_unukalhai_gaia_4429738254443894784_injected::gaia_dr3_4431123226778913280",
+        "has_anomalous_excess": true,
+        "best_line_nm": 799.956,
+        "line_family_guess": "diode_808",
+        "confidence": 0.98,
+        "priority": "S",
+        "artifact_likelihood": 0.03,
+        "beam_likelihood": 0.94,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "good_support",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "A very strong two-point 800 to 819 nm excess is present in both aperture and PSF with no fatal flags at the line points.",
+        "recommended_next_check": "Confirm detector-1 image quality and repeatability around 808 nm."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070311748651565056",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.77,
+        "priority": "D",
+        "artifact_likelihood": 0.68,
+        "beam_likelihood": 0.15,
+        "reason_codes": [
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "Multiple moderate local peaks at 0.98, 1.32, and 1.56 microns compete with broader continuum structure.",
+        "recommended_next_check": "Require an independent repeat at one known laser wavelength before promotion."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_scheat_gaia_1884863410217936768_injected::gaia_dr3_1886042563421420544",
+        "has_anomalous_excess": true,
+        "best_line_nm": 804.157,
+        "line_family_guess": "diode_808",
+        "confidence": 0.94,
+        "priority": "A",
+        "artifact_likelihood": 0.08,
+        "beam_likelihood": 0.86,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "good_support",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "A strong isolated 804 nm excess is seen in both aperture and PSF, matching the diode-808 family.",
+        "recommended_next_check": "Inspect the detector-1 cutout and compare the 804 nm source against nearby stars."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090790629448617600",
+        "has_anomalous_excess": true,
+        "best_line_nm": 1319.733,
+        "line_family_guess": "telecom_1310",
+        "confidence": 0.58,
+        "priority": "C",
+        "artifact_likelihood": 0.48,
+        "beam_likelihood": 0.46,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "flags_present",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "A nonfatal aperture and PSF excess near 1.32 microns is present, but the spectrum has severe competing structure and flagged neighboring points.",
+        "recommended_next_check": "Manually inspect the 1.31 micron frames and local background before accepting this as more than suspicious."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3683673465573500544",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.74,
+        "priority": "D",
+        "artifact_likelihood": 0.68,
+        "beam_likelihood": 0.18,
+        "reason_codes": [
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "Several family-adjacent peaks are embedded in many comparable continuum excursions, so there is no single isolated anomaly.",
+        "recommended_next_check": "Compare the 1.55 and 2.0 micron bumps with same-target controls."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_izar_gaia_1279805219468003072_injected::gaia_dr3_1267416506561408384",
+        "has_anomalous_excess": true,
+        "best_line_nm": 807.448,
+        "line_family_guess": "diode_808",
+        "confidence": 0.7,
+        "priority": "C",
+        "artifact_likelihood": 0.34,
+        "beam_likelihood": 0.54,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "The 807 to 812 nm samples rise coherently in aperture and PSF, though other peaks keep the confidence moderate.",
+        "recommended_next_check": "Check detector-1 frames around 808 nm and verify the feature is not a color-dependent continuum artifact."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_unukalhai_gaia_4429738254443894784_injected::gaia_dr3_4430898342290210176",
+        "has_anomalous_excess": true,
+        "best_line_nm": 978.499,
+        "line_family_guess": "diode_980",
+        "confidence": 0.88,
+        "priority": "B",
+        "artifact_likelihood": 0.2,
+        "beam_likelihood": 0.73,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "good_support",
+          "flags_present",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "A very strong 978 nm excess has aperture and PSF support; one neighboring point is fatal-flagged but the best point is clean.",
+        "recommended_next_check": "Inspect both 976 and 978 nm samples and rely on the nonfatal point for confirmation."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3611813787923831808",
+        "has_anomalous_excess": true,
+        "best_line_nm": 2009.525,
+        "line_family_guess": "thulium_2000",
+        "confidence": 0.95,
+        "priority": "A",
+        "artifact_likelihood": 0.07,
+        "beam_likelihood": 0.84,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "good_support"
+        ],
+        "evidence_summary": "A strong isolated 2.01 micron excess is present in both aperture and PSF with good local support.",
+        "recommended_next_check": "Confirm repeatability in the 2.0 micron detector-3 exposures."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816510398756260096",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.79,
+        "priority": "D",
+        "artifact_likelihood": 0.7,
+        "beam_likelihood": 0.12,
+        "reason_codes": [
+          "too_many_competing_peaks",
+          "flags_present"
+        ],
+        "evidence_summary": "The strongest residuals are widespread, and family wavelengths do not show a clean aperture-plus-PSF isolated line.",
+        "recommended_next_check": "Use as a non-signal bright-source comparison unless repeat data isolates one line family."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1233905041425301888",
+        "has_anomalous_excess": true,
+        "best_line_nm": 1999.325,
+        "line_family_guess": "thulium_2000",
+        "confidence": 0.62,
+        "priority": "C",
+        "artifact_likelihood": 0.41,
+        "beam_likelihood": 0.45,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "There is a coherent aperture and PSF excess almost exactly at 2.0 microns, although stronger unrelated structure lowers confidence.",
+        "recommended_next_check": "Inspect the 2.0 micron image and compare against other Arcturus-neighborhood spectra."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816048432073748608",
+        "has_anomalous_excess": true,
+        "best_line_nm": 1315.26,
+        "line_family_guess": "telecom_1310",
+        "confidence": 0.8,
+        "priority": "B",
+        "artifact_likelihood": 0.25,
+        "beam_likelihood": 0.64,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "good_support",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "A nonfatal 1.315 micron point shows strong aperture and PSF excess consistent with the telecom-1310 family.",
+        "recommended_next_check": "Check the 1.31 micron cutout and confirm the nearby 1.047 micron PSF anomaly is unrelated."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090741430606041728",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.84,
+        "priority": "D",
+        "artifact_likelihood": 0.78,
+        "beam_likelihood": 0.08,
+        "reason_codes": [
+          "flags_present",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "Huge residuals occur across many wavelengths and several family-adjacent candidates are fatal-flagged or PSF-inconsistent.",
+        "recommended_next_check": "Reject as structured extraction pathology unless one clean wavelength repeats independently."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1224208242211819520",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.77,
+        "priority": "D",
+        "artifact_likelihood": 0.66,
+        "beam_likelihood": 0.17,
+        "reason_codes": [
+          "too_many_competing_peaks",
+          "flags_present"
+        ],
+        "evidence_summary": "The 1.295 and 2.016 micron bumps are accompanied by many stronger non-family peaks and nearby flagged behavior.",
+        "recommended_next_check": "Compare against other Alphecca spectra before assigning a telecom or thulium candidate."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090682160056805376",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.86,
+        "priority": "D",
+        "artifact_likelihood": 0.8,
+        "beam_likelihood": 0.07,
+        "reason_codes": [
+          "flags_present",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "The spectrum is dominated by extreme broad excursions and fatal-flagged family neighborhoods rather than one clean narrowband excess.",
+        "recommended_next_check": "Reject automated line candidates here unless image-level review finds a clean isolated source."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_denebola_gaia_3923573919068194432_injected::gaia_dr3_3923765852566726400",
+        "has_anomalous_excess": true,
+        "best_line_nm": 814.365,
+        "line_family_guess": "diode_808",
+        "confidence": 0.57,
+        "priority": "C",
+        "artifact_likelihood": 0.46,
+        "beam_likelihood": 0.42,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "A modest 814 nm aperture and PSF excess is present in the diode-808 neighborhood, but a stronger 1.061 micron peak competes.",
+        "recommended_next_check": "Inspect the 808 nm vicinity directly and compare against the 1.061 micron excursion."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3696078950327824128",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.6,
+        "priority": "D",
+        "artifact_likelihood": 0.55,
+        "beam_likelihood": 0.25,
+        "reason_codes": [
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "The 980 nm neighborhood has only marginal aperture support and the raw detector cue is weak with poor global significance.",
+        "recommended_next_check": "Keep as a low-level debug candidate unless repeat imaging strengthens the 980 nm evidence."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6606100983369342592",
+        "has_anomalous_excess": false,
+        "best_line_nm": null,
+        "line_family_guess": null,
+        "confidence": 0.82,
+        "priority": "D",
+        "artifact_likelihood": 0.69,
+        "beam_likelihood": 0.13,
+        "reason_codes": [
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "Family wavelengths are flat or weak while larger residuals appear at unrelated continuum locations.",
+        "recommended_next_check": "Use as a Fomalhaut control spectrum and avoid promoting non-family peaks."
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sadr_gaia_2067519259693352832_injected::gaia_dr3_2068519922647269120",
+        "has_anomalous_excess": true,
+        "best_line_nm": 825.867,
+        "line_family_guess": "diode_808",
+        "confidence": 0.64,
+        "priority": "C",
+        "artifact_likelihood": 0.43,
+        "beam_likelihood": 0.48,
+        "reason_codes": [
+          "localized_excess",
+          "aperture_psf_agree",
+          "too_many_competing_peaks"
+        ],
+        "evidence_summary": "A diode-808-family excess is visible around 807 to 826 nm with aperture and PSF support, though many stronger competing peaks remain.",
+        "recommended_next_check": "Review detector-1 geometry near 808 nm because the candidate lies close to the detector edge."
+      }
+    ],
+    "global_notes": "Classifications were formed from challenge_spectra only; truth_25.json was consulted afterward only to compute the score."
+  },
+  "score": {
+    "counts": {
+      "tp": 11,
+      "fp": 1,
+      "tn": 12,
+      "fn": 1
+    },
+    "precision": 0.9166666666666666,
+    "recall": 0.9166666666666666,
+    "details": [
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_regulus_gaia_3880787832822526336_injected::gaia_dr3_3880538827798057856",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1224328398216435968",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "tp",
+        "truth_line_nm": 2000.0,
+        "predicted_line_nm": 1992.973,
+        "truth_line_family": "thulium_2000",
+        "predicted_line_family": "thulium_2000",
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_baseline::gaia_dr3_3683120243721340160",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": true
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6605924374314158336",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2815922052661183872",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "tp",
+        "truth_line_nm": 980.0,
+        "predicted_line_nm": 969.195,
+        "truth_line_family": "diode_980",
+        "predicted_line_family": "diode_980",
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_rasalhague_gaia_4493743128402435712_injected::gaia_dr3_4493933653151042048",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1239969599660349696",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_unukalhai_gaia_4429738254443894784_injected::gaia_dr3_4431123226778913280",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "tp",
+        "truth_line_nm": 808.0,
+        "predicted_line_nm": 799.956,
+        "truth_line_family": "diode_808",
+        "predicted_line_family": "diode_808",
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_deneb_gaia_2070409257287822720_injected::gaia_dr3_2070311748651565056",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_scheat_gaia_1884863410217936768_injected::gaia_dr3_1886042563421420544",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "tp",
+        "truth_line_nm": 808.0,
+        "predicted_line_nm": 804.157,
+        "truth_line_family": "diode_808",
+        "predicted_line_family": "diode_808",
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090790629448617600",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "tp",
+        "truth_line_nm": 1310.0,
+        "predicted_line_nm": 1319.733,
+        "truth_line_family": "telecom_1310",
+        "predicted_line_family": "telecom_1310",
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3683673465573500544",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_izar_gaia_1279805219468003072_injected::gaia_dr3_1267416506561408384",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "tp",
+        "truth_line_nm": 808.0,
+        "predicted_line_nm": 807.448,
+        "truth_line_family": "diode_808",
+        "predicted_line_family": "diode_808",
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_unukalhai_gaia_4429738254443894784_injected::gaia_dr3_4430898342290210176",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "tp",
+        "truth_line_nm": 980.0,
+        "predicted_line_nm": 978.499,
+        "truth_line_family": "diode_980",
+        "predicted_line_family": "diode_980",
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_spica_gaia_3611298284474586112_injected::gaia_dr3_3611813787923831808",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "tp",
+        "truth_line_nm": 2000.0,
+        "predicted_line_nm": 2009.525,
+        "truth_line_family": "thulium_2000",
+        "predicted_line_family": "thulium_2000",
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816510398756260096",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_arcturus_gaia_1233967198192238208_injected::gaia_dr3_1233905041425301888",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": false,
+        "outcome": "fp",
+        "truth_line_nm": null,
+        "predicted_line_nm": 1999.325,
+        "truth_line_family": null,
+        "predicted_line_family": "thulium_2000",
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_markab_gaia_2816505416594302848_injected::gaia_dr3_2816048432073748608",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "tp",
+        "truth_line_nm": 1310.0,
+        "predicted_line_nm": 1315.26,
+        "truth_line_family": "telecom_1310",
+        "predicted_line_family": "telecom_1310",
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090741430606041728",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_alphecca_gaia_1222647313658078720_injected::gaia_dr3_1224208242211819520",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sheltan_gaia_2090735383292041472_injected::gaia_dr3_2090682160056805376",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_denebola_gaia_3923573919068194432_injected::gaia_dr3_3923765852566726400",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "tp",
+        "truth_line_nm": 808.0,
+        "predicted_line_nm": 814.365,
+        "truth_line_family": "diode_808",
+        "predicted_line_family": "diode_808",
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3696078950327824128",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": true,
+        "outcome": "fn",
+        "truth_line_nm": 980.0,
+        "predicted_line_nm": null,
+        "truth_line_family": "diode_980",
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_fomalhaut_gaia_6606107825251712896_injected::gaia_dr3_6606100983369342592",
+        "predicted_has_anomalous_excess": false,
+        "truth_is_injected": false,
+        "outcome": "tn",
+        "truth_line_nm": null,
+        "predicted_line_nm": null,
+        "truth_line_family": null,
+        "predicted_line_family": null,
+        "is_paired_decoy_uninjected_same_target": false
+      },
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_sadr_gaia_2067519259693352832_injected::gaia_dr3_2068519922647269120",
+        "predicted_has_anomalous_excess": true,
+        "truth_is_injected": true,
+        "outcome": "tp",
+        "truth_line_nm": 808.0,
+        "predicted_line_nm": 825.867,
+        "truth_line_family": "diode_808",
+        "predicted_line_family": "diode_808",
+        "is_paired_decoy_uninjected_same_target": false
+      }
+    ]
+  },
+  "decoy_analysis": {
+    "summary": "The paired uninjected same-target decoy was classified as non-anomalous and scored as a true negative.",
+    "counts": {
+      "paired_decoys": 1,
+      "classified_anomalous": 0,
+      "classified_non_anomalous": 1
+    },
+    "details": [
+      {
+        "signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_baseline::gaia_dr3_3683120243721340160",
+        "decoy_of_signal_id": "cv_june_g11_16_f500_diag_overnight_v1_cvj_porrima_gaia_3683683331113865472_injected::gaia_dr3_3683120243721340160",
+        "classified_as_anomalous": false,
+        "classification": "tn",
+        "note": "Classified as non-anomalous because the same-target baseline had only modest non-family excursions and no coherent narrowband excess."
+      }
+    ]
+  }
+}
