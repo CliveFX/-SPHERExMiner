@@ -110,6 +110,9 @@ def _make_handler(run_dir: Path):
                     self._send_json(_similar_spectra(runs_root.parent / "ml_outputs" / "science_embeddings", params))
                 elif path == "/api/umap":
                     self._send_json(_umap_payload(runs_root.parent / "ml_outputs" / "science_embeddings", params))
+                elif path.startswith("/api/spectrum-preview/"):
+                    target_id = urllib.parse.unquote(path.removeprefix("/api/spectrum-preview/"))
+                    self._send_json(_spectrum_preview(active_run_dir, target_id))
                 elif path.startswith("/api/spectrum/"):
                     target_id = urllib.parse.unquote(path.removeprefix("/api/spectrum/"))
                     self._send_json(_spectrum(active_run_dir, target_id))
@@ -2649,8 +2652,7 @@ def _spectrum(run_dir: Path, target_id: str) -> dict[str, object]:
     path = run_dir / "spectra" / "target_spectra.parquet"
     if not path.exists():
         return {"target_id": target_id, "rows": [], "target_injections": _target_injections(run_dir, target_id)}
-    df = pd.read_parquet(path)
-    rows = df[df["target_id"] == target_id].sort_values("cwave_um")
+    rows = _read_target_spectrum_rows(path, target_id)
     if "input_file_path" in rows.columns:
         rows = rows.copy()
         rows["fits_file"] = rows["input_file_path"].map(lambda value: Path(str(value)).name if pd.notna(value) else None)
@@ -2659,6 +2661,46 @@ def _spectrum(run_dir: Path, target_id: str) -> dict[str, object]:
         "rows": rows.to_dict(orient="records"),
         "target_injections": _target_injections(run_dir, target_id),
     }
+
+
+def _spectrum_preview(run_dir: Path, target_id: str) -> dict[str, object]:
+    path = run_dir / "spectra" / "target_spectra.parquet"
+    if not path.exists():
+        return {"target_id": target_id, "rows": []}
+    columns = [
+        "target_id",
+        "cwave_um",
+        "aperture_flux_uJy",
+        "aperture_flux_unc_uJy",
+        "psf_flux_uJy",
+        "psf_flux_unc_uJy",
+        "fatal_flag_present",
+        "flags_summary",
+    ]
+    rows = _read_target_spectrum_rows(path, target_id, columns=columns)
+    return {"target_id": target_id, "rows": rows.to_dict(orient="records")}
+
+
+def _read_target_spectrum_rows(path: Path, target_id: str, columns: list[str] | None = None) -> pd.DataFrame:
+    read_columns = _existing_parquet_columns(path, columns) if columns else None
+    try:
+        rows = pd.read_parquet(path, columns=read_columns, filters=[("target_id", "=", str(target_id))])
+    except Exception:
+        df = pd.read_parquet(path, columns=read_columns)
+        rows = df[df["target_id"].astype(str).eq(str(target_id))]
+    if "cwave_um" in rows.columns:
+        rows = rows.sort_values("cwave_um", na_position="last", kind="mergesort")
+    return rows
+
+
+def _existing_parquet_columns(path: Path, columns: list[str] | None) -> list[str] | None:
+    if columns is None:
+        return None
+    try:
+        names = set(pq.ParquetFile(path).schema.names)
+    except Exception:
+        return columns
+    return [col for col in columns if col in names]
 
 
 def _fits_info(run_dir: Path, idx: int) -> dict[str, object]:
@@ -5301,7 +5343,7 @@ def _umap_html() -> str:
     .v { color:var(--cyan); font-size:18px; margin-top:4px; overflow-wrap:anywhere; }
     .small { color:var(--muted); font-size:12px; }
     .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
-    #mapWrap { position:relative; height:640px; border:1px solid #1d5f7a; border-radius:6px; background:rgba(4,10,20,.94); overflow:hidden; }
+    #mapWrap { position:relative; height:720px; border:1px solid #1d5f7a; border-radius:6px; background:rgba(4,10,20,.94); overflow:hidden; }
     #map { width:100%; height:100%; display:block; }
     #tip { position:absolute; display:none; pointer-events:none; max-width:420px; padding:8px; border:1px solid var(--line); border-radius:4px; background:rgba(5,9,20,.96); box-shadow:0 0 18px rgba(54,231,255,.16); }
     table { width:100%; border-collapse:collapse; font-size:12px; }
@@ -5310,7 +5352,12 @@ def _umap_html() -> str:
     tr.selected { background:rgba(255,79,216,.13); }
     .scroll { max-height:330px; overflow:auto; border:1px solid rgba(33,68,95,.6); border-radius:5px; }
     .pill { display:inline-block; padding:2px 7px; border:1px solid var(--line); border-radius:4px; }
-    #hoverSpectrum { width:100%; height:260px; display:block; border:1px solid #1d5f7a; border-radius:6px; background:rgba(4,10,20,.94); }
+    #spectrumOverlay { position:absolute; left:12px; bottom:12px; width:min(520px,42vw); height:360px; padding:8px; border:1px solid rgba(54,231,255,.7); border-radius:6px; background:rgba(5,9,20,.88); box-shadow:0 0 28px rgba(54,231,255,.18), inset 0 0 0 1px rgba(255,79,216,.05); backdrop-filter:blur(3px); z-index:3; }
+    #spectrumOverlay h3 { margin:0 0 6px; color:var(--cyan); font-size:13px; }
+    #spectrumOverlay .overlayHead { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+    #spectrumOverlay button { width:auto; padding:3px 8px; font-size:11px; }
+    #hoverSpectrum { width:100%; height:274px; display:block; border:1px solid #1d5f7a; border-radius:5px; background:rgba(4,10,20,.94); }
+    #hoverMeta { margin-top:5px; line-height:1.25; max-height:48px; overflow:hidden; }
   </style>
 </head>
 <body>
@@ -5357,12 +5404,12 @@ def _umap_html() -> str:
     <div id="mapWrap">
       <canvas id="map"></canvas>
       <div id="tip"></div>
+      <div id="spectrumOverlay">
+        <div class="overlayHead"><h3 id="hoverTitle">Hover Spectrum</h3><button id="unpinButton" style="display:none" onclick="unpinSpectrum()">Unpin</button></div>
+        <canvas id="hoverSpectrum"></canvas>
+        <div id="hoverMeta" class="small">Drive over points to preview aperture and PSF spectra. Click a point to pin it below.</div>
+      </div>
     </div>
-    <section style="padding:8px; margin-top:10px">
-      <h3>Hover Spectrum</h3>
-      <canvas id="hoverSpectrum"></canvas>
-      <div id="hoverMeta" class="small">Move over a point to preview its aperture and PSF spectrum. Click a point to pin it below.</div>
-    </section>
     <div class="row" style="margin-top:10px">
       <section style="padding:8px">
         <h3>Selected Point</h3>
@@ -5386,6 +5433,7 @@ const tip = document.getElementById('tip');
 const hoverSpectrum = document.getElementById('hoverSpectrum');
 const spectrumCache = new Map();
 let hoverIndex = -1;
+let pinnedIndex = -1;
 let hoverTimer = null;
 let hoverRequestSeq = 0;
 
@@ -5534,6 +5582,7 @@ function nearest(ev){
 }
 function selectPoint(i){
   selectedIndex = i;
+  pinnedIndex = i;
   const r = (data.points || [])[i];
   document.querySelectorAll('#points tr').forEach(tr => tr.classList.remove('selected'));
   const tr = document.getElementById('pointrow_' + i);
@@ -5544,36 +5593,50 @@ function selectPoint(i){
     <div>cluster ${esc(r.cluster_id)} · G ${fmt(r.phot_g_mean_mag,2)} · BP/RP ${fmt(r.bp_rp,3)} · quality ${fmt(r.spectrum_quality_score,2)}</div>
     <div style="margin-top:6px"><a href="${esc(r.spectra_url)}">spectra</a> · <a href="${esc(r.similar_url)}">similar spectra</a></div>`;
   draw();
+  previewSpectrum(i, true);
 }
 function maybePreviewSpectrum(i){
+  if (pinnedIndex >= 0) return;
   if (i < 0 || i === hoverIndex) return;
   hoverIndex = i;
   clearTimeout(hoverTimer);
-  hoverTimer = setTimeout(() => previewSpectrum(i), 55);
+  hoverTimer = setTimeout(() => previewSpectrum(i), spectrumCache.has(cacheKeyForIndex(i)) ? 0 : 8);
 }
-async function previewSpectrum(i){
+function unpinSpectrum(){
+  pinnedIndex = -1;
+  document.getElementById('unpinButton').style.display = 'none';
+  document.getElementById('hoverTitle').textContent = 'Hover Spectrum';
+  document.getElementById('hoverMeta').innerHTML = 'Drive over points to preview aperture and PSF spectra. Click a point to pin it.';
+}
+function cacheKeyForIndex(i){
+  const r = (data.points || [])[i];
+  return r ? `${r.run_name}::${r.target_id}` : '';
+}
+async function previewSpectrum(i, pinned=false){
   const r = (data.points || [])[i];
   if (!r) return;
-  const key = `${r.run_name}::${r.target_id}`;
+  const key = cacheKeyForIndex(i);
+  document.getElementById('hoverTitle').textContent = pinned ? 'Pinned Spectrum' : 'Hover Spectrum';
+  document.getElementById('unpinButton').style.display = pinned ? '' : 'none';
   document.getElementById('hoverMeta').innerHTML = `<span class="mono">${esc(r.target_id)}</span> · loading spectrum`;
   const seq = ++hoverRequestSeq;
   try {
     let rows = spectrumCache.get(key);
     if (!rows) {
-      const payload = await getJSON('/api/spectrum/' + encodeURIComponent(r.target_id) + '?run=' + encodeURIComponent(r.run_name || ''));
+      const payload = await getJSON('/api/spectrum-preview/' + encodeURIComponent(r.target_id) + '?run=' + encodeURIComponent(r.run_name || ''));
       rows = payload.rows || [];
       spectrumCache.set(key, rows);
-      if (spectrumCache.size > 260) spectrumCache.delete(spectrumCache.keys().next().value);
+      if (spectrumCache.size > 900) spectrumCache.delete(spectrumCache.keys().next().value);
     }
     if (seq !== hoverRequestSeq) return;
-    drawHoverSpectrum(rows, r);
+    drawHoverSpectrum(rows, r, pinned);
   } catch (err) {
     if (seq !== hoverRequestSeq) return;
     document.getElementById('hoverMeta').innerHTML = `<span style="color:#fecdd3">spectrum load failed:</span> ${esc(err.message || err)}`;
-    drawHoverSpectrum([], r);
+    drawHoverSpectrum([], r, pinned);
   }
 }
-function drawHoverSpectrum(rows, point){
+function drawHoverSpectrum(rows, point, pinned=false){
   const rect = hoverSpectrum.getBoundingClientRect();
   const dpr = window.devicePixelRatio || 1;
   hoverSpectrum.width = Math.max(600, Math.floor(rect.width * dpr));
@@ -5612,7 +5675,8 @@ function drawHoverSpectrum(rows, point){
   ctx.fillText('aperture', w - 150, 15);
   ctx.fillStyle = '#c084fc';
   ctx.fillText('PSF', w - 82, 15);
-  document.getElementById('hoverMeta').innerHTML = `<span class="mono">${esc(point.target_id)}</span> · ${esc(point.run_name || '')}<br>cluster ${esc(point.cluster_id)} · G ${fmt(point.phot_g_mean_mag,2)} · ${rows.length} measurements · cache ${spectrumCache.size}`;
+  const mode = pinned ? '<span style="color:#ff9dea">PINNED</span> · ' : '';
+  document.getElementById('hoverMeta').innerHTML = `${mode}<span class="mono">${esc(point.target_id)}</span> · ${esc(point.run_name || '')}<br>cluster ${esc(point.cluster_id)} · G ${fmt(point.phot_g_mean_mag,2)} · ${rows.length} measurements · cache ${spectrumCache.size}`;
 }
 function drawSpectrumGrid(ctx,w,h,m){
   ctx.strokeStyle = 'rgba(33,68,95,.55)';
@@ -5668,7 +5732,7 @@ canvas.addEventListener('mousemove', ev => {
 });
 canvas.addEventListener('mouseleave', () => { tip.style.display='none'; hoverIndex = -1; });
 canvas.addEventListener('click', ev => { const i = nearest(ev); if (i >= 0) selectPoint(i); });
-window.addEventListener('resize', () => { draw(); if (hoverIndex >= 0) previewSpectrum(hoverIndex); });
+window.addEventListener('resize', () => { draw(); if (pinnedIndex >= 0) previewSpectrum(pinnedIndex, true); else if (hoverIndex >= 0) previewSpectrum(hoverIndex); });
 function escAttr(v){ return String(v ?? '').replace(/['\\\\]/g, '\\\\$&').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 setVal('embedding', initial.get('embedding') || '');
 setVal('q', initial.get('q') || '');
