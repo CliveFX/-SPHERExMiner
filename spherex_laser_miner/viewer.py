@@ -500,8 +500,9 @@ def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[st
     q = (params.get("q") or [""])[0].strip().lower()
     source = (params.get("source") or ["baseline"])[0].strip().lower()
     tier = (params.get("tier") or ["all"])[0].strip()
+    quality = (params.get("quality") or ["pass"])[0].strip().lower()
     min_snr = _query_float(params, "min_snr")
-    limit = min(5000, max(25, _query_int(params, "limit", 500)))
+    limit = min(5000, max(25, _query_int(params, "limit", 100)))
     offset = max(0, _query_int(params, "offset", 0))
 
     rows: list[dict[str, object]] = []
@@ -533,6 +534,14 @@ def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[st
         df = df.copy()
         if tier != "all" and "tier" in df:
             df = df[df["tier"].astype(str).eq(tier)]
+        if quality not in {"all", ""}:
+            if "quality_pass" in df:
+                if quality == "pass":
+                    df = df[df["quality_pass"].fillna(False).astype(bool)]
+                elif quality == "reject":
+                    df = df[~df["quality_pass"].fillna(False).astype(bool)]
+            if quality in {"high_confidence", "review"} and "quality_category" in df:
+                df = df[df["quality_category"].astype(str).eq(quality)]
         if min_snr is not None:
             snr_cols = [col for col in ("rank_score", "psf_peak_snr", "aperture_peak_snr") if col in df]
             if snr_cols:
@@ -571,10 +580,10 @@ def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[st
             )
             rows.append(out)
 
-    rows = _sort_candidate_summary_rows(rows, (params.get("sort") or ["rank"])[0])
+    rows = _sort_candidate_summary_rows(rows, (params.get("sort") or ["quality"])[0])
     total = len(rows)
     page = rows[offset : offset + limit]
-    return _candidate_summary_payload(page, sorted(campaigns), source, campaign_filter, scanned_runs, candidate_runs, limit, offset, total)
+    return _candidate_summary_payload(page, sorted(campaigns), source, campaign_filter, scanned_runs, candidate_runs, limit, offset, total, quality)
 
 
 def _candidate_source_for_run(run_name: str, source: str) -> tuple[str | None, str | None]:
@@ -602,6 +611,7 @@ def _sort_candidate_summary_rows(rows: list[dict[str, object]], sort: str) -> li
         "wave": ["peak_line_nm"],
         "support": ["psf_support", "aperture_support", "rank_score"],
         "flags": ["flagged_points_sum", "rank_score"],
+        "quality": ["quality_pass", "quality_score", "rank_score"],
         "target": ["target_id", "peak_line_nm"],
         "run": ["run_name", "rank_score"],
     }.get(sort, ["rank_score"])
@@ -622,6 +632,7 @@ def _candidate_summary_payload(
     limit: int,
     offset: int,
     total: int | None = None,
+    quality: str = "all",
 ) -> dict[str, object]:
     total_rows = len(rows) if total is None else total
     tier_counts: dict[str, int] = {}
@@ -634,6 +645,7 @@ def _candidate_summary_payload(
             "scanned_runs": scanned_runs,
             "candidate_runs": candidate_runs,
             "candidate_count": total_rows,
+            "quality_filter": quality,
             "tier_counts_page": tier_counts,
         },
         "campaigns": campaigns,
@@ -3077,7 +3089,7 @@ def _candidate_summary_html() -> str:
     a { color:#93e8ff; }
     main { padding:12px; }
     section { background:rgba(11,23,41,.94); border:1px solid var(--line); border-radius:6px; padding:10px; box-shadow:inset 0 0 20px rgba(54,231,255,.035),0 0 20px rgba(0,0,0,.35); }
-    .controls { display:grid; grid-template-columns:repeat(8,minmax(110px,1fr)); gap:8px; align-items:end; margin-bottom:10px; }
+    .controls { display:grid; grid-template-columns:repeat(9,minmax(110px,1fr)); gap:8px; align-items:end; margin-bottom:10px; }
     label { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
     select,input,button { width:100%; background:#06101d; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:8px; }
     button { cursor:pointer; }
@@ -3109,10 +3121,11 @@ def _candidate_summary_html() -> str:
       <div><label>Source</label><select id="source" onchange="refresh(0)"><option value="baseline" selected>Uninjected baseline</option><option value="paired">Injected paired-delta</option><option value="injected">Injected raw</option><option value="all">All available</option></select></div>
       <div><label>Campaign</label><select id="campaign" onchange="refresh(0)"><option value="">All campaigns</option></select></div>
       <div><label>Tier</label><select id="tier" onchange="refresh(0)"><option value="all">All</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></div>
-      <div><label>Sort</label><select id="sort" onchange="refresh(0)"><option value="rank">Rank</option><option value="snr">SNR</option><option value="wave">Wavelength</option><option value="support">Support</option><option value="flags">Fewest flags</option><option value="target">Target</option><option value="run">Run</option></select></div>
+      <div><label>Quality</label><select id="quality" onchange="refresh(0)"><option value="pass" selected>Pass</option><option value="high_confidence">High confidence</option><option value="review">Review</option><option value="reject">Reject</option><option value="all">All</option></select></div>
+      <div><label>Sort</label><select id="sort" onchange="refresh(0)"><option value="quality" selected>Quality</option><option value="rank">Rank</option><option value="snr">SNR</option><option value="wave">Wavelength</option><option value="support">Support</option><option value="flags">Fewest flags</option><option value="target">Target</option><option value="run">Run</option></select></div>
       <div><label>Min SNR</label><input id="minSnr" placeholder="optional" oninput="scheduleRefresh()"></div>
       <div><label>Search</label><input id="query" placeholder="run, target, detector..." oninput="scheduleRefresh()"></div>
-      <div><label>Limit</label><select id="limit" onchange="refresh(0)"><option>100</option><option selected>500</option><option>1000</option><option>5000</option></select></div>
+      <div><label>Limit</label><select id="limit" onchange="refresh(0)"><option selected>100</option><option>500</option><option>1000</option><option>5000</option></select></div>
       <div><label>Action</label><button onclick="refresh(offset)">Refresh</button></div>
     </div>
     <div class="tiles" id="tiles"></div>
@@ -3125,10 +3138,10 @@ def _candidate_summary_html() -> str:
   </section>
 </main>
 <script>
-let offset = 0, limit = 500, total = 0, timer = null;
+let offset = 0, limit = 100, total = 0, timer = null;
 const initial = new URLSearchParams(window.location.search);
 function init(){
-  for (const id of ['source','tier','sort','limit']) {
+  for (const id of ['source','tier','quality','sort','limit']) {
     const v = initial.get(id);
     if (v && [...document.getElementById(id).options].some(o => o.value === v)) document.getElementById(id).value = v;
   }
@@ -3138,7 +3151,7 @@ function init(){
 async function getJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); return await r.json(); }
 function params(nextOffset){
   const p = new URLSearchParams();
-  p.set('source', val('source')); p.set('tier', val('tier')); p.set('sort', val('sort'));
+  p.set('source', val('source')); p.set('tier', val('tier')); p.set('quality', val('quality')); p.set('sort', val('sort'));
   p.set('limit', val('limit')); p.set('offset', String(Math.max(0,nextOffset||0)));
   if (val('campaign')) p.set('campaign', val('campaign'));
   if (val('query').trim()) p.set('q', val('query').trim());
@@ -3149,7 +3162,7 @@ function params(nextOffset){
 function scheduleRefresh(){ clearTimeout(timer); timer=setTimeout(()=>refresh(0),180); }
 async function refresh(nextOffset){
   const data = await getJSON('/api/candidate-summary' + params(nextOffset));
-  offset = data.offset || 0; limit = data.limit || Number(val('limit')) || 500; total = data.total || 0;
+  offset = data.offset || 0; limit = data.limit || Number(val('limit')) || 100; total = data.total || 0;
   syncCampaigns(data.campaigns || []);
   renderTiles(data.summary || {});
   renderRows(data.rows || []);
@@ -3161,7 +3174,7 @@ function syncCampaigns(campaigns){
 }
 function renderTiles(s){
   const tiles = [
-    ['Source', s.source], ['Candidates', s.candidate_count], ['Runs scanned', s.scanned_runs],
+    ['Source', s.source], ['Quality', s.quality_filter], ['Candidates', s.candidate_count], ['Runs scanned', s.scanned_runs],
     ['Runs with hits', s.candidate_runs], ['Campaign', s.campaign_filter || 'all'], ['Tier page', JSON.stringify(s.tier_counts_page || {})]
   ];
   document.getElementById('tiles').innerHTML = tiles.map(([k,v]) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(fmt(v))}</div></div>`).join('');
@@ -3169,7 +3182,7 @@ function renderTiles(s){
   document.getElementById('pageInfo').textContent = `${start}-${end} of ${total}`;
 }
 function renderRows(rows){
-  const cols = ['campaign','target','tier','rank_score','peak_line_nm','aperture_peak_snr','psf_peak_snr','aperture_support','psf_support','flagged_points_sum','target_id','links'];
+  const cols = ['campaign','target','quality_category','quality_score','tier','rank_score','peak_line_nm','aperture_peak_snr','psf_peak_snr','aperture_support','psf_support','flagged_points_sum','reject_reasons','target_id','links'];
   if (!rows.length) {
     document.getElementById('rows').innerHTML = '<div class="empty">No candidates for this selection. For baseline/uninjected science candidates, the campaign must be run with raw blind scanning enabled.</div>';
     return;
