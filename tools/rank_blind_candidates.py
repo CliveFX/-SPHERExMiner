@@ -3,11 +3,18 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.score_blind_candidate_quality import DEFAULT_CONFIG, load_quality_config, score_joint_candidates
 
 
 JOINT_COLUMNS = [
@@ -205,11 +212,15 @@ def main() -> None:
     parser.add_argument("--psf-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--match-tolerance-nm", type=float, default=10.0)
+    parser.add_argument("--quality-config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--no-quality-score", action="store_true")
     args = parser.parse_args()
 
     aperture = _read_clusters(args.aperture_dir / "blind_candidate_clusters.parquet", "aperture")
     psf = _read_clusters(args.psf_dir / "blind_candidate_clusters.parquet", "psf")
     joint = build_joint(aperture, psf, args.match_tolerance_nm)
+    if not args.no_quality_score:
+        joint = score_joint_candidates(joint, load_quality_config(args.quality_config))
     args.output_dir.mkdir(parents=True, exist_ok=True)
     out_path = args.output_dir / "blind_joint_candidates.parquet"
     summary_path = args.output_dir / "blind_joint_summary.json"
@@ -222,6 +233,11 @@ def main() -> None:
         "psf_cluster_count": int(len(psf)),
         "joint_candidate_count": int(len(joint)),
         "tier_counts": joint["tier"].value_counts().sort_index().to_dict() if "tier" in joint else {},
+        "quality_config": str(args.quality_config) if not args.no_quality_score else None,
+        "quality_pass_count": int(joint["quality_pass"].fillna(False).astype(bool).sum()) if "quality_pass" in joint else None,
+        "quality_category_counts": joint["quality_category"].value_counts().sort_index().to_dict()
+        if "quality_category" in joint
+        else {},
         "joint_candidates_path": str(out_path),
     }
     summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")

@@ -131,7 +131,24 @@ Outputs:
 
 ### 6. Score Recovery
 
-Join the classifier output against the injection truth manifest.
+There are three distinct scorer modes. Keep them separate:
+
+1. **Paired-delta recovery**
+   - Scores `injected - baseline`.
+   - Useful as a controlled photometry/injection sanity check.
+   - Optimistic compared with real discovery because stable stellar continuum and many artifacts subtract out.
+
+2. **Blind raw recovery**
+   - Scores the injected spectra directly, with no subtraction.
+   - Filters the scan to injected truth target IDs for speed, but the wavelength sweep is blind.
+   - This is the primary answer to: "if this fake signal were in the sky, would the discovery scorer find it?"
+
+3. **Science blind search**
+   - Scores baseline/uninjected spectra directly.
+   - This is where real candidates live.
+   - Uses the stricter science quality config.
+
+Join the chosen classifier output against the injection truth manifest.
 
 Metrics:
 
@@ -150,6 +167,42 @@ The main product should be a detection-efficiency curve:
 ```text
 injected strength -> recovery fraction at fixed false-positive budget
 ```
+
+## Current Noise-Model TODO
+
+The current FITS injector is deterministic:
+
+- It modifies the `IMAGE` HDU.
+- It does not update the `VARIANCE` HDU.
+- It does not add randomized source photon noise.
+- It does not update covariance or any detector/read-noise model.
+
+Recovery photometry does use the SPHEREx `VARIANCE` plane when available, and
+converts it to `uJy^2` with the SAPM image-unit scale. However, for injected
+FITS products, that variance is still the original frame variance.
+
+Interpretation of current tests:
+
+- Blind raw recovery currently tests whether deterministic added flux can be
+  recovered using the original SPHEREx noise model.
+- This is probably acceptable for weak signals when background/instrument noise
+  dominates.
+- It is optimistic for very bright injected signals because source Poisson noise
+  is missing.
+- Paired-delta recovery is a calibration sanity test, not a science discovery
+  test.
+
+Needed work:
+
+1. Add `noise_model` metadata to injection manifests. Current value:
+   `deterministic_image_only`.
+2. Add an optional variance update mode for injected pixels.
+3. If SPHEREx gain/electron calibration is available, add source Poisson noise
+   and source variance in physical detector units.
+4. Report scorer mode explicitly in all recovery summaries:
+   `paired_delta`, `blind_raw_injected`, or `science_raw_baseline`.
+5. Calibrate blind raw recovery thresholds against both injected runs and
+   baseline science false-candidate rates.
 
 ## Unit Model
 

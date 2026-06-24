@@ -26,6 +26,16 @@ else:
     _WARP_IMPORT_ERROR = None
 
 
+def _log_phase(enabled: bool, name: str, start: float, **fields: object) -> float:
+    now = time.perf_counter()
+    if not enabled:
+        return now
+    payload = {"phase": name, "elapsed_sec": round(now - start, 6)}
+    payload.update(fields)
+    print(json.dumps(payload, sort_keys=True), flush=True)
+    return now
+
+
 @wp.kernel(enable_backward=False)  # type: ignore[union-attr]
 def _blind_score_kernel(
     offsets: wp.array(dtype=wp.int32),
@@ -111,6 +121,71 @@ def _blind_score_kernel(
     out_snr[gid] = snr
     out_support[gid] = support
     out_continuum[gid] = continuum
+
+
+@wp.kernel(enable_backward=False)  # type: ignore[union-attr]
+def _topk_per_target_kernel(
+    snr: wp.array(dtype=wp.float32),
+    amp: wp.array(dtype=wp.float32),
+    amp_unc: wp.array(dtype=wp.float32),
+    support: wp.array(dtype=wp.int32),
+    continuum: wp.array(dtype=wp.float32),
+    n_lines: int,
+    top_k: int,
+    min_snr: float,
+    min_separation_bins: int,
+    out_line_idx: wp.array(dtype=wp.int32),
+    out_snr: wp.array(dtype=wp.float32),
+    out_amp: wp.array(dtype=wp.float32),
+    out_amp_unc: wp.array(dtype=wp.float32),
+    out_support: wp.array(dtype=wp.int32),
+    out_continuum: wp.array(dtype=wp.float32),
+) -> None:
+    target_idx = wp.tid()
+    out_base = target_idx * top_k
+    k = int(0)
+    while k < top_k:
+        best_line = int(-1)
+        best_snr = min_snr
+        li = int(0)
+        while li < n_lines:
+            score_idx = target_idx * n_lines + li
+            s = snr[score_idx]
+            if wp.isfinite(s) and s >= best_snr:
+                allowed = int(1)
+                prev = int(0)
+                while prev < k:
+                    chosen = out_line_idx[out_base + prev]
+                    if chosen >= int(0) and wp.abs(li - chosen) <= min_separation_bins:
+                        allowed = int(0)
+                    prev += 1
+                if allowed == int(1):
+                    left = float(-3.402823e38)
+                    right = float(-3.402823e38)
+                    if li > int(0):
+                        left = snr[score_idx - int(1)]
+                    if li + int(1) < n_lines:
+                        right = snr[score_idx + int(1)]
+                    if s >= left and s >= right:
+                        best_snr = s
+                        best_line = li
+            li += 1
+        out_idx = out_base + k
+        out_line_idx[out_idx] = best_line
+        if best_line >= int(0):
+            score_idx = target_idx * n_lines + best_line
+            out_snr[out_idx] = snr[score_idx]
+            out_amp[out_idx] = amp[score_idx]
+            out_amp_unc[out_idx] = amp_unc[score_idx]
+            out_support[out_idx] = support[score_idx]
+            out_continuum[out_idx] = continuum[score_idx]
+        else:
+            out_snr[out_idx] = float(-3.402823e38)
+            out_amp[out_idx] = float(-3.402823e38)
+            out_amp_unc[out_idx] = float(3.402823e38)
+            out_support[out_idx] = int(0)
+            out_continuum[out_idx] = float(-3.402823e38)
+        k += 1
 
 
 def _pack_targets(df: pd.DataFrame, target_ids: list[str]) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
@@ -233,6 +308,47 @@ def _enrich_candidates(
     return pd.DataFrame(enriched)
 
 
+def _candidate_row(
+    *,
+    mode: str,
+    flux_kind: str,
+    target_id: str,
+    line_nm: float,
+    line_width_nm: float,
+    matched_flux_uJy: float,
+    matched_flux_unc_uJy: float,
+    matched_snr: float,
+    support: int,
+    continuum: float,
+    min_line_nm: float,
+    max_line_nm: float,
+) -> dict[str, object]:
+    return {
+        "target_id": target_id,
+        "candidate_line_nm": line_nm,
+        "line_family": "blind",
+        "nominal_line_nm": line_nm,
+        "offset_nm": 0.0,
+        "line_width_nm": line_width_nm,
+        "matched_flux_uJy": matched_flux_uJy,
+        "matched_flux_unc_uJy": matched_flux_unc_uJy,
+        "matched_snr": matched_snr,
+        "score": matched_snr,
+        "n_supporting_points": support,
+        "n_flagged_nearby": 0,
+        "local_continuum_uJy": continuum,
+        "local_residual_rms_uJy": np.nan,
+        "continuum_points": np.nan,
+        "wavelength_min_um": float(min_line_nm / 1000.0),
+        "wavelength_max_um": float(max_line_nm / 1000.0),
+        "best_frame_ids": "",
+        "detectors": "",
+        "candidate_status": "candidate",
+        "score_mode": f"{mode}_mean_continuum",
+        "flux_kind": flux_kind,
+    }
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Warp dense blind matched-filter scoring over SPHEREx spectra.")
     parser.add_argument("--run-dir", type=Path, help="Raw spectra run directory.")
@@ -260,6 +376,10 @@ def main() -> None:
     parser.add_argument("--max-targets", type=int)
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--allow-approx-wavelengths", action="store_true")
+    parser.add_argument("--profile", action="store_true", help="Print JSON phase timings while the scan runs.")
+    parser.add_argument("--candidate-mode", choices=["exhaustive", "topk"], default="exhaustive")
+    parser.add_argument("--top-k-per-target", type=int, default=10)
+    parser.add_argument("--top-k-min-separation-nm", type=float)
     args = parser.parse_args()
 
     if wp is None:
@@ -268,14 +388,33 @@ def main() -> None:
 
     t0 = time.perf_counter()
     measurements, mode = _load_scoring_table(args)
+    t_phase = _log_phase(
+        args.profile,
+        "load_scoring_table",
+        t0,
+        mode=mode,
+        rows=int(len(measurements)),
+        targets=int(measurements["target_id"].nunique()) if "target_id" in measurements else None,
+    )
     target_ids = _target_ids_from_args(measurements, args)
     if not target_ids:
         raise SystemExit("No targets selected")
+    t_phase = _log_phase(args.profile, "select_targets", t_phase, target_count=len(target_ids))
 
     lines = _line_grid(args.min_line_nm, args.max_line_nm, args.grid_step_nm, args.line_width_nm)
     line_nm = np.asarray([float(line["candidate_line_nm"]) for line in lines], dtype=np.float32)
     selected = measurements[measurements["target_id"].astype(str).isin(target_ids)].copy()
+    t_phase = _log_phase(args.profile, "filter_measurements", t_phase, selected_rows=int(len(selected)), line_count=len(lines))
     offsets, lengths, wave, cband, flux, unc = _pack_targets(selected, target_ids)
+    t_phase = _log_phase(
+        args.profile,
+        "pack_targets",
+        t_phase,
+        packed_rows=int(len(wave)),
+        target_count=len(target_ids),
+        median_rows_per_target=float(np.median(lengths)) if len(lengths) else None,
+        max_rows_per_target=int(np.max(lengths)) if len(lengths) else None,
+    )
     pack_sec = time.perf_counter() - t0
 
     n_scores = int(len(target_ids) * len(lines))
@@ -292,6 +431,7 @@ def main() -> None:
     snr_dev = wp.empty(n_scores, dtype=wp.float32, device=args.device)
     support_dev = wp.empty(n_scores, dtype=wp.int32, device=args.device)
     continuum_dev = wp.empty(n_scores, dtype=wp.float32, device=args.device)
+    t_phase = _log_phase(args.profile, "device_alloc_copy", t_phase, device=args.device, score_rows=n_scores)
     wp.launch(
         _blind_score_kernel,
         dim=n_scores,
@@ -319,42 +459,116 @@ def main() -> None:
     )
     wp.synchronize_device(args.device)
     kernel_sec = time.perf_counter() - t1
+    t_phase = _log_phase(
+        args.profile,
+        "kernel",
+        t_phase,
+        kernel_sec=kernel_sec,
+        scores_per_sec=float(n_scores / kernel_sec) if kernel_sec > 0 else None,
+    )
 
     t2 = time.perf_counter()
-    snr = snr_dev.numpy().reshape((len(target_ids), len(lines)))
-    amp = amp_dev.numpy().reshape((len(target_ids), len(lines)))
-    amp_unc = amp_unc_dev.numpy().reshape((len(target_ids), len(lines)))
-    support = support_dev.numpy().reshape((len(target_ids), len(lines)))
-    continuum = continuum_dev.numpy().reshape((len(target_ids), len(lines)))
     rows = []
-    target_arr, line_arr = np.where(snr >= float(args.min_snr))
-    for ti, li in zip(target_arr.tolist(), line_arr.tolist(), strict=True):
-        rows.append(
-            {
-                "target_id": target_ids[ti],
-                "candidate_line_nm": float(line_nm[li]),
-                "line_family": "blind",
-                "nominal_line_nm": float(line_nm[li]),
-                "offset_nm": 0.0,
-                "line_width_nm": float(args.line_width_nm),
-                "matched_flux_uJy": float(amp[ti, li]),
-                "matched_flux_unc_uJy": float(amp_unc[ti, li]),
-                "matched_snr": float(snr[ti, li]),
-                "score": float(snr[ti, li]),
-                "n_supporting_points": int(support[ti, li]),
-                "n_flagged_nearby": 0,
-                "local_continuum_uJy": float(continuum[ti, li]),
-                "local_residual_rms_uJy": np.nan,
-                "continuum_points": np.nan,
-                "wavelength_min_um": float(args.min_line_nm / 1000.0),
-                "wavelength_max_um": float(args.max_line_nm / 1000.0),
-                "best_frame_ids": "",
-                "detectors": "",
-                "candidate_status": "candidate",
-                "score_mode": f"{mode}_mean_continuum",
-                "flux_kind": args.flux_kind,
-            }
+    if args.candidate_mode == "topk":
+        top_k = max(1, int(args.top_k_per_target))
+        min_sep_nm = float(args.top_k_min_separation_nm if args.top_k_min_separation_nm is not None else args.cluster_gap_nm)
+        min_sep_bins = max(1, int(math.ceil(min_sep_nm / max(float(args.grid_step_nm), 1e-9))))
+        compact_size = int(len(target_ids) * top_k)
+        top_line_dev = wp.empty(compact_size, dtype=wp.int32, device=args.device)
+        top_snr_dev = wp.empty(compact_size, dtype=wp.float32, device=args.device)
+        top_amp_dev = wp.empty(compact_size, dtype=wp.float32, device=args.device)
+        top_unc_dev = wp.empty(compact_size, dtype=wp.float32, device=args.device)
+        top_support_dev = wp.empty(compact_size, dtype=wp.int32, device=args.device)
+        top_continuum_dev = wp.empty(compact_size, dtype=wp.float32, device=args.device)
+        wp.launch(
+            _topk_per_target_kernel,
+            dim=len(target_ids),
+            inputs=[
+                snr_dev,
+                amp_dev,
+                amp_unc_dev,
+                support_dev,
+                continuum_dev,
+                int(len(lines)),
+                top_k,
+                float(args.min_snr),
+                min_sep_bins,
+                top_line_dev,
+                top_snr_dev,
+                top_amp_dev,
+                top_unc_dev,
+                top_support_dev,
+                top_continuum_dev,
+            ],
+            device=args.device,
         )
+        wp.synchronize_device(args.device)
+        t_phase = _log_phase(
+            args.profile,
+            "topk_reduce",
+            t_phase,
+            top_k=top_k,
+            min_separation_bins=min_sep_bins,
+            compact_rows=compact_size,
+        )
+        top_line = top_line_dev.numpy().reshape((len(target_ids), top_k))
+        top_snr = top_snr_dev.numpy().reshape((len(target_ids), top_k))
+        top_amp = top_amp_dev.numpy().reshape((len(target_ids), top_k))
+        top_unc = top_unc_dev.numpy().reshape((len(target_ids), top_k))
+        top_support = top_support_dev.numpy().reshape((len(target_ids), top_k))
+        top_continuum = top_continuum_dev.numpy().reshape((len(target_ids), top_k))
+        t_phase = _log_phase(args.profile, "copyback_topk", t_phase, array_shape=list(top_line.shape), score_rows=compact_size)
+        hit_count = int(np.count_nonzero(top_line >= 0))
+        t_phase = _log_phase(args.profile, "threshold", t_phase, min_snr=args.min_snr, hit_count=hit_count)
+        for ti in range(len(target_ids)):
+            for ki in range(top_k):
+                li = int(top_line[ti, ki])
+                if li < 0:
+                    continue
+                rows.append(
+                    _candidate_row(
+                        mode=mode,
+                        flux_kind=args.flux_kind,
+                        target_id=target_ids[ti],
+                        line_nm=float(line_nm[li]),
+                        line_width_nm=float(args.line_width_nm),
+                        matched_flux_uJy=float(top_amp[ti, ki]),
+                        matched_flux_unc_uJy=float(top_unc[ti, ki]),
+                        matched_snr=float(top_snr[ti, ki]),
+                        support=int(top_support[ti, ki]),
+                        continuum=float(top_continuum[ti, ki]),
+                        min_line_nm=float(args.min_line_nm),
+                        max_line_nm=float(args.max_line_nm),
+                    )
+                )
+    else:
+        snr = snr_dev.numpy().reshape((len(target_ids), len(lines)))
+        amp = amp_dev.numpy().reshape((len(target_ids), len(lines)))
+        amp_unc = amp_unc_dev.numpy().reshape((len(target_ids), len(lines)))
+        support = support_dev.numpy().reshape((len(target_ids), len(lines)))
+        continuum = continuum_dev.numpy().reshape((len(target_ids), len(lines)))
+        t_phase = _log_phase(args.profile, "copyback", t_phase, array_shape=list(snr.shape), score_rows=n_scores)
+        target_arr, line_arr = np.where(snr >= float(args.min_snr))
+        hit_count = int(len(target_arr))
+        t_phase = _log_phase(args.profile, "threshold", t_phase, min_snr=args.min_snr, hit_count=hit_count)
+        for ti, li in zip(target_arr.tolist(), line_arr.tolist(), strict=True):
+            rows.append(
+                _candidate_row(
+                    mode=mode,
+                    flux_kind=args.flux_kind,
+                    target_id=target_ids[ti],
+                    line_nm=float(line_nm[li]),
+                    line_width_nm=float(args.line_width_nm),
+                    matched_flux_uJy=float(amp[ti, li]),
+                    matched_flux_unc_uJy=float(amp_unc[ti, li]),
+                    matched_snr=float(snr[ti, li]),
+                    support=int(support[ti, li]),
+                    continuum=float(continuum[ti, li]),
+                    min_line_nm=float(args.min_line_nm),
+                    max_line_nm=float(args.max_line_nm),
+                )
+            )
+    t_phase = _log_phase(args.profile, "materialize_candidate_rows", t_phase, row_count=len(rows))
     candidates = pd.DataFrame(rows).sort_values("matched_snr", ascending=False) if rows else pd.DataFrame()
     candidates = _enrich_candidates(
         candidates,
@@ -363,13 +577,16 @@ def main() -> None:
         min_template_response=args.min_template_response,
         local_window_um=args.local_window_um,
     )
+    t_phase = _log_phase(args.profile, "enrich_candidates", t_phase, candidate_rows=int(len(candidates)))
     clusters = _cluster_candidates(candidates, args.cluster_gap_nm)
+    t_phase = _log_phase(args.profile, "cluster_candidates", t_phase, cluster_rows=int(len(clusters)))
     collect_sec = time.perf_counter() - t2
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(lines).to_parquet(args.output_dir / "blind_line_grid.parquet", index=False)
     candidates.to_parquet(args.output_dir / "blind_matched_filter_candidates.parquet", index=False)
     clusters.to_parquet(args.output_dir / "blind_candidate_clusters.parquet", index=False)
+    t_phase = _log_phase(args.profile, "write_outputs", t_phase, output_dir=str(args.output_dir))
     summary = {
         "mode": mode,
         "device": args.device,
@@ -379,8 +596,11 @@ def main() -> None:
         "target_count": len(target_ids),
         "line_count": len(lines),
         "score_rows": n_scores,
+        "hit_rows": hit_count,
         "candidate_rows": int(len(candidates)),
         "cluster_rows": int(len(clusters)),
+        "candidate_mode": args.candidate_mode,
+        "top_k_per_target": int(args.top_k_per_target) if args.candidate_mode == "topk" else None,
         "pack_sec": pack_sec,
         "kernel_sec": kernel_sec,
         "collect_sec": collect_sec,

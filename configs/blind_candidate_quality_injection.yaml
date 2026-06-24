@@ -1,0 +1,43 @@
+# Quality scoring defaults for blind recovery on injected raw spectra.
+#
+# This is deliberately looser than the science triage config. The goal is to
+# test whether planted signals are detectable in the raw injected run, not to
+# produce a final low-false-positive science candidate list.
+
+version: 1
+
+thresholds:
+  require_both_methods: true
+  max_flagged_points_sum: 25
+  min_aperture_support: 2
+  min_psf_support: 2
+  min_detector_count: 1
+  min_frame_count: 1
+  flux_ratio_psf_aperture_min: 0.1
+  flux_ratio_psf_aperture_max: 10.0
+  max_aperture_peak_snr: 1000000.0
+  max_psf_peak_snr: 1000000.0
+  max_cluster_width_nm: 180.0
+
+weights:
+  base: 0.0
+  both_methods_bonus: 25.0
+  support_per_point: 4.0
+  detector_per_detector: 2.0
+  frame_per_frame: 1.0
+  snr_log_bonus: 8.0
+  flux_ratio_penalty_per_log10: 6.0
+  flagged_point_penalty: 1.5
+  cluster_width_penalty_per_100nm: 3.0
+  missing_method_penalty: 60.0
+  failed_threshold_penalty: 25.0
+
+categories:
+  high_confidence:
+    min_quality_score: 70.0
+    require_quality_pass: true
+  review:
+    min_quality_score: 25.0
+    require_quality_pass: false
+  reject:
+    max_quality_score: 25.0

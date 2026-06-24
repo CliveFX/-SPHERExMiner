@@ -95,8 +95,21 @@ This wrapper runs, per target:
 2. Mixed-laser injection plan.
 3. FITS-level injection into copied FITS files.
 4. Injected spectra run using path overrides.
-5. Paired baseline/injected matched-filter classifier.
-6. Recovery scoring and false-positive review manifest.
+5. Raw science blind scan on the baseline run.
+6. Raw injected blind scan on the injected run.
+7. Focused blind raw recovery scan on injected truth targets.
+8. Paired baseline/injected matched-filter classifier.
+9. Recovery scoring and false-positive review manifest.
+
+The important recovery modes are:
+
+- **Science blind search**: raw baseline spectra, no subtraction.
+- **Blind raw recovery**: raw injected spectra, no subtraction, filtered to injected target IDs.
+- **Paired-delta recovery**: injected minus baseline, useful but optimistic.
+
+The campaign wrapper runs all three modes by default when `--blind-scan`,
+`--blind-raw-scan`, `--blind-raw-recovery`, and `--blind-flux-kind both` are
+left at their defaults.
 
 Full default campaign:
 
@@ -130,6 +143,24 @@ Current deep default shape:
   --gaia-g-max 16 \
   --max-field-workers 24 \
   --warp-devices cuda:0,cuda:1,cuda:2
+```
+
+To repeat a campaign using the same already-resolved safe Gaia anchor target
+list, pass the prior campaign's `resolved_gaia_anchor_targets.yaml` and disable
+anchor re-resolution:
+
+```bash
+.venv/bin/python tools/run_visible_sky_injection_campaign.py \
+  --campaign-prefix cv_june_g11_16_f500_threepart_v1 \
+  --targets /mnt/niroseti/spherex_cache/campaigns/cv_june_g11_16_f500_wideinj/resolved_gaia_anchor_targets.yaml \
+  --no-resolve-gaia-anchors \
+  --limit-fields 500 \
+  --max-gaia-sources 6000 \
+  --gaia-g-min 11 \
+  --gaia-g-max 16 \
+  --max-field-workers 24 \
+  --warp-devices cuda:0,cuda:1,cuda:2 \
+  --viewer-base-url http://192.168.1.224:8765
 ```
 
 Wider injection ladder for threshold/false-positive characterization:
@@ -229,21 +260,64 @@ server process.
 Dashboard URLs:
 
 ```text
+http://<host>:8765/campaign-status?campaign=<campaign_name>
 http://<host>:8765/simple-status?run=<run_name>
 http://<host>:8765/spectra?run=<run_name>
 http://<host>:8765/injections?run=<injected_run_name>
 http://<host>:8765/injections?run=<injected_run_name>&status=candidate
+http://<host>:8765/candidate-summary?source=baseline
+http://<host>:8765/blind-candidates?run=<run_name>&scope=raw
 ```
 
 Dashboard meanings:
 
+- `campaign-status`: campaign-level target and stage progress across baseline,
+  science blind, injection, injected spectra, injected raw blind, paired-delta,
+  and truth raw recovery products.
 - `simple-status`: low-overhead run progress and field status.
 - `spectra`: target spectra browser with aperture, PSF, flags, and injection
   markers when present.
 - `injections`: injection/recovery browser with recovery truth, aperture and PSF
   spectra, scorer candidates, and a separate synthetic injected-response panel.
+- `candidate-summary`: campaign-level raw blind candidate summary. Use
+  `source=baseline` for science candidates and `source=injected` for raw injected
+  QA.
+- `blind-candidates`: detailed browser for raw or paired blind candidate tables.
 - `/`: older field image viewer. Useful for visual context, but not the primary
   status surface.
+
+## Blind Raw Recovery Products
+
+For each injected run, the campaign now writes a focused raw recovery product:
+
+```text
+blind_classifier_injected_raw_truth_aperture_topk/
+blind_classifier_injected_raw_truth_psf_topk/
+blind_classifier_injected_raw_truth_joint_topk/
+blind_raw_recovery_truth_topk/
+```
+
+The key summary is:
+
+```text
+blind_raw_recovery_truth_topk/blind_raw_recovery_summary.json
+```
+
+This is the honest injected-source discovery test: the scorer sees the raw
+injected spectra, not `injected - baseline`. It is filtered to injected target
+IDs for speed, but the wavelength scan remains blind.
+
+## Injection Noise Caveat
+
+Current fake FITS injection is deterministic image injection:
+
+- `IMAGE` is modified.
+- `VARIANCE` is not updated.
+- No random source photon noise is added.
+
+The recovery pipeline still uses SPHEREx variance-derived photometric
+uncertainties. Treat current injected recovery curves as deterministic-signal
+benchmarks until source-noise/variance injection is implemented.
 
 ## Manual Injection/Recovery Pipeline
 

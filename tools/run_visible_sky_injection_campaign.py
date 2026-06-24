@@ -219,6 +219,7 @@ def _run_blind_raw(
     args: argparse.Namespace,
     log_path: Path,
     env: dict[str, str],
+    target_ids_file: Path | None = None,
 ) -> None:
     cmd = [
         py,
@@ -238,6 +239,12 @@ def _run_blind_raw(
         "--device",
         args.blind_warp_device,
     ]
+    if target_ids_file is not None:
+        cmd.extend(["--target-ids-file", str(target_ids_file)])
+    if args.blind_candidate_mode == "topk":
+        cmd.extend(["--candidate-mode", "topk", "--top-k-per-target", str(args.blind_top_k_per_target)])
+        if args.blind_top_k_min_separation_nm is not None:
+            cmd.extend(["--top-k-min-separation-nm", str(args.blind_top_k_min_separation_nm)])
     _run(cmd, log_path=log_path, env=env, dry_run=args.dry_run)
 
 
@@ -272,6 +279,10 @@ def _run_blind_paired(
         "--device",
         args.blind_warp_device,
     ]
+    if args.blind_candidate_mode == "topk":
+        cmd.extend(["--candidate-mode", "topk", "--top-k-per-target", str(args.blind_top_k_per_target)])
+        if args.blind_top_k_min_separation_nm is not None:
+            cmd.extend(["--top-k-min-separation-nm", str(args.blind_top_k_min_separation_nm)])
     _run(cmd, log_path=log_path, env=env, dry_run=args.dry_run)
 
 
@@ -284,9 +295,9 @@ def _run_blind_joint(
     args: argparse.Namespace,
     log_path: Path,
     env: dict[str, str],
+    quality_config: Path | None = None,
 ) -> None:
-    _run(
-        [
+    cmd = [
             py,
             "tools/rank_blind_candidates.py",
             "--aperture-dir",
@@ -297,6 +308,45 @@ def _run_blind_joint(
             str(output_dir),
             "--match-tolerance-nm",
             str(args.blind_joint_tolerance_nm),
+    ]
+    if quality_config is not None:
+        cmd.extend(["--quality-config", str(quality_config)])
+    _run(cmd, log_path=log_path, env=env, dry_run=args.dry_run)
+
+
+def _write_injection_target_ids(manifest_path: Path, output_path: Path) -> Path:
+    manifest = _json(manifest_path)
+    target_ids = sorted({str(item.get("target_id")) for item in manifest.get("injections", []) if item.get("target_id")})
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("\n".join(target_ids) + ("\n" if target_ids else ""), encoding="utf-8")
+    return output_path
+
+
+def _run_blind_raw_recovery_score(
+    *,
+    py: str,
+    manifest_path: Path,
+    injected_run: Path,
+    joint_dir: Path,
+    output_dir: Path,
+    args: argparse.Namespace,
+    log_path: Path,
+    env: dict[str, str],
+) -> None:
+    _run(
+        [
+            py,
+            "tools/score_blind_raw_recovery.py",
+            "--manifest",
+            str(manifest_path),
+            "--injected-run-dir",
+            str(injected_run),
+            "--candidates",
+            str(joint_dir / "blind_joint_candidates.parquet"),
+            "--output-dir",
+            str(output_dir),
+            "--wavelength-tolerance-nm",
+            str(args.wavelength_tolerance_nm),
         ],
         log_path=log_path,
         env=env,
@@ -336,9 +386,19 @@ def main() -> None:
     parser.add_argument("--blind-raw-min-snr", type=float, default=5.0)
     parser.add_argument("--blind-min-supporting-points", type=int, default=2)
     parser.add_argument("--blind-flux-kind", choices=["aperture", "psf", "both"], default="both")
-    parser.add_argument("--blind-raw-scan", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--blind-raw-scan", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--blind-warp-device", default="cuda:0")
     parser.add_argument("--blind-joint-tolerance-nm", type=float, default=10.0)
+    parser.add_argument("--blind-candidate-mode", choices=["exhaustive", "topk"], default="topk")
+    parser.add_argument("--blind-top-k-per-target", type=int, default=10)
+    parser.add_argument("--blind-top-k-min-separation-nm", type=float)
+    parser.add_argument("--blind-science-quality-config", type=Path, default=REPO_ROOT / "configs" / "blind_candidate_quality.yaml")
+    parser.add_argument(
+        "--blind-injection-quality-config",
+        type=Path,
+        default=REPO_ROOT / "configs" / "blind_candidate_quality_injection.yaml",
+    )
+    parser.add_argument("--blind-raw-recovery", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--viewer-base-url", default="http://127.0.0.1:8765")
     parser.add_argument("--force", action="store_true", help="Rerun stages even when expected outputs exist.")
     parser.add_argument("--dry-run", action="store_true")
@@ -466,6 +526,7 @@ def main() -> None:
                         args=args,
                         log_path=campaign_root / "logs" / f"{target_id}_blind_baseline_joint.log",
                         env=env,
+                        quality_config=args.blind_science_quality_config,
                     )
 
         if args.force or not _done(plan_path):
@@ -611,7 +672,61 @@ def main() -> None:
                             args=args,
                             log_path=campaign_root / "logs" / f"{target_id}_blind_{scope}_joint.log",
                             env=env,
+                            quality_config=args.blind_injection_quality_config if scope == "injected" else args.blind_injection_quality_config,
                         )
+
+        if args.blind_scan and args.blind_raw_recovery and args.blind_flux_kind == "both":
+            truth_ids_path = injected_run / "blind_raw_recovery_truth_target_ids.txt"
+            if args.force or not _done(truth_ids_path):
+                _write_injection_target_ids(manifest_path, truth_ids_path)
+            truth_aperture_dir = injected_run / "blind_classifier_injected_raw_truth_aperture_topk"
+            truth_psf_dir = injected_run / "blind_classifier_injected_raw_truth_psf_topk"
+            truth_joint_dir = injected_run / "blind_classifier_injected_raw_truth_joint_topk"
+            truth_score_dir = injected_run / "blind_raw_recovery_truth_topk"
+            if args.force or not _done(truth_aperture_dir / "blind_candidate_clusters.parquet"):
+                _run_blind_raw(
+                    py=py,
+                    run_dir=injected_run,
+                    output_dir=truth_aperture_dir,
+                    flux_kind="aperture",
+                    args=args,
+                    log_path=campaign_root / "logs" / f"{target_id}_blind_raw_recovery_aperture.log",
+                    env=env,
+                    target_ids_file=truth_ids_path,
+                )
+            if args.force or not _done(truth_psf_dir / "blind_candidate_clusters.parquet"):
+                _run_blind_raw(
+                    py=py,
+                    run_dir=injected_run,
+                    output_dir=truth_psf_dir,
+                    flux_kind="psf",
+                    args=args,
+                    log_path=campaign_root / "logs" / f"{target_id}_blind_raw_recovery_psf.log",
+                    env=env,
+                    target_ids_file=truth_ids_path,
+                )
+            if args.force or not _done(truth_joint_dir / "blind_joint_candidates.parquet"):
+                _run_blind_joint(
+                    py=py,
+                    aperture_dir=truth_aperture_dir,
+                    psf_dir=truth_psf_dir,
+                    output_dir=truth_joint_dir,
+                    args=args,
+                    log_path=campaign_root / "logs" / f"{target_id}_blind_raw_recovery_joint.log",
+                    env=env,
+                    quality_config=args.blind_injection_quality_config,
+                )
+            if args.force or not _done(truth_score_dir / "blind_raw_recovery_summary.json"):
+                _run_blind_raw_recovery_score(
+                    py=py,
+                    manifest_path=manifest_path,
+                    injected_run=injected_run,
+                    joint_dir=truth_joint_dir,
+                    output_dir=truth_score_dir,
+                    args=args,
+                    log_path=campaign_root / "logs" / f"{target_id}_blind_raw_recovery_score.log",
+                    env=env,
+                )
 
         if args.force or not _done(classifier_dir / "matched_filter_candidates.parquet"):
             _run(
@@ -670,6 +785,7 @@ def main() -> None:
                 "baseline_blind_joint_summary": str(baseline_run / "blind_classifier_joint_warp" / "blind_joint_summary.json"),
                 "injected_blind_joint_summary": str(injected_run / "blind_classifier_joint_warp" / "blind_joint_summary.json"),
                 "paired_blind_joint_summary": str(injected_run / "blind_classifier_paired_delta_joint_warp" / "blind_joint_summary.json"),
+                "blind_raw_recovery_summary": str(injected_run / "blind_raw_recovery_truth_topk" / "blind_raw_recovery_summary.json"),
                 "false_positive_review": str(review_path),
                 "review_url": review.get("review_url"),
             }

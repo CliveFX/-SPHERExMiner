@@ -1,0 +1,43 @@
+# Quality scoring defaults for blind narrowband candidates.
+#
+# This is intentionally conservative for raw uninjected science scans. It is not
+# a discovery claim; it is a triage layer that cuts down obvious artifacts before
+# humans inspect candidates.
+
+version: 1
+
+thresholds:
+  require_both_methods: true
+  max_flagged_points_sum: 1
+  min_aperture_support: 3
+  min_psf_support: 3
+  min_detector_count: 1
+  min_frame_count: 2
+  flux_ratio_psf_aperture_min: 0.3
+  flux_ratio_psf_aperture_max: 3.0
+  max_aperture_peak_snr: 1000.0
+  max_psf_peak_snr: 1000.0
+  max_cluster_width_nm: 120.0
+
+weights:
+  base: 0.0
+  both_methods_bonus: 25.0
+  support_per_point: 4.0
+  detector_per_detector: 2.0
+  frame_per_frame: 1.0
+  snr_log_bonus: 8.0
+  flux_ratio_penalty_per_log10: 12.0
+  flagged_point_penalty: 12.0
+  cluster_width_penalty_per_100nm: 5.0
+  missing_method_penalty: 60.0
+  failed_threshold_penalty: 40.0
+
+categories:
+  high_confidence:
+    min_quality_score: 70.0
+    require_quality_pass: true
+  review:
+    min_quality_score: 35.0
+    require_quality_pass: false
+  reject:
+    max_quality_score: 35.0

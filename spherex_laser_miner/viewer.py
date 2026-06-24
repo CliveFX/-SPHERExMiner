@@ -16,6 +16,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import yaml
 import astropy.units as u
 from astropy.coordinates import SkyCoord
 from astropy.io import fits
@@ -57,6 +58,10 @@ def _make_handler(run_dir: Path):
                     self._send_html(_injections_html())
                 elif path == "/blind-candidates":
                     self._send_html(_blind_candidates_html())
+                elif path == "/candidate-summary":
+                    self._send_html(_candidate_summary_html())
+                elif path == "/campaign-status":
+                    self._send_html(_campaign_status_html())
                 elif path == "/recovery-summary":
                     self._send_html(_recovery_summary_html())
                 elif path == "/frame-point":
@@ -91,6 +96,10 @@ def _make_handler(run_dir: Path):
                     self._send_json(_injections(active_run_dir, params))
                 elif path == "/api/blind-candidates":
                     self._send_json(_blind_candidates(active_run_dir, params))
+                elif path == "/api/candidate-summary":
+                    self._send_json(_candidate_summary(runs_root, params))
+                elif path == "/api/campaign-status":
+                    self._send_json(_campaign_status(runs_root, params))
                 elif path == "/api/recovery-summary":
                     self._send_json(_recovery_summary(runs_root, params))
                 elif path.startswith("/api/injection/"):
@@ -98,7 +107,7 @@ def _make_handler(run_dir: Path):
                     self._send_json(_injection_detail(active_run_dir, injection_id))
                 elif path.startswith("/api/blind-candidate/"):
                     candidate_id = urllib.parse.unquote(path.removeprefix("/api/blind-candidate/"))
-                    self._send_json(_blind_candidate_detail(active_run_dir, candidate_id))
+                    self._send_json(_blind_candidate_detail(active_run_dir, candidate_id, params))
                 elif path.startswith("/api/fits/"):
                     idx = int(path.split("/")[3])
                     self._send_json(_fits_info(active_run_dir, idx))
@@ -185,6 +194,153 @@ def _runs(runs_root: Path, active_run_dir: Path) -> list[dict[str, object]]:
             }
         )
     return rows
+
+
+def _campaign_status(runs_root: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    campaigns_root = runs_root.parent / "campaigns"
+    requested = (params.get("campaign") or [""])[0].strip()
+    campaigns = _campaign_names(campaigns_root)
+    if requested:
+        campaign_name = Path(requested).name
+    elif campaigns:
+        campaign_name = campaigns[0]
+    else:
+        campaign_name = ""
+    campaign_root = campaigns_root / campaign_name if campaign_name else campaigns_root
+    targets = _campaign_targets(campaign_root)
+    rows: list[dict[str, object]] = []
+    stage_totals: dict[str, dict[str, int]] = {}
+    for target in targets:
+        target_id = str(target.get("target_id") or "")
+        if not target_id:
+            continue
+        stages = _campaign_target_stages(runs_root, campaign_root, campaign_name, target_id)
+        for stage in stages:
+            bucket = stage_totals.setdefault(str(stage["stage"]), {"done": 0, "active": 0, "error": 0, "waiting": 0})
+            bucket[str(stage["status"])] = bucket.get(str(stage["status"]), 0) + 1
+        done = sum(1 for stage in stages if stage["status"] == "done")
+        active = sum(1 for stage in stages if stage["status"] == "active")
+        errors = sum(1 for stage in stages if stage["status"] == "error")
+        status = "error" if errors else ("active" if active else ("done" if done == len(stages) else "waiting"))
+        baseline_run = f"{campaign_name}_{target_id}_baseline"
+        injected_run = f"{campaign_name}_{target_id}_injected"
+        rows.append(
+            {
+                "target_id": target_id,
+                "object_name": target.get("object_name") or target.get("sky_center_object_name") or "",
+                "anchor_g": _maybe_float(target.get("anchor_phot_g_mean_mag")),
+                "status": status,
+                "done_stages": done,
+                "total_stages": len(stages),
+                "active_stages": active,
+                "error_stages": errors,
+                "current_stage": next((stage["stage"] for stage in stages if stage["status"] == "active"), ""),
+                "stages": stages,
+                "baseline_run": baseline_run,
+                "injected_run": injected_run,
+                "spectra_url": f"/spectra?run={urllib.parse.quote(injected_run)}",
+                "candidate_url": f"/candidate-summary?campaign={urllib.parse.quote(campaign_name)}",
+                "recovery_url": f"/recovery-summary?campaign={urllib.parse.quote(campaign_name)}",
+            }
+        )
+    summary = {
+        "campaign": campaign_name,
+        "campaign_root": str(campaign_root),
+        "target_count": len(rows),
+        "done_targets": sum(1 for row in rows if row["status"] == "done"),
+        "active_targets": sum(1 for row in rows if row["status"] == "active"),
+        "error_targets": sum(1 for row in rows if row["status"] == "error"),
+        "waiting_targets": sum(1 for row in rows if row["status"] == "waiting"),
+        "stage_totals": stage_totals,
+        "manifest_exists": (campaign_root / "campaign_manifest.json").exists(),
+        "manifest_rows": len(_read_json(campaign_root / "campaign_manifest.json") or []),
+    }
+    return {"campaigns": campaigns, "summary": summary, "targets": rows}
+
+
+def _campaign_names(campaigns_root: Path) -> list[str]:
+    if not campaigns_root.exists():
+        return []
+    return [path.name for path in sorted([p for p in campaigns_root.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True)]
+
+
+def _campaign_targets(campaign_root: Path) -> list[dict[str, object]]:
+    resolved_path = campaign_root / "resolved_gaia_anchor_targets.yaml"
+    if resolved_path.exists():
+        try:
+            doc = yaml.safe_load(resolved_path.read_text(encoding="utf-8")) or {}
+            targets = doc.get("targets") if isinstance(doc, dict) else None
+            if isinstance(targets, list):
+                return [target for target in targets if isinstance(target, dict)]
+        except Exception:
+            pass
+    manifest = _read_json(campaign_root / "campaign_manifest.json")
+    if isinstance(manifest, list):
+        return [row for row in manifest if isinstance(row, dict)]
+    return []
+
+
+def _campaign_target_stages(runs_root: Path, campaign_root: Path, campaign_name: str, target_id: str) -> list[dict[str, object]]:
+    base = runs_root / f"{campaign_name}_{target_id}_baseline"
+    inj = runs_root / f"{campaign_name}_{target_id}_injected"
+    logs = campaign_root / "logs"
+    injection_root = campaign_root.parent.parent / "injection_campaigns"
+    inject_outputs = sorted(injection_root.glob(f"{campaign_name}_{target_id}_mixed_lasers_s*/path_overrides.json"))
+    specs = [
+        ("baseline", base / "spectra" / "target_spectra.parquet", logs / f"{target_id}_baseline.log"),
+        ("science blind", base / "blind_classifier_joint_warp" / "blind_joint_candidates.parquet", logs / f"{target_id}_blind_baseline_joint.log"),
+        ("make plan", injection_root / f"{campaign_name}_{target_id}_mixed_lasers" / "injection_plan.json", logs / f"{target_id}_make_plan.log"),
+        ("inject fits", inject_outputs[0] if inject_outputs else injection_root / f"{campaign_name}_{target_id}_mixed_lasers_s*/path_overrides.json", logs / f"{target_id}_inject.log"),
+        ("injected spectra", inj / "spectra" / "target_spectra.parquet", logs / f"{target_id}_injected.log"),
+        ("injected raw blind", inj / "blind_classifier_joint_warp" / "blind_joint_candidates.parquet", logs / f"{target_id}_blind_injected_joint.log"),
+        ("paired delta", inj / "blind_classifier_paired_delta_joint_warp" / "blind_joint_candidates.parquet", logs / f"{target_id}_blind_paired_delta_joint.log"),
+        ("truth raw recovery", inj / "blind_raw_recovery_truth_topk" / "blind_raw_recovery_summary.json", logs / f"{target_id}_blind_raw_recovery_score.log"),
+        ("paired recovery", inj / "recovery_score_mixed_lasers" / "recovery_summary.json", logs / f"{target_id}_score.log"),
+    ]
+    return [_campaign_stage_status(stage, output_path, log_path) for stage, output_path, log_path in specs]
+
+
+def _campaign_stage_status(stage: str, output_path: Path | None, log_path: Path) -> dict[str, object]:
+    output_done = output_path.exists() if output_path is not None else False
+    log_exists = log_path.exists()
+    tail = _tail_text(log_path, 6000) if log_exists else ""
+    has_error = any(token in tail for token in ("Traceback", "command failed", "CalledProcessError", "Error:", "ERROR"))
+    if output_done:
+        status = "done"
+    elif has_error:
+        status = "error"
+    elif log_exists and time.time() - log_path.stat().st_mtime < 900:
+        status = "active"
+    elif log_exists:
+        status = "waiting"
+    else:
+        status = "waiting"
+    return {
+        "stage": stage,
+        "status": status,
+        "output": str(output_path) if output_path is not None else "",
+        "log": str(log_path),
+        "log_mtime": _format_time(log_path.stat().st_mtime) if log_exists else "",
+        "message": _last_nonempty_line(tail),
+    }
+
+
+def _tail_text(path: Path, max_bytes: int) -> str:
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - max_bytes))
+            return fh.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def _last_nonempty_line(text: str) -> str:
+    for line in reversed(text.splitlines()):
+        if line.strip():
+            return line.strip()[:300]
+    return ""
 
 
 def _summary(run_dir: Path) -> dict[str, object]:
@@ -336,6 +492,155 @@ def _recovery_summary_payload(
         "by_strength": _aggregate_recovery_rows(by_strength_rows, "find_me_snr"),
         "by_line": _aggregate_recovery_rows(by_line_rows, "line_family"),
         "false_positives": false_rows,
+    }
+
+
+def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    campaign_filter = (params.get("campaign") or [""])[0].strip()
+    q = (params.get("q") or [""])[0].strip().lower()
+    source = (params.get("source") or ["baseline"])[0].strip().lower()
+    tier = (params.get("tier") or ["all"])[0].strip()
+    min_snr = _query_float(params, "min_snr")
+    limit = min(5000, max(25, _query_int(params, "limit", 500)))
+    offset = max(0, _query_int(params, "offset", 0))
+
+    rows: list[dict[str, object]] = []
+    campaigns: set[str] = set()
+    scanned_runs = 0
+    candidate_runs = 0
+    if not runs_root.exists():
+        return _candidate_summary_payload([], [], source, campaign_filter, scanned_runs, candidate_runs, limit, offset)
+
+    for run_dir in sorted([path for path in runs_root.iterdir() if path.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True):
+        run_source, scope = _candidate_source_for_run(run_dir.name, source)
+        if run_source is None or scope is None:
+            continue
+        campaign, target = _campaign_and_target_from_run(run_dir.name)
+        if campaign_filter and campaign != campaign_filter:
+            continue
+        campaigns.add(campaign)
+        path = _blind_joint_path(run_dir, scope)
+        if path is None:
+            continue
+        scanned_runs += 1
+        try:
+            df = pd.read_parquet(path)
+        except Exception:
+            continue
+        if df.empty:
+            continue
+        candidate_runs += 1
+        df = df.copy()
+        if tier != "all" and "tier" in df:
+            df = df[df["tier"].astype(str).eq(tier)]
+        if min_snr is not None:
+            snr_cols = [col for col in ("rank_score", "psf_peak_snr", "aperture_peak_snr") if col in df]
+            if snr_cols:
+                max_snr = pd.concat([pd.to_numeric(df[col], errors="coerce") for col in snr_cols], axis=1).max(axis=1)
+                df = df[max_snr >= float(min_snr)]
+        if q:
+            mask = pd.Series(False, index=df.index)
+            for col in ("joint_candidate_id", "target_id", "tier", "detectors", "best_frame_ids"):
+                if col in df:
+                    mask |= df[col].astype(str).str.lower().str.contains(q, regex=False)
+            mask |= run_dir.name.lower().find(q) >= 0
+            mask |= str(campaign).lower().find(q) >= 0
+            mask |= str(target).lower().find(q) >= 0
+            df = df[mask]
+        if df.empty:
+            continue
+        for row in df.to_dict(orient="records"):
+            target_id = str(row.get("target_id") or "")
+            run_name = run_dir.name
+            blind_url = (
+                f"/blind-candidates?run={urllib.parse.quote(run_name)}"
+                f"&scope={urllib.parse.quote(scope)}&tier=all&target={urllib.parse.quote(target_id)}"
+            )
+            out = dict(row)
+            out.update(
+                {
+                    "run_name": run_name,
+                    "campaign": campaign,
+                    "target": target,
+                    "source": run_source,
+                    "scope": scope,
+                    "source_path": str(path),
+                    "spectra_url": f"/spectra?run={urllib.parse.quote(run_name)}&target={urllib.parse.quote(target_id)}",
+                    "blind_candidates_url": blind_url,
+                }
+            )
+            rows.append(out)
+
+    rows = _sort_candidate_summary_rows(rows, (params.get("sort") or ["rank"])[0])
+    total = len(rows)
+    page = rows[offset : offset + limit]
+    return _candidate_summary_payload(page, sorted(campaigns), source, campaign_filter, scanned_runs, candidate_runs, limit, offset, total)
+
+
+def _candidate_source_for_run(run_name: str, source: str) -> tuple[str | None, str | None]:
+    if source in {"baseline", "uninjected", "science"}:
+        return ("baseline", "raw") if run_name.endswith("_baseline") else (None, None)
+    if source in {"injected", "injected_raw"}:
+        return ("injected_raw", "raw") if run_name.endswith("_injected") else (None, None)
+    if source in {"paired", "paired_delta"}:
+        return ("paired_delta", "paired") if run_name.endswith("_injected") else (None, None)
+    if source == "all":
+        if run_name.endswith("_baseline"):
+            return "baseline", "raw"
+        if run_name.endswith("_injected"):
+            return "paired_delta", "paired"
+    return None, None
+
+
+def _sort_candidate_summary_rows(rows: list[dict[str, object]], sort: str) -> list[dict[str, object]]:
+    if not rows:
+        return []
+    df = pd.DataFrame(rows)
+    sort_cols = {
+        "rank": ["rank_score", "psf_peak_snr", "aperture_peak_snr"],
+        "snr": ["psf_peak_snr", "aperture_peak_snr", "rank_score"],
+        "wave": ["peak_line_nm"],
+        "support": ["psf_support", "aperture_support", "rank_score"],
+        "flags": ["flagged_points_sum", "rank_score"],
+        "target": ["target_id", "peak_line_nm"],
+        "run": ["run_name", "rank_score"],
+    }.get(sort, ["rank_score"])
+    present = [col for col in sort_cols if col in df]
+    if present:
+        ascending = [col in {"peak_line_nm", "flagged_points_sum", "target_id", "run_name"} for col in present]
+        df = df.sort_values(present, ascending=ascending, na_position="last", kind="mergesort")
+    return df.to_dict(orient="records")
+
+
+def _candidate_summary_payload(
+    rows: list[dict[str, object]],
+    campaigns: list[str],
+    source: str,
+    campaign_filter: str,
+    scanned_runs: int,
+    candidate_runs: int,
+    limit: int,
+    offset: int,
+    total: int | None = None,
+) -> dict[str, object]:
+    total_rows = len(rows) if total is None else total
+    tier_counts: dict[str, int] = {}
+    if rows:
+        tier_counts = pd.Series([str(row.get("tier") or "") for row in rows]).value_counts().sort_index().to_dict()
+    return {
+        "summary": {
+            "source": source,
+            "campaign_filter": campaign_filter,
+            "scanned_runs": scanned_runs,
+            "candidate_runs": candidate_runs,
+            "candidate_count": total_rows,
+            "tier_counts_page": tier_counts,
+        },
+        "campaigns": campaigns,
+        "rows": rows,
+        "total": total_rows,
+        "limit": limit,
+        "offset": offset,
     }
 
 
@@ -1112,7 +1417,8 @@ def _blind_joint_path(run_dir: Path, scope: str = "auto") -> Path | None:
                 run_dir / "blind_classifier_joint_warp_full" / "blind_joint_candidates.parquet",
             ]
         )
-    candidates.extend(sorted(run_dir.glob("blind_classifier*joint*/blind_joint_candidates.parquet")))
+    if scope == "auto":
+        candidates.extend(sorted(run_dir.glob("blind_classifier*joint*/blind_joint_candidates.parquet")))
     return next((path for path in candidates if path.exists()), None)
 
 
@@ -1233,8 +1539,9 @@ def _blind_candidates(run_dir: Path, params: dict[str, list[str]]) -> dict[str, 
     return {"rows": rows, "total": total, "limit": limit, "offset": offset, "summary": summary}
 
 
-def _blind_candidate_detail(run_dir: Path, candidate_id: str) -> dict[str, object]:
-    path = _blind_joint_path(run_dir)
+def _blind_candidate_detail(run_dir: Path, candidate_id: str, params: dict[str, list[str]] | None = None) -> dict[str, object]:
+    scope = ((params or {}).get("scope") or ["auto"])[0]
+    path = _blind_joint_path(run_dir, scope)
     if path is None:
         return {"joint_candidate_id": candidate_id, "error": "no blind joint candidates found"}
     df = pd.read_parquet(path)
@@ -1946,6 +2253,161 @@ init().catch(e => alert(e.stack || e));
 </html>"""
 
 
+def _campaign_status_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SPHEREx Campaign Status</title>
+  <style>
+    :root { --bg:#04070d; --panel:#07111f; --line:#164e63; --text:#dffcff; --muted:#7dd3fc; --cyan:#22d3ee; --green:#22c55e; --amber:#f59e0b; --red:#fb7185; --grey:#94a3b8; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:13px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing:0; }
+    header { position:sticky; top:0; z-index:2; display:flex; justify-content:space-between; align-items:center; gap:16px; padding:12px 16px; border-bottom:1px solid var(--line); background:rgba(4,7,13,.96); }
+    h1 { margin:0; color:var(--cyan); font-size:18px; }
+    a { color:var(--cyan); text-decoration:none; }
+    select, button { color:var(--text); background:#020617; border:1px solid var(--line); border-radius:4px; padding:7px 9px; }
+    button { cursor:pointer; font-weight:600; background:rgba(34,211,238,.12); }
+    main { padding:12px; display:grid; gap:12px; }
+    .cards { display:grid; grid-template-columns:repeat(6, minmax(120px,1fr)); gap:8px; }
+    .card, section { border:1px solid var(--line); background:rgba(7,17,31,.92); border-radius:6px; }
+    .card { padding:10px; min-width:0; }
+    .k { color:var(--muted); text-transform:uppercase; font-size:10px; }
+    .v { margin-top:4px; font:20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; overflow:hidden; text-overflow:ellipsis; }
+    section { padding:10px; min-width:0; }
+    h2 { margin:0 0 8px; color:var(--cyan); font-size:13px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; table-layout:fixed; }
+    th, td { padding:6px; border-bottom:1px solid rgba(22,78,99,.55); text-align:left; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+    th { color:var(--muted); font-weight:600; }
+    .done { color:var(--green); }
+    .active { color:var(--amber); }
+    .error { color:var(--red); }
+    .waiting { color:var(--grey); }
+    .stagegrid { display:grid; grid-template-columns:repeat(9, minmax(68px,1fr)); gap:4px; }
+    .stage { border:1px solid rgba(22,78,99,.65); border-radius:4px; padding:4px 5px; background:#020617; min-height:34px; }
+    .stage .name { color:var(--muted); font-size:10px; overflow:hidden; text-overflow:ellipsis; }
+    .stage .state { margin-top:2px; font:11px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .links a { margin-right:8px; }
+    @media (max-width: 1200px) { .cards { grid-template-columns:repeat(2,1fr); } .stagegrid { grid-template-columns:repeat(3,1fr); } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>SPHEREx Campaign Status</h1>
+  <div>
+    <select id="campaign" onchange="switchCampaign()"></select>
+    <button id="refreshButton" type="button" onclick="manualRefresh()">Refresh</button>
+    <a href="/candidate-summary">Candidates</a>
+    <a href="/recovery-summary">Recovery</a>
+    <a href="/simple-status">Run Status</a>
+  </div>
+</header>
+<main>
+  <div class="cards">
+    <div class="card"><div class="k">Targets</div><div id="targets" class="v">-</div></div>
+    <div class="card"><div class="k">Done</div><div id="done" class="v done">-</div></div>
+    <div class="card"><div class="k">Active</div><div id="active" class="v active">-</div></div>
+    <div class="card"><div class="k">Errors</div><div id="errors" class="v error">-</div></div>
+    <div class="card"><div class="k">Waiting</div><div id="waiting" class="v waiting">-</div></div>
+    <div class="card"><div class="k">Manifest Rows</div><div id="manifest" class="v">-</div></div>
+  </div>
+  <section>
+    <h2>Stage Totals</h2>
+    <div id="stageTotals"></div>
+  </section>
+  <section>
+    <h2>Targets</h2>
+    <div id="targetRows"></div>
+  </section>
+</main>
+<script>
+let selectedCampaign = new URLSearchParams(location.search).get('campaign') || '';
+let timer = null;
+
+async function getJSON(url) {
+  const r = await fetch(url, {cache:'no-store'});
+  if (!r.ok) throw new Error(await r.text());
+  return await r.json();
+}
+function qs(extra) {
+  const p = new URLSearchParams(extra || '');
+  if (selectedCampaign) p.set('campaign', selectedCampaign);
+  const s = p.toString();
+  return s ? '?' + s : '';
+}
+async function init() {
+  await refresh();
+  timer = setInterval(refresh, 3000);
+}
+async function manualRefresh() {
+  const b = document.getElementById('refreshButton');
+  b.disabled = true; b.textContent = 'Refreshing';
+  try { await refresh(); } finally { b.disabled = false; b.textContent = 'Refresh'; }
+}
+function switchCampaign() {
+  selectedCampaign = document.getElementById('campaign').value;
+  history.replaceState(null, '', '/campaign-status' + qs());
+  refresh();
+}
+async function refresh() {
+  const data = await getJSON('/api/campaign-status' + qs('ts=' + Date.now()));
+  const campaigns = data.campaigns || [];
+  if (!selectedCampaign && data.summary && data.summary.campaign) selectedCampaign = data.summary.campaign;
+  const sel = document.getElementById('campaign');
+  const old = selectedCampaign;
+  sel.innerHTML = campaigns.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  sel.value = campaigns.includes(old) ? old : (campaigns[0] || '');
+  selectedCampaign = sel.value;
+  const s = data.summary || {};
+  setText('targets', fmtInt(s.target_count));
+  setText('done', fmtInt(s.done_targets));
+  setText('active', fmtInt(s.active_targets));
+  setText('errors', fmtInt(s.error_targets));
+  setText('waiting', fmtInt(s.waiting_targets));
+  setText('manifest', fmtInt(s.manifest_rows));
+  renderStageTotals(s.stage_totals || {});
+  renderTargets(data.targets || []);
+}
+function renderStageTotals(totals) {
+  const rows = Object.entries(totals).map(([stage, v]) => ({stage, done:v.done||0, active:v.active||0, error:v.error||0, waiting:v.waiting||0}));
+  document.getElementById('stageTotals').innerHTML = table(rows, ['stage','done','active','error','waiting']);
+}
+function renderTargets(rows) {
+  if (!rows.length) {
+    document.getElementById('targetRows').innerHTML = '<div class="waiting">No campaign targets found</div>';
+    return;
+  }
+  document.getElementById('targetRows').innerHTML = rows.map(row => `
+    <div style="padding:10px 0;border-bottom:1px solid rgba(22,78,99,.55)">
+      <div style="display:grid;grid-template-columns:1.2fr .8fr .45fr .8fr;gap:10px;align-items:center">
+        <div title="${esc(row.object_name || '')}"><b>${esc(row.target_id)}</b><br><span class="waiting">${esc(row.object_name || '')}</span></div>
+        <div class="${esc(row.status)}">${esc(row.status)} · ${fmtInt(row.done_stages)}/${fmtInt(row.total_stages)}</div>
+        <div>G ${fmt(row.anchor_g)}</div>
+        <div class="links"><a href="${esc(row.spectra_url)}">spectra</a><a href="${esc(row.candidate_url)}">candidates</a><a href="${esc(row.recovery_url)}">recovery</a></div>
+      </div>
+      <div class="stagegrid">${(row.stages || []).map(stageCard).join('')}</div>
+    </div>`).join('');
+}
+function stageCard(s) {
+  const msg = s.message || s.log_mtime || '';
+  return `<div class="stage ${esc(s.status)}" title="${esc(msg)}"><div class="name">${esc(s.stage)}</div><div class="state ${esc(s.status)}">${esc(s.status)}</div></div>`;
+}
+function table(rows, cols) {
+  if (!rows.length) return '<div class="waiting">No rows</div>';
+  return '<table><thead><tr>' + cols.map(c => `<th>${esc(c)}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map(r => `<tr>` + cols.map(c => `<td class="${esc(String(r[c] || ''))}" title="${esc(fmt(r[c]))}">${esc(fmt(r[c]))}</td>`).join('') + '</tr>').join('') +
+    '</tbody></table>';
+}
+function setText(id, value) { document.getElementById(id).textContent = value; }
+function fmtInt(v) { return Number.isFinite(Number(v)) ? Number(v).toLocaleString() : '-'; }
+function fmt(v) { if (v === null || v === undefined || v === '') return ''; return typeof v === 'number' ? v.toFixed(2) : String(v); }
+function esc(v) { return String(v ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch])); }
+init().catch(e => { document.body.insertAdjacentHTML('beforeend', `<pre class="error">${esc(e.stack || e)}</pre>`); });
+</script>
+</body>
+</html>"""
+
+
 def _simple_status_html() -> str:
     return """<!doctype html>
 <html>
@@ -2600,6 +3062,150 @@ refresh().catch(e => document.body.insertAdjacentHTML('beforeend','<pre class="b
 </html>"""
 
 
+def _candidate_summary_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>SPHEREx Candidate Summary</title>
+  <style>
+    :root { --bg:#06101d; --panel:#0b1729; --line:#24415f; --text:#e5eefb; --muted:#8ea6bd; --cyan:#36e7ff; --pink:#ff4fd8; --green:#22c55e; --amber:#facc15; --red:#fb7185; }
+    * { box-sizing:border-box; }
+    body { margin:0; color:var(--text); font:13px system-ui,sans-serif; background:linear-gradient(90deg,rgba(54,231,255,.05) 1px,transparent 1px),linear-gradient(rgba(255,79,216,.035) 1px,transparent 1px),var(--bg); background-size:42px 42px; }
+    header { display:flex; justify-content:space-between; align-items:center; gap:16px; padding:12px 16px; border-bottom:1px solid var(--line); background:rgba(6,16,29,.94); box-shadow:0 0 24px rgba(54,231,255,.12); }
+    h1 { margin:0; font-size:18px; color:var(--cyan); text-shadow:0 0 16px rgba(54,231,255,.45); }
+    a { color:#93e8ff; }
+    main { padding:12px; }
+    section { background:rgba(11,23,41,.94); border:1px solid var(--line); border-radius:6px; padding:10px; box-shadow:inset 0 0 20px rgba(54,231,255,.035),0 0 20px rgba(0,0,0,.35); }
+    .controls { display:grid; grid-template-columns:repeat(8,minmax(110px,1fr)); gap:8px; align-items:end; margin-bottom:10px; }
+    label { display:block; color:var(--muted); font-size:12px; margin-bottom:4px; }
+    select,input,button { width:100%; background:#06101d; color:var(--text); border:1px solid var(--line); border-radius:4px; padding:8px; }
+    button { cursor:pointer; }
+    button:hover { border-color:var(--cyan); }
+    .tiles { display:grid; grid-template-columns:repeat(6,minmax(120px,1fr)); gap:8px; margin-bottom:10px; }
+    .tile { border:1px solid var(--line); background:#091527; border-radius:4px; padding:8px; }
+    .tile .k { color:var(--muted); font-size:11px; text-transform:uppercase; }
+    .tile .v { font-size:16px; margin-top:3px; }
+    .scroll { overflow:auto; max-height:calc(100vh - 230px); border:1px solid var(--line); border-radius:4px; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th,td { border-bottom:1px solid rgba(36,65,95,.85); padding:6px; text-align:left; white-space:nowrap; max-width:260px; overflow:hidden; text-overflow:ellipsis; }
+    th { position:sticky; top:0; background:#0b182b; color:#8eeaff; z-index:1; }
+    .small { color:var(--muted); font-size:12px; }
+    .tierA { color:var(--green); font-weight:700; }
+    .tierB { color:var(--amber); font-weight:700; }
+    .tierC,.tierD { color:var(--red); font-weight:700; }
+    .empty { padding:18px; color:var(--muted); }
+    @media (max-width: 1100px) { .controls { grid-template-columns:repeat(2,1fr); } .tiles { grid-template-columns:repeat(2,1fr); } }
+  </style>
+</head>
+<body>
+<header>
+  <h1>Candidate Summary</h1>
+  <div class="small"><a href="/blind-candidates">Blind Candidates</a> · <a href="/spectra">Spectra</a> · <a href="/recovery-summary">Recovery</a> · <a href="/simple-status">Status</a></div>
+</header>
+<main>
+  <section>
+    <div class="controls">
+      <div><label>Source</label><select id="source" onchange="refresh(0)"><option value="baseline" selected>Uninjected baseline</option><option value="paired">Injected paired-delta</option><option value="injected">Injected raw</option><option value="all">All available</option></select></div>
+      <div><label>Campaign</label><select id="campaign" onchange="refresh(0)"><option value="">All campaigns</option></select></div>
+      <div><label>Tier</label><select id="tier" onchange="refresh(0)"><option value="all">All</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></div>
+      <div><label>Sort</label><select id="sort" onchange="refresh(0)"><option value="rank">Rank</option><option value="snr">SNR</option><option value="wave">Wavelength</option><option value="support">Support</option><option value="flags">Fewest flags</option><option value="target">Target</option><option value="run">Run</option></select></div>
+      <div><label>Min SNR</label><input id="minSnr" placeholder="optional" oninput="scheduleRefresh()"></div>
+      <div><label>Search</label><input id="query" placeholder="run, target, detector..." oninput="scheduleRefresh()"></div>
+      <div><label>Limit</label><select id="limit" onchange="refresh(0)"><option>100</option><option selected>500</option><option>1000</option><option>5000</option></select></div>
+      <div><label>Action</label><button onclick="refresh(offset)">Refresh</button></div>
+    </div>
+    <div class="tiles" id="tiles"></div>
+    <div class="small" id="pageInfo"></div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; max-width:360px; margin:8px 0">
+      <button onclick="page(-1)">Prev</button>
+      <button onclick="page(1)">Next</button>
+    </div>
+    <div class="scroll" id="rows"></div>
+  </section>
+</main>
+<script>
+let offset = 0, limit = 500, total = 0, timer = null;
+const initial = new URLSearchParams(window.location.search);
+function init(){
+  for (const id of ['source','tier','sort','limit']) {
+    const v = initial.get(id);
+    if (v && [...document.getElementById(id).options].some(o => o.value === v)) document.getElementById(id).value = v;
+  }
+  document.getElementById('query').value = initial.get('q') || '';
+  document.getElementById('minSnr').value = initial.get('min_snr') || '';
+}
+async function getJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); return await r.json(); }
+function params(nextOffset){
+  const p = new URLSearchParams();
+  p.set('source', val('source')); p.set('tier', val('tier')); p.set('sort', val('sort'));
+  p.set('limit', val('limit')); p.set('offset', String(Math.max(0,nextOffset||0)));
+  if (val('campaign')) p.set('campaign', val('campaign'));
+  if (val('query').trim()) p.set('q', val('query').trim());
+  if (val('minSnr').trim()) p.set('min_snr', val('minSnr').trim());
+  p.set('ts', Date.now());
+  return '?' + p.toString();
+}
+function scheduleRefresh(){ clearTimeout(timer); timer=setTimeout(()=>refresh(0),180); }
+async function refresh(nextOffset){
+  const data = await getJSON('/api/candidate-summary' + params(nextOffset));
+  offset = data.offset || 0; limit = data.limit || Number(val('limit')) || 500; total = data.total || 0;
+  syncCampaigns(data.campaigns || []);
+  renderTiles(data.summary || {});
+  renderRows(data.rows || []);
+}
+function syncCampaigns(campaigns){
+  const sel = document.getElementById('campaign'), old = sel.value || initial.get('campaign') || '';
+  sel.innerHTML = '<option value="">All campaigns</option>' + campaigns.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+  sel.value = campaigns.includes(old) ? old : '';
+}
+function renderTiles(s){
+  const tiles = [
+    ['Source', s.source], ['Candidates', s.candidate_count], ['Runs scanned', s.scanned_runs],
+    ['Runs with hits', s.candidate_runs], ['Campaign', s.campaign_filter || 'all'], ['Tier page', JSON.stringify(s.tier_counts_page || {})]
+  ];
+  document.getElementById('tiles').innerHTML = tiles.map(([k,v]) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(fmt(v))}</div></div>`).join('');
+  const start = total ? offset + 1 : 0, end = Math.min(total, offset + limit);
+  document.getElementById('pageInfo').textContent = `${start}-${end} of ${total}`;
+}
+function renderRows(rows){
+  const cols = ['campaign','target','tier','rank_score','peak_line_nm','aperture_peak_snr','psf_peak_snr','aperture_support','psf_support','flagged_points_sum','target_id','links'];
+  if (!rows.length) {
+    document.getElementById('rows').innerHTML = '<div class="empty">No candidates for this selection. For baseline/uninjected science candidates, the campaign must be run with raw blind scanning enabled.</div>';
+    return;
+  }
+  document.getElementById('rows').innerHTML = '<table><thead><tr>' + cols.map(c => `<th>${esc(c)}</th>`).join('') + '</tr></thead><tbody>' +
+    rows.map(r => '<tr>' + cols.map(c => cell(r,c)).join('') + '</tr>').join('') + '</tbody></table>';
+}
+function cell(row,col){
+  if (col === 'links') {
+    return `<td><a href="${row.spectra_url || '#'}">spectra</a> <span class="small">/</span> <a href="${row.blind_candidates_url || '#'}">blind</a></td>`;
+  }
+  const cls = col === 'tier' ? 'tier' + String(row[col] || '') : '';
+  return `<td class="${cls}" title="${esc(fmt(row[col]))}">${esc(fmt(row[col]))}</td>`;
+}
+function page(dir){ refresh(Math.max(0, offset + dir * limit)); }
+function val(id){ return document.getElementById(id).value; }
+function fmt(v){
+  if (v === null || v === undefined || v === '') return '';
+  if (typeof v === 'object') return JSON.stringify(v);
+  const n = Number(v);
+  if (Number.isFinite(n)) {
+    if (Math.abs(n) >= 100000) return n.toExponential(3);
+    if (Math.abs(n) >= 100) return n.toFixed(1);
+    if (Math.abs(n) >= 10) return n.toFixed(2);
+    return n.toFixed(3).replace(/\\.000$/, '');
+  }
+  return String(v);
+}
+function esc(v){ return String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+init();
+refresh(0).catch(e => document.body.insertAdjacentHTML('beforeend','<pre style="color:#fb7185">'+esc(e.stack || String(e))+'</pre>'));
+</script>
+</body>
+</html>"""
+
+
 def _injections_html() -> str:
     return """<!doctype html>
 <html>
@@ -3086,7 +3692,7 @@ function renderList(summary){
 async function selectCandidate(id){
   selectedId=id;
   renderList({path:''});
-  detail=await getJSON('/api/blind-candidate/'+encodeURIComponent(id)+runQS());
+  detail=await getJSON('/api/blind-candidate/'+encodeURIComponent(id)+runQS(`scope=${encodeURIComponent(val('scope'))}`));
   draw();
 }
 function draw(){
