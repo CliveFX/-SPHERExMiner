@@ -21,15 +21,20 @@ Current operational defaults:
 - Safe anchor search: nearby Gaia `G=12..14` within 1 degree of each bright center
 - Magnitude cut: Gaia `G=11..16`
 - Requested field depth: `500`
-- Gaia safety cap per run: `6000`
+- Gaia safety cap per review run: `500` for overnight review; raise only for
+  deliberate larger surveys
 - Field workers: `24`
 - Photometry: GPU aperture plus GPU PSF
 - Injection lines: 808, 980, 1064, 1310, 1550, and 2000 nm
-- Injection strengths: `0.5,1,2,3,5,8,12` find-me sigma for current threshold campaigns
+- Injection strengths: `1,3,8` find-me sigma for current overnight review
+  campaigns; wider threshold campaigns may use `0.5,1,2,3,5,8,12`
 - Injection flux cap: `50000 uJy`
 - Injection density: `3` targets per line/strength cell
-- Blind scan: raw baseline, raw injected, and paired-delta all enabled
+- Blind scan: GPU narrowband detector on raw baseline, raw injected, and
+  truth-target raw injected recovery; paired-delta sanity products also written
 - Blind grid: `1.0 nm` for current deep campaign
+- Blind diagnostic rows: `narrowband_line_scores.parquet` with +/-80 nm around
+  retained candidates
 
 ## Command
 
@@ -68,6 +73,56 @@ tmux new-session -d -s spherex-threepart-v1 \
     --viewer-base-url http://192.168.1.224:8765'
 ```
 
+Run the current overnight diagnostic campaign shape from bright sky centers
+while resolving each one to a safe Gaia anchor:
+
+```bash
+tmux new-session -d -s spherex-overnight-diag \
+  'cd /home/clive/dev/NIROSETI_SPHEREx && .venv/bin/python tools/run_visible_sky_injection_campaign.py \
+    --campaign-prefix cv_june_g11_16_f500_diag_overnight_v1 \
+    --targets configs/castro_valley_june_survey_targets.yaml \
+    --resolve-gaia-anchors \
+    --only-target cvj_regulus \
+    --only-target cvj_denebola \
+    --only-target cvj_porrima \
+    --only-target cvj_spica \
+    --only-target cvj_arcturus \
+    --only-target cvj_izar \
+    --only-target cvj_alphecca \
+    --only-target cvj_unukalhai \
+    --only-target cvj_antarest \
+    --only-target cvj_rasalhague \
+    --only-target cvj_vega \
+    --only-target cvj_sheltan \
+    --only-target cvj_tarazed \
+    --only-target cvj_deneb \
+    --only-target cvj_sadr \
+    --only-target cvj_enif \
+    --only-target cvj_scheat \
+    --only-target cvj_markab \
+    --only-target cvj_fomalhaut \
+    --limit-fields 500 \
+    --max-gaia-sources 500 \
+    --gaia-g-min 11 \
+    --gaia-g-max 16 \
+    --max-field-workers 24 \
+    --warp-devices cuda:0,cuda:1,cuda:2 \
+    --strengths-sigma 1,3,8 \
+    --max-line-flux-uJy 50000 \
+    --min-snr 1.5 \
+    --blind-scanner narrowband_gpu \
+    --blind-grid-step-nm 1.0 \
+    --blind-top-k-per-target 20 \
+    --narrowband-min-joint-rho 3.0 \
+    --narrowband-diagnostic-line-half-window-nm 80 \
+    --narrowband-diagnostic-line-max-rows-per-candidate 201 \
+    --viewer-base-url http://192.168.1.224:8765 \
+    2>&1 | tee /mnt/niroseti/spherex_cache/campaigns/cv_june_g11_16_f500_diag_overnight_v1/campaign_stdout.log'
+```
+
+The command above intentionally skips `cvj_altair`, which previously produced
+no measured parent fields in this prototype.
+
 ## Per-Target Workflow
 
 For each target anchor, the runner performs:
@@ -102,19 +157,15 @@ Important files:
 ```text
 campaign_manifest.json
 logs/<target>_baseline.log
-logs/<target>_blind_baseline_aperture.log
-logs/<target>_blind_baseline_psf.log
-logs/<target>_blind_baseline_joint.log
+logs/<target>_narrowband_baseline_raw.log
 logs/<target>_make_plan.log
 logs/<target>_inject.log
 logs/<target>_injected.log
-logs/<target>_blind_injected_aperture.log
-logs/<target>_blind_injected_psf.log
-logs/<target>_blind_injected_joint.log
-logs/<target>_blind_raw_recovery_aperture.log
-logs/<target>_blind_raw_recovery_psf.log
-logs/<target>_blind_raw_recovery_joint.log
-logs/<target>_blind_raw_recovery_score.log
+logs/<target>_narrowband_injected_raw.log
+logs/<target>_narrowband_raw_recovery.log
+logs/<target>_blind_paired_delta_aperture.log
+logs/<target>_blind_paired_delta_psf.log
+logs/<target>_blind_paired_delta_joint.log
 logs/<target>_classify.log
 logs/<target>_score.log
 false_positive_reviews/<target>.json
@@ -162,7 +213,13 @@ http://192.168.1.224:8765/candidate-summary?campaign=<campaign>&source=paired
 The recovery scorer writes:
 
 ```text
-blind_raw_recovery_truth_topk/blind_raw_recovery_summary.json
+narrowband_detector_raw/narrowband_candidates.parquet
+narrowband_detector_raw/narrowband_line_scores.parquet
+narrowband_detector_raw/narrowband_detector_summary.json
+narrowband_detector_truth/narrowband_candidates.parquet
+narrowband_detector_truth/narrowband_recovery.parquet
+narrowband_detector_truth/narrowband_line_scores.parquet
+narrowband_detector_truth/narrowband_detector_summary.json
 recovery_score_mixed_lasers/false_positive_candidates.parquet
 recovery_score_mixed_lasers/recovery_summary.json
 ```

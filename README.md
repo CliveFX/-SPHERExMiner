@@ -13,6 +13,23 @@ signal injection, raw blind candidate scanning, recovery scoring, and web
 dashboards. The long-term direction is a field-by-field survey miner that can run
 locally, then on a distributed scheduler, and eventually on Kubernetes/EKS.
 
+## Tooling Screenshots
+
+The repo includes static screenshots from the current local dashboards so the
+main review surfaces are visible from GitHub:
+
+| Spectra browser | Injection recovery |
+| --- | --- |
+| ![Spectra browser](docs/screenshots/spectra_viewer.png) | ![Injection recovery browser](docs/screenshots/injection_browser.png) |
+
+| Blind candidate browser | Run status |
+| --- | --- |
+| ![Blind candidate browser](docs/screenshots/blind_candidates.png) | ![Simple status dashboard](docs/screenshots/status.png) |
+
+| Narrowband response simulator |
+| --- |
+| ![Narrowband response simulator](docs/screenshots/narrowband_simulator.png) |
+
 ## Why This Is Hard
 
 SPHEREx is not a conventional slit spectrum for each star. It is an all-sky
@@ -78,6 +95,8 @@ the original field-first design target.
   - science raw blind search on baseline spectra
   - blind raw recovery on injected spectra
   - paired-delta recovery as an optimistic sanity check
+- Writes compact GPU narrowband diagnostic line-score windows for candidate
+  review, without saving the full target x wavelength score cube.
 - Serves local web dashboards for campaign status, spectra, injections,
   recovery, and blind candidates.
 
@@ -198,19 +217,24 @@ Run the current three-part visible-sky campaign shape:
 
 ```bash
 .venv/bin/python tools/run_visible_sky_injection_campaign.py \
-  --campaign-prefix cv_june_g11_16_f500_threepart_v1 \
-  --targets /mnt/niroseti/spherex_cache/campaigns/cv_june_g11_16_f500_wideinj/resolved_gaia_anchor_targets.yaml \
-  --no-resolve-gaia-anchors \
+  --campaign-prefix cv_june_g11_16_f500_diag_overnight_v1 \
+  --targets configs/castro_valley_june_survey_targets.yaml \
+  --resolve-gaia-anchors \
   --limit-fields 500 \
-  --max-gaia-sources 6000 \
+  --max-gaia-sources 500 \
   --gaia-g-min 11 \
   --gaia-g-max 16 \
   --max-field-workers 24 \
   --warp-devices cuda:0,cuda:1,cuda:2 \
-  --strengths-sigma 0.5,1,2,3,5,8,12 \
+  --strengths-sigma 1,3,8 \
   --max-line-flux-uJy 50000 \
   --min-snr 1.5 \
+  --blind-scanner narrowband_gpu \
   --blind-grid-step-nm 1.0 \
+  --blind-top-k-per-target 20 \
+  --narrowband-min-joint-rho 3.0 \
+  --narrowband-diagnostic-line-half-window-nm 80 \
+  --narrowband-diagnostic-line-max-rows-per-candidate 201 \
   --viewer-base-url http://192.168.1.224:8765
 ```
 
@@ -259,13 +283,13 @@ Campaign products:
 Blind/scoring products:
 
 ```text
-blind_classifier_aperture_warp/
-blind_classifier_psf_warp/
-blind_classifier_joint_warp/
-blind_classifier_injected_raw_truth_aperture_topk/
-blind_classifier_injected_raw_truth_psf_topk/
-blind_classifier_injected_raw_truth_joint_topk/
-blind_raw_recovery_truth_topk/
+narrowband_detector_raw/narrowband_candidates.parquet
+narrowband_detector_raw/narrowband_line_scores.parquet
+narrowband_detector_raw/narrowband_detector_summary.json
+narrowband_detector_truth/narrowband_candidates.parquet
+narrowband_detector_truth/narrowband_recovery.parquet
+narrowband_detector_truth/narrowband_line_scores.parquet
+narrowband_detector_truth/narrowband_detector_summary.json
 blind_classifier_paired_delta_aperture_warp/
 blind_classifier_paired_delta_psf_warp/
 blind_classifier_paired_delta_joint_warp/
@@ -284,9 +308,12 @@ These are median-binned documentation samples, not canonical science products.
 ## Documentation
 
 - [Operator runbook](docs/operator_runbook.md)
+- [How to run the current system](docs/how_to_run_system.md)
 - [Deep injection/recovery campaign pipeline](docs/arcturus_deep_injection_pipeline.md)
 - [Visible-sky injection campaign](docs/visible_sky_injection_campaign.md)
 - [Injection/recovery plan](docs/injection_recovery_plan.md)
+- [GPU narrowband detector build spec](docs/gpu_narrowband_detector_spec.md)
+- [GPU response-template scorer design](docs/gpu_response_template_scorer.md)
 - [Blind candidate quality scoring](docs/blind_candidate_quality_scoring.md)
 - [GPU PSF grid notes](docs/gpu_psf_grid_notes.md)
 - [Arcturus magnitude calibration notes](docs/arcturus_magnitude_calibration_notes.md)
@@ -339,6 +366,12 @@ Near term:
 
 - Finish noise-model injection: source variance and optional random source
   photon noise.
+- Replace the current broad blind scanner with the GPU response-template scorer
+  design: response-shaped matching, ambiguity penalties, aperture/PSF joint
+  ranking, and local debug score windows.
+- Validate the standalone GPU narrowband detector in
+  `tools/warp_narrowband_detector.py` against additional injected and baseline
+  campaign archives.
 - Calibrate blind raw recovery thresholds against baseline science false
   candidates.
 - Improve candidate summary pages for recovery-rate rollups.

@@ -288,30 +288,80 @@ def _campaign_target_stages(runs_root: Path, campaign_root: Path, campaign_name:
     inject_outputs = sorted(injection_root.glob(f"{campaign_name}_{target_id}_mixed_lasers_s*/path_overrides.json"))
     specs = [
         ("baseline", base / "spectra" / "target_spectra.parquet", logs / f"{target_id}_baseline.log"),
-        ("science blind", base / "blind_classifier_joint_warp" / "blind_joint_candidates.parquet", logs / f"{target_id}_blind_baseline_joint.log"),
+        (
+            "science blind",
+            _first_existing_path(
+                [
+                    base / "narrowband_detector_raw" / "narrowband_candidates.parquet",
+                    base / "blind_classifier_joint_warp" / "blind_joint_candidates.parquet",
+                ]
+            ),
+            _first_existing_path(
+                [
+                    logs / f"{target_id}_narrowband_baseline_raw.log",
+                    logs / f"{target_id}_blind_baseline_joint.log",
+                ]
+            ),
+        ),
         ("make plan", injection_root / f"{campaign_name}_{target_id}_mixed_lasers" / "injection_plan.json", logs / f"{target_id}_make_plan.log"),
         ("inject fits", inject_outputs[0] if inject_outputs else injection_root / f"{campaign_name}_{target_id}_mixed_lasers_s*/path_overrides.json", logs / f"{target_id}_inject.log"),
         ("injected spectra", inj / "spectra" / "target_spectra.parquet", logs / f"{target_id}_injected.log"),
-        ("injected raw blind", inj / "blind_classifier_joint_warp" / "blind_joint_candidates.parquet", logs / f"{target_id}_blind_injected_joint.log"),
+        (
+            "injected raw blind",
+            _first_existing_path(
+                [
+                    inj / "narrowband_detector_raw" / "narrowband_candidates.parquet",
+                    inj / "blind_classifier_joint_warp" / "blind_joint_candidates.parquet",
+                ]
+            ),
+            _first_existing_path(
+                [
+                    logs / f"{target_id}_narrowband_injected_raw.log",
+                    logs / f"{target_id}_blind_injected_joint.log",
+                ]
+            ),
+        ),
         ("paired delta", inj / "blind_classifier_paired_delta_joint_warp" / "blind_joint_candidates.parquet", logs / f"{target_id}_blind_paired_delta_joint.log"),
-        ("truth raw recovery", inj / "blind_raw_recovery_truth_topk" / "blind_raw_recovery_summary.json", logs / f"{target_id}_blind_raw_recovery_score.log"),
+        (
+            "truth raw recovery",
+            _first_existing_path(
+                [
+                    inj / "narrowband_detector_truth" / "narrowband_recovery.parquet",
+                    inj / "blind_raw_recovery_truth_topk" / "blind_raw_recovery_summary.json",
+                ]
+            ),
+            _first_existing_path(
+                [
+                    logs / f"{target_id}_narrowband_raw_recovery.log",
+                    logs / f"{target_id}_blind_raw_recovery_score.log",
+                ]
+            ),
+        ),
         ("paired recovery", inj / "recovery_score_mixed_lasers" / "recovery_summary.json", logs / f"{target_id}_score.log"),
     ]
     return [_campaign_stage_status(stage, output_path, log_path) for stage, output_path, log_path in specs]
+
+
+def _first_existing_path(paths: list[Path]) -> Path:
+    for path in paths:
+        if path.exists():
+            return path
+    return paths[0]
 
 
 def _campaign_stage_status(stage: str, output_path: Path | None, log_path: Path) -> dict[str, object]:
     output_done = output_path.exists() if output_path is not None else False
     log_exists = log_path.exists()
     tail = _tail_text(log_path, 6000) if log_exists else ""
+    real_log = _campaign_log_has_real_run(log_path, tail) if log_exists else False
     has_error = any(token in tail for token in ("Traceback", "command failed", "CalledProcessError", "Error:", "ERROR"))
     if output_done:
         status = "done"
-    elif has_error:
+    elif real_log and has_error:
         status = "error"
-    elif log_exists and time.time() - log_path.stat().st_mtime < 900:
+    elif real_log and time.time() - log_path.stat().st_mtime < 900:
         status = "active"
-    elif log_exists:
+    elif real_log:
         status = "waiting"
     else:
         status = "waiting"
@@ -320,9 +370,20 @@ def _campaign_stage_status(stage: str, output_path: Path | None, log_path: Path)
         "status": status,
         "output": str(output_path) if output_path is not None else "",
         "log": str(log_path),
-        "log_mtime": _format_time(log_path.stat().st_mtime) if log_exists else "",
-        "message": _last_nonempty_line(tail),
+        "log_mtime": _format_time(log_path.stat().st_mtime) if real_log else "",
+        "message": _last_nonempty_line(tail) if real_log else "",
     }
+
+
+def _campaign_log_has_real_run(path: Path, tail: str) -> bool:
+    if "=== 20" in tail:
+        return True
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(8192).decode("utf-8", errors="replace")
+        return "=== 20" in head
+    except Exception:
+        return False
 
 
 def _tail_text(path: Path, max_bytes: int) -> str:
@@ -530,6 +591,7 @@ def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[st
             continue
         if df.empty:
             continue
+        df = _normalize_blind_candidates_df(df)
         candidate_runs += 1
         df = df.copy()
         if tier != "all" and "tier" in df:
@@ -1425,11 +1487,22 @@ def _blind_joint_path(run_dir: Path, scope: str = "auto") -> Path | None:
     if scope in {"auto", "raw", "injected"}:
         candidates.extend(
             [
+                run_dir / "narrowband_detector_raw" / "narrowband_candidates.parquet",
+                run_dir / "narrowband_detector_science" / "narrowband_candidates.parquet",
+                run_dir / "narrowband_detector_full" / "narrowband_candidates.parquet",
                 run_dir / "blind_classifier_joint_warp" / "blind_joint_candidates.parquet",
                 run_dir / "blind_classifier_joint_warp_full" / "blind_joint_candidates.parquet",
             ]
         )
+    if scope in {"truth", "truth_raw", "recovery"}:
+        candidates.extend(
+            [
+                run_dir / "narrowband_detector_truth" / "narrowband_candidates.parquet",
+                run_dir / "narrowband_detector_full_truth" / "narrowband_candidates.parquet",
+            ]
+        )
     if scope == "auto":
+        candidates.extend(sorted(run_dir.glob("narrowband_detector*/narrowband_candidates.parquet")))
         candidates.extend(sorted(run_dir.glob("blind_classifier*joint*/blind_joint_candidates.parquet")))
     return next((path for path in candidates if path.exists()), None)
 
@@ -1437,6 +1510,9 @@ def _blind_joint_path(run_dir: Path, scope: str = "auto") -> Path | None:
 def _blind_summary_path(path: Path | None) -> Path | None:
     if path is None:
         return None
+    if path.name == "narrowband_candidates.parquet":
+        summary = path.with_name("narrowband_detector_summary.json")
+        return summary if summary.exists() else None
     summary = path.with_name("blind_joint_summary.json")
     return summary if summary.exists() else None
 
@@ -1457,6 +1533,84 @@ def _blind_flux_dir_from_joint(path: Path | None, flux_kind: str) -> Path | None
 def _blind_line_scores_for_target(joint_path: Path | None, target_id: str) -> dict[str, list[dict[str, object]]]:
     out: dict[str, list[dict[str, object]]] = {"aperture": [], "psf": []}
     if not target_id:
+        return out
+    if joint_path is not None and joint_path.name == "narrowband_candidates.parquet":
+        diagnostic_path = joint_path.with_name("narrowband_line_scores.parquet")
+        if diagnostic_path.exists():
+            try:
+                scores = pd.read_parquet(diagnostic_path)
+            except Exception:
+                scores = pd.DataFrame()
+            if not scores.empty and "target_id" in scores:
+                rows = scores[scores["target_id"].astype(str).eq(str(target_id))].copy()
+                if not rows.empty:
+                    if "line_nm" in rows:
+                        rows = rows.sort_values("line_nm", na_position="last")
+                    base_cols = [
+                        col
+                        for col in (
+                            "joint_candidate_id",
+                            "target_id",
+                            "line_nm",
+                            "candidate_line_nm",
+                            "delta_nm",
+                            "joint_rho",
+                            "joint_q",
+                            "support_count",
+                            "flagged_points_sum",
+                            "quality_tier",
+                            "review_grade",
+                            "quality_pass",
+                        )
+                        if col in rows
+                    ]
+                    for flux_kind in ("aperture", "psf"):
+                        snr_col = f"{flux_kind}_snr"
+                        amp_col = f"{flux_kind}_amp_uJy"
+                        unc_col = f"{flux_kind}_amp_unc_uJy"
+                        support_col = f"{flux_kind}_support_count"
+                        cols = [col for col in base_cols + [snr_col, amp_col, unc_col, support_col] if col in rows]
+                        records = rows[cols].copy()
+                        records["candidate_line_nm"] = pd.to_numeric(records.get("line_nm"), errors="coerce")
+                        records["matched_snr"] = pd.to_numeric(records.get(snr_col), errors="coerce")
+                        records["matched_flux_uJy"] = pd.to_numeric(records.get(amp_col), errors="coerce")
+                        records["matched_flux_unc_uJy"] = pd.to_numeric(records.get(unc_col), errors="coerce")
+                        records["n_supporting_points"] = pd.to_numeric(records.get(support_col), errors="coerce")
+                        records["n_flagged_nearby"] = pd.to_numeric(records.get("flagged_points_sum"), errors="coerce")
+                        out[flux_kind] = records.head(4000).to_dict(orient="records")
+                    return out
+        try:
+            df = _normalize_blind_candidates_df(pd.read_parquet(joint_path))
+        except Exception:
+            return out
+        if df.empty or "target_id" not in df:
+            return out
+        rows = df[df["target_id"].astype(str).eq(str(target_id))].copy()
+        if rows.empty:
+            return out
+        if "peak_line_nm" in rows:
+            rows = rows.sort_values("peak_line_nm", na_position="last")
+        cols = [
+            col
+            for col in (
+                "peak_line_nm",
+                "candidate_line_nm",
+                "joint_rho",
+                "aperture_peak_snr",
+                "psf_peak_snr",
+                "rank_score",
+                "support_count",
+                "flagged_points_sum",
+                "quality_tier",
+                "review_grade",
+                "detectors",
+                "frame_ids",
+            )
+            if col in rows
+        ]
+        records = rows[cols].head(2500).to_dict(orient="records")
+        out["aperture"] = records
+        out["psf"] = records
         return out
     wanted = [
         "candidate_line_nm",
@@ -1491,12 +1645,44 @@ def _blind_line_scores_for_target(joint_path: Path | None, target_id: str) -> di
     return out
 
 
+def _normalize_blind_candidates_df(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    out = df.copy()
+    if "review_grade" in out:
+        if "statistical_tier" not in out and "tier" in out:
+            out["statistical_tier"] = out["tier"]
+        out["tier"] = out["review_grade"].fillna(out.get("tier", ""))
+    aliases = {
+        "peak_line_nm": "line_nm_source_frame",
+        "candidate_line_nm": "line_nm_source_frame",
+        "rank_score": "joint_rho",
+        "aperture_peak_snr": "aperture_snr",
+        "psf_peak_snr": "psf_snr",
+        "aperture_support": "aperture_support_count",
+        "psf_support": "psf_support_count",
+        "reject_reasons": "quality_reject_reasons",
+        "quality_category": "quality_tier",
+        "quality_score": "joint_rho",
+    }
+    for dest, src in aliases.items():
+        if dest not in out and src in out:
+            out[dest] = out[src]
+    if "joint_candidate_id" not in out and {"target_id", "peak_line_nm"}.issubset(out.columns):
+        out["joint_candidate_id"] = out.apply(
+            lambda row: f"{row.get('target_id')}::narrowband::{_maybe_float(row.get('peak_line_nm')) or 'nan'}",
+            axis=1,
+        )
+    return out
+
+
 def _blind_candidates(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
     scope = (params.get("scope") or ["auto"])[0]
     path = _blind_joint_path(run_dir, scope)
     if path is None:
         return {"rows": [], "total": 0, "limit": 0, "offset": 0, "summary": {"error": "no blind joint candidates found"}}
     df = pd.read_parquet(path)
+    df = _normalize_blind_candidates_df(df)
     if df.empty:
         return {"rows": [], "total": 0, "limit": 0, "offset": 0, "summary": {"path": str(path)}}
     df = _annotate_blind_false_positives(df, run_dir, tolerance_nm=10.0)
@@ -1557,6 +1743,7 @@ def _blind_candidate_detail(run_dir: Path, candidate_id: str, params: dict[str, 
     if path is None:
         return {"joint_candidate_id": candidate_id, "error": "no blind joint candidates found"}
     df = pd.read_parquet(path)
+    df = _normalize_blind_candidates_df(df)
     row_df = df[df.get("joint_candidate_id", pd.Series(dtype=str)).astype(str).eq(candidate_id)] if not df.empty else pd.DataFrame()
     if row_df.empty:
         return {"joint_candidate_id": candidate_id, "error": "not found"}
@@ -3103,6 +3290,7 @@ def _candidate_summary_html() -> str:
     th,td { border-bottom:1px solid rgba(36,65,95,.85); padding:6px; text-align:left; white-space:nowrap; max-width:260px; overflow:hidden; text-overflow:ellipsis; }
     th { position:sticky; top:0; background:#0b182b; color:#8eeaff; z-index:1; }
     .small { color:var(--muted); font-size:12px; }
+    .tierS { color:var(--pink); font-weight:800; text-shadow:0 0 10px rgba(255,79,216,.55); }
     .tierA { color:var(--green); font-weight:700; }
     .tierB { color:var(--amber); font-weight:700; }
     .tierC,.tierD { color:var(--red); font-weight:700; }
@@ -3182,7 +3370,7 @@ function renderTiles(s){
   document.getElementById('pageInfo').textContent = `${start}-${end} of ${total}`;
 }
 function renderRows(rows){
-  const cols = ['campaign','target','quality_category','quality_score','tier','rank_score','peak_line_nm','aperture_peak_snr','psf_peak_snr','aperture_support','psf_support','flagged_points_sum','reject_reasons','target_id','links'];
+  const cols = ['campaign','target','review_grade','quality_tier','quality_pass','tier','rank_score','peak_line_nm','aperture_peak_snr','psf_peak_snr','support_count','target_candidate_count','flagged_points_sum','reject_reasons','target_id','links'];
   if (!rows.length) {
     document.getElementById('rows').innerHTML = '<div class="empty">No candidates for this selection. For baseline/uninjected science candidates, the campaign must be run with raw blind scanning enabled.</div>';
     return;
@@ -3621,6 +3809,7 @@ def _blind_candidates_html() -> str:
     tr { cursor:pointer; }
     tr:hover, tr.selected { background:rgba(54,231,255,.08); }
     .fp { color:var(--pink); font-weight:700; }
+    .tierS { color:var(--pink); font-weight:800; text-shadow:0 0 10px rgba(255,79,216,.55); }
     .tierA { color:var(--green); font-weight:700; }
     .tierB { color:var(--amber); font-weight:700; }
     .tierC,.tierD { color:var(--red); font-weight:700; }
@@ -3646,7 +3835,7 @@ def _blind_candidates_html() -> str:
     <button onclick="refreshAll()">Refresh</button>
     <label>Run</label><select id="runSelect" onchange="switchRun()"></select>
     <div class="grid">
-      <div><label>Tier</label><select id="tier" onchange="fetchCandidates(0)"><option value="all">All</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></div>
+      <div><label>Tier</label><select id="tier" onchange="fetchCandidates(0)"><option value="all">All</option><option value="S">S</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></div>
       <div><label>Sort</label><select id="sort" onchange="fetchCandidates(0)"><option value="rank">Rank</option><option value="snr">SNR</option><option value="wave">Wave</option><option value="support">Support</option><option value="flags">Flags</option><option value="target">Target</option></select></div>
       <div><label>Scope</label><select id="scope" onchange="fetchCandidates(0)"><option value="auto">Auto</option><option value="paired">Paired</option><option value="raw">Raw</option></select></div>
       <div><label>Limit</label><select id="limit" onchange="fetchCandidates(0)"><option>100</option><option selected>300</option><option>1000</option></select></div>
@@ -3697,7 +3886,7 @@ function renderList(summary){
   const exact = activeTargetFilter ? ` · exact target ${activeTargetFilter}` : '';
   const fp = summary.recovery_false_positive_count_after_filter ? ` · false+ ${summary.recovery_false_positive_count_after_filter}` : '';
   document.getElementById('pageInfo').textContent=`${start}-${end} of ${total}${exact}${fp} · ${summary.path||''}`;
-  const cols=['recovery_false_positive','tier','rank_score','peak_line_nm','aperture_peak_snr','psf_peak_snr','aperture_support','psf_support','recovery_fp_line_nm','recovery_fp_snr','flagged_points_sum','target_id'];
+  const cols=['recovery_false_positive','tier','quality_tier','quality_pass','rank_score','peak_line_nm','aperture_peak_snr','psf_peak_snr','support_count','target_candidate_count','recovery_fp_line_nm','recovery_fp_snr','flagged_points_sum','target_id'];
   document.getElementById('candidateList').innerHTML='<table><thead><tr>'+cols.map(c=>`<th>${esc(c)}</th>`).join('')+'</tr></thead><tbody>'+
     rows.map(r=>`<tr class="${r.joint_candidate_id===selectedId?'selected':''}" onclick="selectCandidate('${attr(r.joint_candidate_id)}')">`+
       cols.map(c=>`<td class="${cellClass(c,r[c])}" title="${esc(fmt(r[c]))}">${esc(fmt(r[c]))}</td>`).join('')+'</tr>').join('')+'</tbody></table>';
@@ -3819,7 +4008,15 @@ function fmt(v){ if(v===true) return 'yes'; if(v===false) return ''; if(v===null
 function esc(s){ return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function attr(s){ return esc(s).replace(/`/g,'&#96;'); }
 function cellClass(col,val){
-  if(col==='tier') return 'tier'+esc(val);
+  if(col==='tier' || col==='review_grade') return 'tier'+esc(val);
+  if(col==='quality_tier') {
+    const v=String(val||'');
+    if(v.startsWith('S')) return 'tierS';
+    if(v.startsWith('A')) return 'tierA';
+    if(v.startsWith('B')) return 'tierB';
+    if(v.startsWith('C')) return 'tierC';
+    if(v.startsWith('D')) return 'tierD';
+  }
   if(col==='recovery_false_positive' && val) return 'fp';
   return '';
 }

@@ -356,6 +356,56 @@ def _run_blind_raw_recovery_score(
     )
 
 
+def _run_narrowband_detector(
+    *,
+    py: str,
+    run_dir: Path,
+    output_dir: Path,
+    args: argparse.Namespace,
+    log_path: Path,
+    env: dict[str, str],
+    manifest_path: Path | None = None,
+    target_ids_file: Path | None = None,
+) -> None:
+    cmd = [
+        py,
+        "tools/warp_narrowband_detector.py",
+        "--run-dir",
+        str(run_dir),
+        "--output-dir",
+        str(output_dir),
+        "--grid-step-nm",
+        str(args.blind_grid_step_nm),
+        "--min-joint-rho",
+        str(args.narrowband_min_joint_rho),
+        "--top-k-per-target",
+        str(args.blind_top_k_per_target),
+        "--device",
+        args.blind_warp_device,
+        "--quality-min-support",
+        str(args.narrowband_quality_min_support),
+        "--quality-max-flagged-points",
+        str(args.narrowband_quality_max_flagged_points),
+        "--quality-max-candidates-per-target",
+        str(args.narrowband_quality_max_candidates_per_target),
+        "--quality-max-aperture-psf-ratio",
+        str(args.narrowband_quality_max_aperture_psf_ratio),
+        "--recovery-tolerance-nm",
+        str(args.wavelength_tolerance_nm),
+        "--diagnostic-line-half-window-nm",
+        str(args.narrowband_diagnostic_line_half_window_nm),
+        "--diagnostic-line-max-rows-per-candidate",
+        str(args.narrowband_diagnostic_line_max_rows_per_candidate),
+    ]
+    if args.blind_top_k_min_separation_nm is not None:
+        cmd.extend(["--top-k-min-separation-nm", str(args.blind_top_k_min_separation_nm)])
+    if manifest_path is not None:
+        cmd.extend(["--manifest", str(manifest_path)])
+    if target_ids_file is not None:
+        cmd.extend(["--target-ids-file", str(target_ids_file)])
+    _run(cmd, log_path=log_path, env=env, dry_run=args.dry_run)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run baseline, injected, paired-delta recovery campaigns for visible June sky anchors."
@@ -383,6 +433,7 @@ def main() -> None:
     parser.add_argument("--min-snr", type=float, default=5.0)
     parser.add_argument("--wavelength-tolerance-nm", type=float, default=10.0)
     parser.add_argument("--blind-scan", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--blind-scanner", choices=["legacy", "narrowband_gpu"], default="narrowband_gpu")
     parser.add_argument("--blind-grid-step-nm", type=float, default=5.0)
     parser.add_argument("--blind-min-snr", type=float, default=5.0)
     parser.add_argument("--blind-raw-min-snr", type=float, default=5.0)
@@ -394,6 +445,13 @@ def main() -> None:
     parser.add_argument("--blind-candidate-mode", choices=["exhaustive", "topk"], default="topk")
     parser.add_argument("--blind-top-k-per-target", type=int, default=10)
     parser.add_argument("--blind-top-k-min-separation-nm", type=float)
+    parser.add_argument("--narrowband-min-joint-rho", type=float, default=3.0)
+    parser.add_argument("--narrowband-quality-min-support", type=int, default=3)
+    parser.add_argument("--narrowband-quality-max-flagged-points", type=int, default=3)
+    parser.add_argument("--narrowband-quality-max-candidates-per-target", type=int, default=5)
+    parser.add_argument("--narrowband-quality-max-aperture-psf-ratio", type=float, default=3.0)
+    parser.add_argument("--narrowband-diagnostic-line-half-window-nm", type=float, default=80.0)
+    parser.add_argument("--narrowband-diagnostic-line-max-rows-per-candidate", type=int, default=201)
     parser.add_argument("--blind-science-quality-config", type=Path, default=REPO_ROOT / "configs" / "blind_candidate_quality.yaml")
     parser.add_argument(
         "--blind-injection-quality-config",
@@ -504,7 +562,18 @@ def main() -> None:
                 dry_run=args.dry_run,
             )
 
-        if args.blind_scan and args.blind_raw_scan:
+        if args.blind_scan and args.blind_raw_scan and args.blind_scanner == "narrowband_gpu":
+            baseline_narrowband_dir = baseline_run / "narrowband_detector_raw"
+            if args.force or not _done(baseline_narrowband_dir / "narrowband_candidates.parquet"):
+                _run_narrowband_detector(
+                    py=py,
+                    run_dir=baseline_run,
+                    output_dir=baseline_narrowband_dir,
+                    args=args,
+                    log_path=campaign_root / "logs" / f"{target_id}_narrowband_baseline_raw.log",
+                    env=env,
+                )
+        elif args.blind_scan and args.blind_raw_scan:
             for flux_kind in _blind_flux_kinds(args.blind_flux_kind):
                 baseline_blind_dir = baseline_run / f"blind_classifier_{flux_kind}_warp"
                 if args.force or not _done(baseline_blind_dir / "blind_candidate_clusters.parquet"):
@@ -632,7 +701,50 @@ def main() -> None:
                 dry_run=args.dry_run,
             )
 
-        if args.blind_scan:
+        if args.blind_scan and args.blind_scanner == "narrowband_gpu":
+            injected_narrowband_dir = injected_run / "narrowband_detector_raw"
+            if args.blind_raw_scan and (args.force or not _done(injected_narrowband_dir / "narrowband_candidates.parquet")):
+                _run_narrowband_detector(
+                    py=py,
+                    run_dir=injected_run,
+                    output_dir=injected_narrowband_dir,
+                    args=args,
+                    log_path=campaign_root / "logs" / f"{target_id}_narrowband_injected_raw.log",
+                    env=env,
+                )
+            for flux_kind in _blind_flux_kinds(args.blind_flux_kind):
+                paired_blind_dir = injected_run / f"blind_classifier_paired_delta_{flux_kind}_warp"
+                if args.force or not _done(paired_blind_dir / "blind_candidate_clusters.parquet"):
+                    _run_blind_paired(
+                        py=py,
+                        baseline_run=baseline_run,
+                        injected_run=injected_run,
+                        output_dir=paired_blind_dir,
+                        flux_kind=flux_kind,
+                        args=args,
+                        log_path=campaign_root / "logs" / f"{target_id}_blind_paired_delta_{flux_kind}.log",
+                        env=env,
+                    )
+            if args.blind_flux_kind == "both":
+                joint_scopes = [("paired_delta", injected_run)]
+                if args.blind_raw_scan and args.blind_scanner == "legacy":
+                    joint_scopes.insert(0, ("injected", injected_run))
+                for scope, parent in joint_scopes:
+                    aperture_dir = parent / ("blind_classifier_aperture_warp" if scope == "injected" else "blind_classifier_paired_delta_aperture_warp")
+                    psf_dir = parent / ("blind_classifier_psf_warp" if scope == "injected" else "blind_classifier_paired_delta_psf_warp")
+                    joint_dir = parent / ("blind_classifier_joint_warp" if scope == "injected" else "blind_classifier_paired_delta_joint_warp")
+                    if args.force or not _done(joint_dir / "blind_joint_candidates.parquet"):
+                        _run_blind_joint(
+                            py=py,
+                            aperture_dir=aperture_dir,
+                            psf_dir=psf_dir,
+                            output_dir=joint_dir,
+                            args=args,
+                            log_path=campaign_root / "logs" / f"{target_id}_blind_{scope}_joint.log",
+                            env=env,
+                            quality_config=args.blind_injection_quality_config if scope == "injected" else args.blind_injection_quality_config,
+                        )
+        elif args.blind_scan:
             for flux_kind in _blind_flux_kinds(args.blind_flux_kind):
                 injected_blind_dir = injected_run / f"blind_classifier_{flux_kind}_warp"
                 paired_blind_dir = injected_run / f"blind_classifier_paired_delta_{flux_kind}_warp"
@@ -677,7 +789,23 @@ def main() -> None:
                             quality_config=args.blind_injection_quality_config if scope == "injected" else args.blind_injection_quality_config,
                         )
 
-        if args.blind_scan and args.blind_raw_recovery and args.blind_flux_kind == "both":
+        if args.blind_scan and args.blind_raw_recovery and args.blind_scanner == "narrowband_gpu":
+            truth_ids_path = injected_run / "blind_raw_recovery_truth_target_ids.txt"
+            if args.force or not _done(truth_ids_path):
+                _write_injection_target_ids(manifest_path, truth_ids_path)
+            truth_narrowband_dir = injected_run / "narrowband_detector_truth"
+            if args.force or not _done(truth_narrowband_dir / "narrowband_recovery.parquet"):
+                _run_narrowband_detector(
+                    py=py,
+                    run_dir=injected_run,
+                    output_dir=truth_narrowband_dir,
+                    args=args,
+                    log_path=campaign_root / "logs" / f"{target_id}_narrowband_raw_recovery.log",
+                    env=env,
+                    manifest_path=manifest_path,
+                    target_ids_file=truth_ids_path,
+                )
+        elif args.blind_scan and args.blind_raw_recovery and args.blind_flux_kind == "both":
             truth_ids_path = injected_run / "blind_raw_recovery_truth_target_ids.txt"
             if args.force or not _done(truth_ids_path):
                 _write_injection_target_ids(manifest_path, truth_ids_path)
@@ -784,10 +912,19 @@ def main() -> None:
                 "injection_plan": str(plan_path),
                 "injection_manifest": str(manifest_path),
                 "recovery_summary": str(recovery_dir / "recovery_summary.json"),
-                "baseline_blind_joint_summary": str(baseline_run / "blind_classifier_joint_warp" / "blind_joint_summary.json"),
-                "injected_blind_joint_summary": str(injected_run / "blind_classifier_joint_warp" / "blind_joint_summary.json"),
+                "baseline_blind_joint_summary": str(
+                    baseline_run
+                    / ("narrowband_detector_raw/narrowband_detector_summary.json" if args.blind_scanner == "narrowband_gpu" else "blind_classifier_joint_warp/blind_joint_summary.json")
+                ),
+                "injected_blind_joint_summary": str(
+                    injected_run
+                    / ("narrowband_detector_raw/narrowband_detector_summary.json" if args.blind_scanner == "narrowband_gpu" else "blind_classifier_joint_warp/blind_joint_summary.json")
+                ),
                 "paired_blind_joint_summary": str(injected_run / "blind_classifier_paired_delta_joint_warp" / "blind_joint_summary.json"),
-                "blind_raw_recovery_summary": str(injected_run / "blind_raw_recovery_truth_topk" / "blind_raw_recovery_summary.json"),
+                "blind_raw_recovery_summary": str(
+                    injected_run
+                    / ("narrowband_detector_truth/narrowband_detector_summary.json" if args.blind_scanner == "narrowband_gpu" else "blind_raw_recovery_truth_topk/blind_raw_recovery_summary.json")
+                ),
                 "false_positive_review": str(review_path),
                 "review_url": review.get("review_url"),
             }

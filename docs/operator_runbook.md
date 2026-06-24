@@ -3,6 +3,9 @@
 This is the handoff document for running the current NIROSETI/SPHEREx prototype
 without an agent driving each step.
 
+For a concise startup checklist with copy/paste commands, see
+[How To Run The Current System](how_to_run_system.md).
+
 The current system is a target-centered survey prototype. It is not yet the
 future frame-scale all-sky scheduler. A run starts from one anchor target,
 selects SPHEREx fields around that anchor, selects Gaia sources in those fields,
@@ -107,9 +110,29 @@ The important recovery modes are:
 - **Blind raw recovery**: raw injected spectra, no subtraction, filtered to injected target IDs.
 - **Paired-delta recovery**: injected minus baseline, useful but optimistic.
 
-The campaign wrapper runs all three modes by default when `--blind-scan`,
-`--blind-raw-scan`, `--blind-raw-recovery`, and `--blind-flux-kind both` are
-left at their defaults.
+The current primary scanner is the standalone GPU narrowband detector:
+
+```text
+tools/warp_narrowband_detector.py
+```
+
+It writes compact raw candidate products under:
+
+```text
+narrowband_detector_raw/narrowband_candidates.parquet
+narrowband_detector_raw/narrowband_line_scores.parquet
+narrowband_detector_raw/narrowband_detector_summary.json
+```
+
+Truth-target injected recovery writes the same structure under:
+
+```text
+narrowband_detector_truth/
+```
+
+The campaign wrapper still also writes paired-delta products as an optimistic
+sanity check, but baseline `narrowband_detector_raw` is the science candidate
+surface.
 
 Full default campaign:
 
@@ -138,11 +161,17 @@ Current deep default shape:
 ```bash
 .venv/bin/python tools/run_visible_sky_injection_campaign.py \
   --limit-fields 500 \
-  --max-gaia-sources 6000 \
+  --max-gaia-sources 500 \
   --gaia-g-min 11 \
   --gaia-g-max 16 \
   --max-field-workers 24 \
-  --warp-devices cuda:0,cuda:1,cuda:2
+  --warp-devices cuda:0,cuda:1,cuda:2 \
+  --blind-scanner narrowband_gpu \
+  --blind-grid-step-nm 1.0 \
+  --blind-top-k-per-target 20 \
+  --narrowband-min-joint-rho 3.0 \
+  --narrowband-diagnostic-line-half-window-nm 80 \
+  --narrowband-diagnostic-line-max-rows-per-candidate 201
 ```
 
 To repeat a campaign using the same already-resolved safe Gaia anchor target
@@ -288,24 +317,37 @@ Dashboard meanings:
 
 ## Blind Raw Recovery Products
 
-For each injected run, the campaign now writes a focused raw recovery product:
+For each baseline or injected run, the current GPU narrowband detector writes:
 
 ```text
-blind_classifier_injected_raw_truth_aperture_topk/
-blind_classifier_injected_raw_truth_psf_topk/
-blind_classifier_injected_raw_truth_joint_topk/
-blind_raw_recovery_truth_topk/
+narrowband_detector_raw/narrowband_candidates.parquet
+narrowband_detector_raw/narrowband_line_scores.parquet
+narrowband_detector_raw/narrowband_detector_summary.json
 ```
 
-The key summary is:
+For each injected run, the focused truth-target raw recovery product is:
 
 ```text
-blind_raw_recovery_truth_topk/blind_raw_recovery_summary.json
+narrowband_detector_truth/narrowband_candidates.parquet
+narrowband_detector_truth/narrowband_recovery.parquet
+narrowband_detector_truth/narrowband_line_scores.parquet
+narrowband_detector_truth/narrowband_detector_summary.json
 ```
 
 This is the honest injected-source discovery test: the scorer sees the raw
 injected spectra, not `injected - baseline`. It is filtered to injected target
 IDs for speed, but the wavelength scan remains blind.
+
+Legacy paired-delta products are still written under:
+
+```text
+blind_classifier_paired_delta_aperture_warp/
+blind_classifier_paired_delta_psf_warp/
+blind_classifier_paired_delta_joint_warp/
+```
+
+Treat those as injector/photometry sanity checks, not science discovery
+products.
 
 ## Injection Noise Caveat
 
@@ -381,6 +423,24 @@ Run paired baseline/injected scoring:
   --output-dir /mnt/niroseti/spherex_cache/runs/<injected_run_name>/classifier_paired_delta \
   --min-snr 5 \
   --ignore-flagged
+```
+
+Run the current GPU raw narrowband scorer by hand:
+
+```bash
+.venv/bin/python tools/warp_narrowband_detector.py \
+  --run-dir /mnt/niroseti/spherex_cache/runs/<run_name> \
+  --output-dir /mnt/niroseti/spherex_cache/runs/<run_name>/narrowband_detector_raw \
+  --grid-step-nm 1.0 \
+  --min-joint-rho 3.0 \
+  --top-k-per-target 20 \
+  --device cuda:0 \
+  --quality-min-support 3 \
+  --quality-max-flagged-points 3 \
+  --quality-max-candidates-per-target 5 \
+  --quality-max-aperture-psf-ratio 3.0 \
+  --diagnostic-line-half-window-nm 80 \
+  --diagnostic-line-max-rows-per-candidate 201
 ```
 
 Score recovery against truth:
