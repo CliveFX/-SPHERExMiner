@@ -157,6 +157,18 @@ def _has_zero_measured_parent(run_dir: Path) -> bool:
     return bool(qa) and int(qa.get("trial_count") or 0) > 0 and int(qa.get("measured_count") or 0) == 0
 
 
+def _plan_injection_count(plan_path: Path) -> int | None:
+    plan = _json(plan_path)
+    if not plan:
+        return None
+    if "injection_count" in plan:
+        return int(plan.get("injection_count") or 0)
+    injections = plan.get("injections")
+    if isinstance(injections, list):
+        return len(injections)
+    return None
+
+
 def _write_manifest(campaign_root: Path, manifest_rows: list[dict[str, Any]]) -> None:
     (campaign_root / "campaign_manifest.json").write_text(json.dumps(manifest_rows, indent=2), encoding="utf-8")
 
@@ -573,52 +585,70 @@ def main() -> None:
             continue
 
         if args.force or not _done(baseline_run / "spectra" / "target_spectra.parquet"):
-            _run(
-                [
-                    bin_path,
-                    "run-depth-test",
-                    "--target",
-                    target_id,
-                    "--run-name",
-                    base_name,
-                    "--release",
-                    "qr2",
-                    "--limit-fields",
-                    str(args.limit_fields),
-                    "--max-gaia-sources",
-                    str(args.max_gaia_sources),
-                    "--gaia-g-min",
-                    str(args.gaia_g_min),
-                    "--gaia-g-max",
-                    str(args.gaia_g_max),
-                    "--max-field-workers",
-                    str(args.max_field_workers),
-                    "--photometry-backend",
-                    "warp_calibrated",
-                    "--warp-devices",
-                    args.warp_devices,
-                    "--status-mode",
-                    "jsonl",
-                    "--max-field-retries",
-                    "1",
-                    "--enable-psf",
-                    "--psf-photometry-backend",
-                    "warp_grid",
-                    "--psf-kernel-build-mode",
-                    "gpu_spline",
-                    "--psf-grid-half-range-pix",
-                    "1.0",
-                    "--psf-grid-step-pix",
-                    "0.5",
-                    "--psf-grid-metric",
-                    "snr",
-                    "--cache-root",
-                    str(args.cache_root),
-                ],
-                log_path=campaign_root / "logs" / f"{target_id}_baseline.log",
-                env=env,
-                dry_run=args.dry_run,
-            )
+            try:
+                _run(
+                    [
+                        bin_path,
+                        "run-depth-test",
+                        "--target",
+                        target_id,
+                        "--run-name",
+                        base_name,
+                        "--release",
+                        "qr2",
+                        "--limit-fields",
+                        str(args.limit_fields),
+                        "--max-gaia-sources",
+                        str(args.max_gaia_sources),
+                        "--gaia-g-min",
+                        str(args.gaia_g_min),
+                        "--gaia-g-max",
+                        str(args.gaia_g_max),
+                        "--max-field-workers",
+                        str(args.max_field_workers),
+                        "--photometry-backend",
+                        "warp_calibrated",
+                        "--warp-devices",
+                        args.warp_devices,
+                        "--status-mode",
+                        "jsonl",
+                        "--max-field-retries",
+                        "1",
+                        "--enable-psf",
+                        "--psf-photometry-backend",
+                        "warp_grid",
+                        "--psf-kernel-build-mode",
+                        "gpu_spline",
+                        "--psf-grid-half-range-pix",
+                        "1.0",
+                        "--psf-grid-step-pix",
+                        "0.5",
+                        "--psf-grid-metric",
+                        "snr",
+                        "--cache-root",
+                        str(args.cache_root),
+                    ],
+                    log_path=campaign_root / "logs" / f"{target_id}_baseline.log",
+                    env=env,
+                    dry_run=args.dry_run,
+                )
+            except subprocess.CalledProcessError as exc:
+                reason = f"baseline depth run failed with exit {exc.returncode}"
+                print(f"skipping {target_id}: {reason}", flush=True)
+                manifest_rows.append(
+                    _skipped_manifest_row(
+                        target=target,
+                        baseline_run=baseline_run,
+                        injected_run=injected_run,
+                        plan_path=plan_path,
+                        manifest_path=manifest_path,
+                        recovery_dir=recovery_dir,
+                        review_path=review_path,
+                        reason=reason,
+                    )
+                )
+                _write_manifest(campaign_root, manifest_rows)
+                continue
 
         if args.blind_scan and args.blind_raw_scan and args.blind_scanner == "narrowband_gpu":
             baseline_narrowband_dir = baseline_run / "narrowband_detector_raw"
@@ -699,6 +729,25 @@ def main() -> None:
                 env=env,
                 dry_run=args.dry_run,
             )
+
+        injection_count = _plan_injection_count(plan_path)
+        if injection_count == 0:
+            reason = "injection plan has zero supported injections"
+            print(f"skipping {target_id}: {reason}", flush=True)
+            manifest_rows.append(
+                _skipped_manifest_row(
+                    target=target,
+                    baseline_run=baseline_run,
+                    injected_run=injected_run,
+                    plan_path=plan_path,
+                    manifest_path=manifest_path,
+                    recovery_dir=recovery_dir,
+                    review_path=review_path,
+                    reason=reason,
+                )
+            )
+            _write_manifest(campaign_root, manifest_rows)
+            continue
 
         if args.force or not _done(overrides_path):
             _run(
@@ -1008,6 +1057,7 @@ def main() -> None:
             {
                 "target_id": target_id,
                 "object_name": target.get("object_name"),
+                "status": "done",
                 "baseline_run": str(baseline_run),
                 "injected_run": str(injected_run),
                 "injection_plan": str(plan_path),

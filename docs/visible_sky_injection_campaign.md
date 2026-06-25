@@ -189,6 +189,11 @@ For each target anchor, the runner performs:
 Outputs are resumable. If a stage output exists, the runner skips that stage
 unless `--force` is supplied.
 
+Campaigns are fail-and-continue at the target level. A target is marked skipped
+when the baseline depth run has no measured parent fields, or when the injection
+planner produces zero supported injections for the configured laser lines. This
+lets the remaining named sky centers continue in long overnight sequences.
+
 The bright center IDs, such as `cvj_markab`, are only used for Gaia-anchor
 selection. After resolution, run names include the generated Gaia target ID.
 

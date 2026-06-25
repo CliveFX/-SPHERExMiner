@@ -795,6 +795,7 @@ def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[st
 
     rows: list[dict[str, object]] = []
     campaigns: set[str] = set()
+    campaign_dirs = _campaign_names(runs_root.parent / "campaigns")
     scanned_runs = 0
     candidate_runs = 0
     if not runs_root.exists():
@@ -863,7 +864,12 @@ def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[st
                     "source": run_source,
                     "scope": scope,
                     "source_path": str(path),
-                    "spectra_url": f"/spectra?run={urllib.parse.quote(run_name)}&target={urllib.parse.quote(target_id)}",
+                    "spectra_url": (
+                        f"/spectra?run={urllib.parse.quote(run_name)}"
+                        f"&target={urllib.parse.quote(target_id)}"
+                        f"&target_id={urllib.parse.quote(target_id)}"
+                        f"&q={urllib.parse.quote(target_id)}"
+                    ),
                     "blind_candidates_url": blind_url,
                 }
             )
@@ -872,7 +878,8 @@ def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[st
     rows = _sort_candidate_summary_rows(rows, (params.get("sort") or ["quality"])[0])
     total = len(rows)
     page = rows[offset : offset + limit]
-    return _candidate_summary_payload(page, sorted(campaigns), source, campaign_filter, scanned_runs, candidate_runs, limit, offset, total, quality)
+    campaign_options = campaign_dirs or sorted(campaigns)
+    return _candidate_summary_payload(page, campaign_options, source, campaign_filter, scanned_runs, candidate_runs, limit, offset, total, quality)
 
 
 def _candidate_source_for_run(run_name: str, source: str) -> tuple[str | None, str | None]:
@@ -4146,7 +4153,7 @@ def _candidate_summary_html() -> str:
     <div class="controls">
       <div><label>Source</label><select id="source" onchange="refresh(0)"><option value="baseline" selected>Uninjected baseline</option><option value="paired">Injected paired-delta</option><option value="injected">Injected raw</option><option value="all">All available</option></select></div>
       <div><label>Campaign</label><select id="campaign" onchange="refresh(0)"><option value="">All campaigns</option></select></div>
-      <div><label>Tier</label><select id="tier" onchange="refresh(0)"><option value="all">All</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></div>
+      <div><label>Tier</label><select id="tier" onchange="refresh(0)"><option value="all">All</option><option value="S">S</option><option value="A">A</option><option value="B">B</option><option value="C">C</option><option value="D">D</option></select></div>
       <div><label>Quality</label><select id="quality" onchange="refresh(0)"><option value="pass" selected>Pass</option><option value="high_confidence">High confidence</option><option value="review">Review</option><option value="reject">Reject</option><option value="all">All</option></select></div>
       <div><label>Sort</label><select id="sort" onchange="refresh(0)"><option value="quality" selected>Quality</option><option value="rank">Rank</option><option value="snr">SNR</option><option value="wave">Wavelength</option><option value="support">Support</option><option value="flags">Fewest flags</option><option value="target">Target</option><option value="run">Run</option></select></div>
       <div><label>Min SNR</label><input id="minSnr" placeholder="optional" oninput="scheduleRefresh()"></div>
@@ -4218,7 +4225,7 @@ function renderRows(rows){
 }
 function cell(row,col){
   if (col === 'links') {
-    return `<td><a href="${row.spectra_url || '#'}">spectra</a> <span class="small">/</span> <a href="${row.blind_candidates_url || '#'}">blind</a></td>`;
+    return `<td><a target="_blank" rel="noopener" href="${esc(row.spectra_url || '#')}">spectra</a> <span class="small">/</span> <a target="_blank" rel="noopener" href="${esc(row.blind_candidates_url || '#')}">blind</a></td>`;
   }
   const cls = col === 'tier' ? 'tier' + String(row[col] || '') : '';
   return `<td class="${cls}" title="${esc(fmt(row[col]))}">${esc(fmt(row[col]))}</td>`;

@@ -227,6 +227,11 @@ Notes:
   science gate.
 - The runner is stage-resumable. Re-running the same command skips completed
   stages. Use `--force` only to intentionally overwrite stage products.
+- Targets with no measured parent fields, such as the current Altair anchor,
+  are recorded as skipped and the campaign continues.
+- Targets whose spectra cannot support any requested injection line are also
+  recorded as skipped. This can happen in sparse bright-star bins where only a
+  few usable spectra survive and none overlap the configured laser lines.
 - Recovery Summary shows only targets that have finished
   `recovery_score_mixed_lasers/recovery_summary.json`; active targets appear
   later.
