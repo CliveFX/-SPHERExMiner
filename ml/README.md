@@ -60,6 +60,9 @@ Narrowband signal model:
   outputs.
 - Produces signal probability, estimated wavelength, and review grade.
 - Uses explicit injection provenance fields from future spectra outputs.
+- Current baseline is a ragged point/set encoder trained from cached tensor
+  shards. See
+  [`docs/narrowband_ml_training_log.md`](../docs/narrowband_ml_training_log.md).
 
 ## Dashboard Contract
 
@@ -125,6 +128,37 @@ ml/.venv/bin/python ml/narrowband_signal/train.py \
   --batch-size 16 \
   --max-targets 100 \
   --max-points 128 \
+  --device cuda
+```
+
+Current cached narrowband line/no-line run shape:
+
+```bash
+ml/.venv/bin/python ml/datasets/build_ml_datasets.py \
+  --dataset-name narrowband_line_cv_mega_v0 \
+  --run-glob 'cv_june_g11_16_f500*_baseline' \
+  --run-glob 'cv_june_g11_16_f500*_injected' \
+  --quality-category good \
+  --quality-category review \
+  --max-targets-per-run 5000 \
+  --workers 16
+
+ml/.venv/bin/python ml/narrowband_signal/build_feature_cache.py \
+  --dataset-dir /mnt/niroseti/spherex_cache/ml_datasets/narrowband_line_cv_mega_v0 \
+  --cache-name narrowband_line_cv_mega_v0_train_cache \
+  --split train \
+  --workers 24 \
+  --max-points 384
+
+ml/.venv/bin/python ml/narrowband_signal/train_line.py \
+  --dataset-dir /mnt/niroseti/spherex_cache/ml_datasets/narrowband_line_cv_mega_v0 \
+  --feature-cache-dir /mnt/niroseti/spherex_cache/ml_feature_caches/narrowband_line_cv_mega_v0_train_cache \
+  --run-name narrowband_line_cv_mega_v0_train8_cached \
+  --epochs 8 \
+  --batch-size 512 \
+  --max-points 384 \
+  --hidden-dim 192 \
+  --embedding-dim 128 \
   --device cuda
 ```
 

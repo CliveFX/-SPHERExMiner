@@ -465,14 +465,23 @@ Features:
 
 ### Phase 3: Narrowband Model Prototype
 
-- Build narrowband dataset from baseline/injected paired runs.
-- Train supervised ragged model with hard negatives.
+- Build narrowband dataset from baseline/injected paired runs. Initial dataset:
+  `narrowband_line_cv_mega_v0`, with 206,168 target spectra and 3,297
+  injection-truth rows.
+- Train supervised ragged model with hard negatives. Initial cached baseline:
+  `narrowband_line_cv_mega_v0_train8_cached`.
 - Compare against current GPU matched-filter scorer:
   - recovery by SNR,
   - false positives per target,
   - missed injections,
   - candidate grade distribution.
 - Add `/ml-narrowband` viewer.
+
+The first cached line/no-line training run is documented in
+[`narrowband_ml_training_log.md`](narrowband_ml_training_log.md). Its key lesson
+is operational: do not train directly from raw parquet point tables for serious
+experiments. Build parallel tensor feature caches first, then train from those
+shards.
 
 ### Phase 4: Scale and Hardening
 

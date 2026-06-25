@@ -5344,7 +5344,8 @@ def _umap_html() -> str:
     .small { color:var(--muted); font-size:12px; }
     .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
     #mapWrap { position:relative; height:720px; border:1px solid #1d5f7a; border-radius:6px; background:rgba(4,10,20,.94); overflow:hidden; }
-    #map { width:100%; height:100%; display:block; }
+    #map { width:100%; height:100%; display:block; cursor:grab; }
+    #map.dragging { cursor:grabbing; }
     #tip { position:absolute; display:none; pointer-events:none; max-width:420px; padding:8px; border:1px solid var(--line); border-radius:4px; background:rgba(5,9,20,.96); box-shadow:0 0 18px rgba(54,231,255,.16); }
     table { width:100%; border-collapse:collapse; font-size:12px; }
     th, td { border-bottom:1px solid var(--line); padding:6px; text-align:left; vertical-align:top; }
@@ -5356,6 +5357,11 @@ def _umap_html() -> str:
     #spectrumOverlay h3 { margin:0 0 6px; color:var(--cyan); font-size:13px; }
     #spectrumOverlay .overlayHead { display:flex; align-items:center; justify-content:space-between; gap:8px; }
     #spectrumOverlay button { width:auto; padding:3px 8px; font-size:11px; }
+    #spectrumOverlay.collapsed { width:230px; height:auto; }
+    #spectrumOverlay.collapsed #hoverSpectrum, #spectrumOverlay.collapsed #hoverMeta { display:none; }
+    #mapTools { position:absolute; right:12px; top:12px; display:flex; gap:6px; z-index:4; }
+    #mapTools button { width:auto; padding:5px 9px; font-size:12px; background:rgba(5,9,20,.9); }
+    #zoomReadout { position:absolute; right:12px; top:52px; z-index:4; padding:4px 7px; border:1px solid var(--line); border-radius:4px; background:rgba(5,9,20,.82); color:var(--muted); font-size:12px; }
     #hoverSpectrum { width:100%; height:274px; display:block; border:1px solid #1d5f7a; border-radius:5px; background:rgba(4,10,20,.94); }
     #hoverMeta { margin-top:5px; line-height:1.25; max-height:48px; overflow:hidden; }
   </style>
@@ -5403,9 +5409,15 @@ def _umap_html() -> str:
     <div id="cards" class="cards"></div>
     <div id="mapWrap">
       <canvas id="map"></canvas>
+      <div id="mapTools">
+        <button onclick="zoomBy(1.35)">Zoom In</button>
+        <button onclick="zoomBy(1/1.35)">Zoom Out</button>
+        <button onclick="resetView()">Reset</button>
+      </div>
+      <div id="zoomReadout">1.00x</div>
       <div id="tip"></div>
       <div id="spectrumOverlay">
-        <div class="overlayHead"><h3 id="hoverTitle">Hover Spectrum</h3><button id="unpinButton" style="display:none" onclick="unpinSpectrum()">Unpin</button></div>
+        <div class="overlayHead"><h3 id="hoverTitle">Hover Spectrum</h3><div><button id="unpinButton" style="display:none" onclick="unpinSpectrum()">Unpin</button><button onclick="toggleSpectrumOverlay()">Hide</button></div></div>
         <canvas id="hoverSpectrum"></canvas>
         <div id="hoverMeta" class="small">Drive over points to preview aperture and PSF spectra. Click a point to pin it below.</div>
       </div>
@@ -5436,6 +5448,8 @@ let hoverIndex = -1;
 let pinnedIndex = -1;
 let hoverTimer = null;
 let hoverRequestSeq = 0;
+let view = {scale:1, tx:0, ty:0};
+let drag = null;
 
 function val(id){ return document.getElementById(id).value; }
 function setVal(id,v){ document.getElementById(id).value = v || ''; }
@@ -5459,6 +5473,7 @@ async function refresh(){
   renderCards();
   renderClusters(data.clusters || []);
   renderPoints(data.points || []);
+  resetView(false);
   draw();
   history.replaceState(null, '', '/umap' + qs());
 }
@@ -5523,7 +5538,7 @@ function draw(){
   }
   bounds = makeBounds(rows);
   for (let i=0; i<rows.length; i++) {
-    const r = rows[i], p = xy(r, rect.width, rect.height);
+    const r = rows[i], p = screenXY(r, rect.width, rect.height);
     ctx.beginPath();
     ctx.arc(p.x, p.y, i === selectedIndex ? 4.2 : 2.2, 0, Math.PI*2);
     ctx.fillStyle = colorFor(r);
@@ -5531,6 +5546,7 @@ function draw(){
     ctx.fill();
   }
   ctx.globalAlpha = 1;
+  document.getElementById('zoomReadout').textContent = `${view.scale.toFixed(2)}x`;
 }
 function grid(ctx,w,h){
   ctx.strokeStyle = 'rgba(33,68,95,.55)';
@@ -5550,6 +5566,34 @@ function xy(r,w,h){
     x: (Number(r.umap_x)-bounds.x0)/(bounds.x1-bounds.x0 || 1)*w,
     y: h - (Number(r.umap_y)-bounds.y0)/(bounds.y1-bounds.y0 || 1)*h
   };
+}
+function screenXY(r,w,h){
+  const p = xy(r,w,h);
+  return {x:p.x*view.scale + view.tx, y:p.y*view.scale + view.ty};
+}
+function worldFromScreen(x,y){
+  return {x:(x-view.tx)/view.scale, y:(y-view.ty)/view.scale};
+}
+function zoomAt(factor, sx, sy){
+  const rect = canvas.getBoundingClientRect();
+  const cx = sx ?? rect.width / 2;
+  const cy = sy ?? rect.height / 2;
+  const before = worldFromScreen(cx, cy);
+  view.scale = Math.max(0.35, Math.min(32, view.scale * factor));
+  view.tx = cx - before.x * view.scale;
+  view.ty = cy - before.y * view.scale;
+  draw();
+}
+function zoomBy(factor){ zoomAt(factor); }
+function resetView(redraw=true){
+  view = {scale:1, tx:0, ty:0};
+  if (redraw) draw();
+}
+function toggleSpectrumOverlay(){
+  const overlay = document.getElementById('spectrumOverlay');
+  overlay.classList.toggle('collapsed');
+  const btn = overlay.querySelector('.overlayHead button:last-child');
+  btn.textContent = overlay.classList.contains('collapsed') ? 'Show' : 'Hide';
 }
 function colorFor(r){
   const mode = val('color');
@@ -5574,7 +5618,7 @@ function nearest(ev){
   const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
   let best=-1, bestD=Infinity;
   for(let i=0;i<rows.length;i++){
-    const p = xy(rows[i], rect.width, rect.height);
+    const p = screenXY(rows[i], rect.width, rect.height);
     const d = (p.x-mx)*(p.x-mx)+(p.y-my)*(p.y-my);
     if (d < bestD) { bestD=d; best=i; }
   }
@@ -5721,6 +5765,14 @@ function quant(sorted, q){
   return sorted[Math.min(sorted.length-1, Math.max(0, Math.floor(q*(sorted.length-1))))];
 }
 canvas.addEventListener('mousemove', ev => {
+  if (drag) {
+    const dx = ev.clientX - drag.x;
+    const dy = ev.clientY - drag.y;
+    view.tx = drag.tx + dx;
+    view.ty = drag.ty + dy;
+    draw();
+    return;
+  }
   const i = nearest(ev), r = (data.points || [])[i];
   if (!r) { tip.style.display='none'; return; }
   const rect = canvas.getBoundingClientRect();
@@ -5732,6 +5784,19 @@ canvas.addEventListener('mousemove', ev => {
 });
 canvas.addEventListener('mouseleave', () => { tip.style.display='none'; hoverIndex = -1; });
 canvas.addEventListener('click', ev => { const i = nearest(ev); if (i >= 0) selectPoint(i); });
+canvas.addEventListener('mousedown', ev => {
+  if (ev.button !== 0) return;
+  drag = {x:ev.clientX, y:ev.clientY, tx:view.tx, ty:view.ty};
+  canvas.classList.add('dragging');
+});
+window.addEventListener('mouseup', () => { drag = null; canvas.classList.remove('dragging'); });
+canvas.addEventListener('wheel', ev => {
+  ev.preventDefault();
+  const rect = canvas.getBoundingClientRect();
+  const factor = Math.exp(-ev.deltaY * 0.0014);
+  zoomAt(factor, ev.clientX - rect.left, ev.clientY - rect.top);
+}, {passive:false});
+canvas.addEventListener('dblclick', () => resetView());
 window.addEventListener('resize', () => { draw(); if (pinnedIndex >= 0) previewSpectrum(pinnedIndex, true); else if (hoverIndex >= 0) previewSpectrum(hoverIndex); });
 function escAttr(v){ return String(v ?? '').replace(/['\\\\]/g, '\\\\$&').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 setVal('embedding', initial.get('embedding') || '');

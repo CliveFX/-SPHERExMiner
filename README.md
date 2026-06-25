@@ -30,6 +30,10 @@ main review surfaces are visible from GitHub:
 | --- |
 | ![Narrowband response simulator](docs/screenshots/narrowband_simulator.png) |
 
+| Science embedding UMAP | ML training status |
+| --- | --- |
+| ![Science embedding UMAP](docs/screenshots/umap_viewer.png) | ![ML training status](docs/screenshots/ml_training.png) |
+
 ## Why This Is Hard
 
 SPHEREx is not a conventional slit spectrum for each star. It is an all-sky
@@ -99,6 +103,8 @@ the original field-first design target.
   review, without saving the full target x wavelength score cube.
 - Serves local web dashboards for campaign status, spectra, injections,
   recovery, and blind candidates.
+- Builds science embeddings and a first supervised narrowband ML baseline under
+  the separate `ml/` workspace.
 
 ## GPU Acceleration
 
@@ -128,6 +134,19 @@ Current limitation: GPU occupancy is still low because the prototype schedules
 many relatively small per-field jobs. The future frame-scale system should batch
 whole frames and large target arrays more aggressively, then distribute those
 jobs across multiple GPUs and machines.
+
+## ML Baselines
+
+The `ml/` workspace is intentionally separate from the deterministic miner. The
+current science model learns ragged spectral embeddings for similarity/UMAP
+browsing. The current narrowband ML baseline learns laser/no-laser plus an
+approximate injected wavelength from FITS-level injection examples.
+
+The narrowband line model should be trained from cached tensor shards, not
+directly from raw parquet spectra. The first cached run used 143,923 training
+examples and 1,628 injected positives. See
+[`docs/narrowband_ml_training_log.md`](docs/narrowband_ml_training_log.md) for
+commands, metrics, and caveats.
 
 ## Injection And Recovery Modes
 

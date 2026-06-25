@@ -14,6 +14,7 @@ The builder is intentionally conservative:
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import hashlib
 import json
 import math
@@ -101,6 +102,7 @@ def main() -> None:
     parser.add_argument("--exclude-injected-targets", action="store_true", help="Drop targets present in an injection manifest.")
     parser.add_argument("--science-only", action="store_true", help="Write only science target/point tables plus split manifest.")
     parser.add_argument("--max-targets-per-run", type=int, help="Optional per-run target cap for smoke datasets.")
+    parser.add_argument("--workers", type=int, default=1, help="Parallel run-table builders. Use more for large campaign dataset prep.")
     parser.add_argument("--status-every", type=int, default=1, help="Write status every N processed runs.")
     args = parser.parse_args()
 
@@ -121,6 +123,61 @@ def main() -> None:
     split_rows: list[dict[str, object]] = []
     run_summaries: list[dict[str, object]] = []
 
+    completed = 0
+
+    def consume_bundle(run_dir: Path, bundle: dict[str, Any]) -> None:
+        nonlocal completed
+        completed += 1
+        if bundle["science_targets"] is not None:
+            science_targets.append(bundle["science_targets"])
+            science_points.append(bundle["science_points"])
+            narrowband_targets.append(bundle["narrowband_targets"])
+            narrowband_points.append(bundle["narrowband_points"])
+            split_rows.extend(bundle["split_rows"])
+        if bundle["injection_truth"] is not None and not bundle["injection_truth"].empty:
+            truth_tables.append(bundle["injection_truth"])
+        run_summaries.append(bundle["summary"])
+        if args.status_every > 0 and completed % args.status_every == 0:
+            _write_status(
+                status_path,
+                {
+                    "dataset_name": args.dataset_name,
+                    "status": "running",
+                    "run_index": completed,
+                    "run_count": len(run_dirs),
+                    "current_run": run_dir.name,
+                    "target_rows": int(sum(len(t) for t in science_targets)),
+                    "point_rows": int(sum(len(t) for t in science_points)),
+                    "elapsed_sec": time.perf_counter() - started,
+                    "workers": int(args.workers),
+                },
+            )
+
+    def error_bundle(run_dir: Path, exc: Exception) -> dict[str, Any]:
+        return {
+            "science_targets": None,
+            "science_points": None,
+            "narrowband_targets": None,
+            "narrowband_points": None,
+            "injection_truth": None,
+            "split_rows": [],
+            "summary": {
+                "run_name": run_dir.name,
+                "run_dir": str(run_dir),
+                "status": "error",
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        }
+
+    def build_one(run_dir: Path) -> dict[str, Any]:
+        return _build_run_tables(
+            run_dir,
+            dataset_name=args.dataset_name,
+            quality_categories=set(args.quality_category or []),
+            max_targets=args.max_targets_per_run,
+            exclude_injected_targets=args.exclude_injected_targets,
+        )
+
     for index, run_dir in enumerate(run_dirs, start=1):
         _write_status(
             status_path,
@@ -131,49 +188,28 @@ def main() -> None:
                 "run_count": len(run_dirs),
                 "current_run": run_dir.name,
                 "elapsed_sec": time.perf_counter() - started,
+                "workers": int(args.workers),
             },
         )
+        if args.workers and args.workers > 1:
+            break
         try:
-            bundle = _build_run_tables(
-                run_dir,
-                dataset_name=args.dataset_name,
-                quality_categories=set(args.quality_category or []),
-                max_targets=args.max_targets_per_run,
-                exclude_injected_targets=args.exclude_injected_targets,
-            )
+            bundle = build_one(run_dir)
         except Exception as exc:
-            run_summaries.append(
-                {
-                    "run_name": run_dir.name,
-                    "run_dir": str(run_dir),
-                    "status": "error",
-                    "error": f"{type(exc).__name__}: {exc}",
-                }
-            )
+            consume_bundle(run_dir, error_bundle(run_dir, exc))
             continue
-        if bundle["science_targets"] is not None:
-            science_targets.append(bundle["science_targets"])
-            science_points.append(bundle["science_points"])
-            narrowband_targets.append(bundle["narrowband_targets"])
-            narrowband_points.append(bundle["narrowband_points"])
-            split_rows.extend(bundle["split_rows"])
-        if bundle["injection_truth"] is not None and not bundle["injection_truth"].empty:
-            truth_tables.append(bundle["injection_truth"])
-        run_summaries.append(bundle["summary"])
-        if args.status_every > 0 and index % args.status_every == 0:
-            _write_status(
-                status_path,
-                {
-                    "dataset_name": args.dataset_name,
-                    "status": "running",
-                    "run_index": index,
-                    "run_count": len(run_dirs),
-                    "current_run": run_dir.name,
-                    "target_rows": int(sum(len(t) for t in science_targets)),
-                    "point_rows": int(sum(len(t) for t in science_points)),
-                    "elapsed_sec": time.perf_counter() - started,
-                },
-            )
+        consume_bundle(run_dir, bundle)
+
+    if args.workers and args.workers > 1:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=int(args.workers)) as executor:
+            futures = {executor.submit(build_one, run_dir): run_dir for run_dir in run_dirs}
+            for future in concurrent.futures.as_completed(futures):
+                run_dir = futures[future]
+                try:
+                    bundle = future.result()
+                except Exception as exc:
+                    bundle = error_bundle(run_dir, exc)
+                consume_bundle(run_dir, bundle)
 
     outputs = _write_outputs(
         out_dir=out_dir,
