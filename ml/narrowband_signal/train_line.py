@@ -65,8 +65,12 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=8)
     parser.add_argument("--batch-size", type=int, default=192)
     parser.add_argument("--max-points", type=int, default=384)
+    parser.add_argument("--architecture", choices=["set", "transformer"], default="set")
     parser.add_argument("--hidden-dim", type=int, default=160)
     parser.add_argument("--embedding-dim", type=int, default=96)
+    parser.add_argument("--transformer-layers", type=int, default=3)
+    parser.add_argument("--transformer-heads", type=int, default=6)
+    parser.add_argument("--dropout", type=float, default=0.08)
     parser.add_argument("--line-min-nm", type=float, default=700.0)
     parser.add_argument("--line-max-nm", type=float, default=5000.0)
     parser.add_argument("--line-loss-weight", type=float, default=0.35)
@@ -104,12 +108,16 @@ def main() -> None:
         raise SystemExit(f"Need both positive and negative examples; got positives={positives} negatives={negatives}")
 
     device = torch.device(args.device if args.device == "cpu" or torch.cuda.is_available() else "cpu")
-    model = RaggedLineModel(
+    model = build_model(
         torch=torch,
         nn=nn,
+        architecture=args.architecture,
         input_dim=len(FEATURE_COLUMNS),
         hidden_dim=args.hidden_dim,
         embedding_dim=args.embedding_dim,
+        transformer_layers=args.transformer_layers,
+        transformer_heads=args.transformer_heads,
+        dropout=args.dropout,
     ).to(device)
     pos_weight = torch.tensor([negatives / max(positives, 1)], dtype=torch.float32, device=device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
@@ -123,6 +131,7 @@ def main() -> None:
             dataset_name=args.dataset_dir.name,
             model_version=args.model_version,
             started=started,
+            architecture=args.architecture,
             examples=len(examples),
             positive_examples=positives,
             negative_examples=negatives,
@@ -185,8 +194,12 @@ def main() -> None:
                     {
                         "model_state_dict": model.state_dict(),
                         "model_version": args.model_version,
+                        "architecture": args.architecture,
                         "feature_columns": FEATURE_COLUMNS,
                         "embedding_dim": args.embedding_dim,
+                        "hidden_dim": args.hidden_dim,
+                        "transformer_layers": args.transformer_layers if args.architecture == "transformer" else None,
+                        "transformer_heads": args.transformer_heads if args.architecture == "transformer" else None,
                         "line_min_nm": args.line_min_nm,
                         "line_max_nm": args.line_max_nm,
                         "epoch": epoch,
@@ -204,6 +217,7 @@ def main() -> None:
                     dataset_name=args.dataset_dir.name,
                     model_version=args.model_version,
                     started=started,
+                    architecture=args.architecture,
                     epoch=epoch,
                     step=step,
                     examples=len(examples),
@@ -222,6 +236,7 @@ def main() -> None:
         "run_name": args.run_name,
         "model_type": "narrowband_line",
         "model_version": args.model_version,
+        "architecture": args.architecture,
         "dataset_dir": str(args.dataset_dir),
         "feature_cache_dir": str(args.feature_cache_dir) if args.feature_cache_dir else None,
         "feature_columns": FEATURE_COLUMNS,
@@ -233,6 +248,11 @@ def main() -> None:
         "metrics_path": str(metrics_path),
         "line_min_nm": args.line_min_nm,
         "line_max_nm": args.line_max_nm,
+        "hidden_dim": args.hidden_dim,
+        "embedding_dim": args.embedding_dim,
+        "transformer_layers": args.transformer_layers if args.architecture == "transformer" else None,
+        "transformer_heads": args.transformer_heads if args.architecture == "transformer" else None,
+        "dropout": args.dropout if args.architecture == "transformer" else None,
         "last_metric": last_metric,
     }
     (run_dir / "model_card.json").write_text(json.dumps(model_card, indent=2, sort_keys=True), encoding="utf-8")
@@ -245,6 +265,7 @@ def main() -> None:
             dataset_name=args.dataset_dir.name,
             model_version=args.model_version,
             started=started,
+            architecture=args.architecture,
             best_checkpoint=str(checkpoint_dir / "best.pt"),
             latest_train_loss=last_metric.get("train_loss"),
             injected_detected_fraction=last_metric.get("injected_detected_fraction"),
@@ -257,6 +278,32 @@ def main() -> None:
         ),
     )
     print(json.dumps(model_card, indent=2, sort_keys=True), flush=True)
+
+
+def build_model(
+    *,
+    torch,
+    nn,
+    architecture: str,
+    input_dim: int,
+    hidden_dim: int,
+    embedding_dim: int,
+    transformer_layers: int,
+    transformer_heads: int,
+    dropout: float,
+):
+    if architecture == "transformer":
+        return RaggedTransformerLineModel(
+            torch=torch,
+            nn=nn,
+            input_dim=input_dim,
+            hidden_dim=hidden_dim,
+            embedding_dim=embedding_dim,
+            num_layers=transformer_layers,
+            num_heads=transformer_heads,
+            dropout=dropout,
+        )
+    return RaggedLineModel(torch=torch, nn=nn, input_dim=input_dim, hidden_dim=hidden_dim, embedding_dim=embedding_dim)
 
 
 class RaggedLineModel:
@@ -291,6 +338,70 @@ class RaggedLineModel:
                 return self.object_head(emb).squeeze(-1), self.line_head(emb).squeeze(-1)
 
         return _Model()
+
+
+class RaggedTransformerLineModel:
+    def __new__(
+        cls,
+        *,
+        torch,
+        nn,
+        input_dim: int,
+        hidden_dim: int,
+        embedding_dim: int,
+        num_layers: int,
+        num_heads: int,
+        dropout: float,
+    ):
+        class _TransformerModel(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                if hidden_dim % num_heads != 0:
+                    raise ValueError(f"hidden_dim={hidden_dim} must be divisible by transformer_heads={num_heads}")
+                self.input = nn.Sequential(
+                    nn.Linear(input_dim, hidden_dim),
+                    nn.GELU(),
+                    nn.LayerNorm(hidden_dim),
+                )
+                self.cls_token = nn.Parameter(torch.zeros(1, 1, hidden_dim))
+                self.pos = nn.Sequential(
+                    nn.Linear(1, hidden_dim),
+                    nn.GELU(),
+                    nn.Linear(hidden_dim, hidden_dim),
+                )
+                layer = nn.TransformerEncoderLayer(
+                    d_model=hidden_dim,
+                    nhead=num_heads,
+                    dim_feedforward=hidden_dim * 4,
+                    dropout=dropout,
+                    activation="gelu",
+                    batch_first=True,
+                    norm_first=True,
+                )
+                self.encoder = nn.TransformerEncoder(layer, num_layers=num_layers)
+                self.embed = nn.Sequential(
+                    nn.LayerNorm(hidden_dim),
+                    nn.Linear(hidden_dim, embedding_dim),
+                    nn.GELU(),
+                )
+                self.object_head = nn.Linear(embedding_dim, 1)
+                self.line_head = nn.Sequential(nn.Linear(embedding_dim, hidden_dim // 2), nn.GELU(), nn.Linear(hidden_dim // 2, 1))
+                nn.init.normal_(self.cls_token, mean=0.0, std=0.02)
+
+            def forward(self, x, mask):
+                batch, length, _ = x.shape
+                h = self.input(x)
+                positions = torch.linspace(0.0, 1.0, length, device=x.device, dtype=x.dtype).view(1, length, 1)
+                h = h + self.pos(positions).to(h.dtype)
+                cls = self.cls_token.expand(batch, -1, -1)
+                h = torch.cat([cls, h], dim=1)
+                cls_mask = torch.zeros((batch, 1), dtype=torch.bool, device=mask.device)
+                key_padding_mask = torch.cat([cls_mask, ~mask], dim=1)
+                encoded = self.encoder(h, src_key_padding_mask=key_padding_mask)
+                emb = self.embed(encoded[:, 0, :])
+                return self.object_head(emb).squeeze(-1), self.line_head(emb).squeeze(-1)
+
+        return _TransformerModel()
 
 
 def _load_examples(

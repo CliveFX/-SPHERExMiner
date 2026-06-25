@@ -164,3 +164,101 @@ Next steps:
 4. Add hard negatives from false positives and flagged/artifact-heavy spectra.
 5. Consider a small spectral transformer once this set-encoder baseline is
    fully measured.
+
+## 2026-06-24: transformer architecture comparison
+
+The line trainer now supports two architectures:
+
+- `set`: the original ragged point/set encoder with mean/max pooling.
+- `transformer`: per-measurement spectral tokens, learned CLS token, spectral
+  position encoding, padding masks for ragged spectra, and the same
+  laser/no-laser plus wavelength heads.
+
+Smoke command:
+
+```bash
+ml/.venv/bin/python ml/narrowband_signal/train_line.py \
+  --dataset-dir /mnt/niroseti/spherex_cache/ml_datasets/narrowband_line_cv_mega_v0 \
+  --feature-cache-dir /mnt/niroseti/spherex_cache/ml_feature_caches/narrowband_line_cv_mega_v0_train_cache \
+  --run-name narrowband_line_transformer_smoke \
+  --architecture transformer \
+  --model-version narrowband_line_transformer_v0 \
+  --epochs 1 \
+  --batch-size 64 \
+  --max-targets 2048 \
+  --max-points 384 \
+  --hidden-dim 192 \
+  --embedding-dim 128 \
+  --transformer-layers 2 \
+  --transformer-heads 6 \
+  --device cuda
+```
+
+Full training command:
+
+```bash
+ml/.venv/bin/python ml/narrowband_signal/train_line.py \
+  --dataset-dir /mnt/niroseti/spherex_cache/ml_datasets/narrowband_line_cv_mega_v0 \
+  --feature-cache-dir /mnt/niroseti/spherex_cache/ml_feature_caches/narrowband_line_cv_mega_v0_train_cache \
+  --run-name narrowband_line_cv_mega_v0_transformer_train8 \
+  --architecture transformer \
+  --model-version narrowband_line_transformer_v0 \
+  --epochs 8 \
+  --batch-size 128 \
+  --max-points 384 \
+  --hidden-dim 192 \
+  --embedding-dim 128 \
+  --transformer-layers 3 \
+  --transformer-heads 6 \
+  --dropout 0.08 \
+  --device cuda
+```
+
+Output:
+
+```text
+/mnt/niroseti/spherex_cache/ml_runs/narrowband_line_cv_mega_v0_transformer_train8
+```
+
+Final status:
+
+```text
+examples:                       143,923
+negative examples:              142,295
+positive examples:              1,628
+device:                         cuda
+elapsed after cache load/train:  363.2 sec
+latest train loss:              0.2849
+last-batch injected fraction:   1.000
+last-batch false alarm fraction:0.0816
+last-batch line MAE:            320.0 nm
+```
+
+The final status is a last-batch snapshot, so the better comparison is
+epoch-aggregated training metrics from `training_metrics.jsonl`:
+
+```text
+set encoder, epoch 8:
+  mean train loss:        0.6160
+  injected recovered:     1358 / 1628 = 0.8342
+  baseline false alarms:  16023 / 142295 = 0.1126
+  positive line MAE:      285.8 nm
+
+transformer, epoch 8:
+  mean train loss:        0.5994
+  injected recovered:     1355 / 1628 = 0.8323
+  baseline false alarms:  14621 / 142295 = 0.1028
+  positive line MAE:      286.3 nm
+```
+
+Interpretation:
+
+- The transformer used the GPU more heavily, around 80-86% on GPU 0 during the
+  sampled run.
+- Wall time was much higher than the set encoder: roughly 363 sec versus 47 sec
+  after feature cache load.
+- Training false alarms improved modestly at similar injected recovery.
+- Wavelength localization did not improve.
+- This is still training-split only. The next meaningful comparison needs
+  validation/test caches and an inference/evaluation script with aggregate
+  metrics, not last-batch status snapshots.
