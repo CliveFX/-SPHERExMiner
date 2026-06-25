@@ -19,10 +19,10 @@ Current operational defaults:
 - Actual run anchors: generated Gaia sources in
   `/mnt/niroseti/spherex_cache/campaigns/<campaign>/resolved_gaia_anchor_targets.yaml`
 - Safe anchor search: nearby Gaia `G=12..14` within 1 degree of each bright center
-- Magnitude cut: Gaia `G=11..16`
+- Magnitude cut: start with trusted Gaia `G=11..16`, then run brighter stress
+  bins `G=8..11` and `G=5..8`
 - Requested field depth: `500`
-- Gaia safety cap per review run: `500` for overnight review; raise only for
-  deliberate larger surveys
+- Gaia safety cap per review run: `3000` for the current overnight sequence
 - Field workers: `24`
 - Photometry: GPU aperture plus GPU PSF
 - Injection lines: 808, 980, 1064, 1310, 1550, and 2000 nm
@@ -32,11 +32,56 @@ Current operational defaults:
 - Injection density: `3` targets per line/strength cell
 - Blind scan: GPU narrowband detector on raw baseline, raw injected, and
   truth-target raw injected recovery; paired-delta sanity products also written
+- ML sandbox: optional transformer line/no-line scoring on raw baseline, raw
+  injected, and truth-target injected spectra. This is exploratory only and is
+  not a science gate.
 - Blind grid: `1.0 nm` for current deep campaign
 - Blind diagnostic rows: `narrowband_line_scores.parquet` with +/-80 nm around
   retained candidates
 
-## Command
+## Campaign Configs
+
+Campaigns should be launched from YAML configs so run settings are preserved.
+Command-line flags can still override individual values.
+
+Template with deterministic GPU scans plus the exploratory transformer ML
+sandbox enabled:
+
+```text
+configs/campaign_with_ml_transformer.yaml
+```
+
+Current overnight sequence:
+
+```bash
+tmux new-session -d -s spherex-ml-mag-sequence \
+  'cd /home/clive/dev/NIROSETI_SPHEREx && bash tools/run_tonight_ml_mag_sequence.sh'
+```
+
+The sequence runs full baseline/injection/recovery campaigns in this order:
+
+1. `G 11-16`: known-good science range.
+2. `G 8-11`: brighter stress run.
+3. `G 5-8`: brightest stress run, expected to expose saturation/flag behavior.
+
+Defaults can be overridden without editing the script:
+
+```bash
+MAX_GAIA_SOURCES=3000 LIMIT_FIELDS=500 EXTRA_ARGS="--limit-targets 3" \
+  bash tools/run_tonight_ml_mag_sequence.sh
+```
+
+Example:
+
+```bash
+tmux new-session -d -s spherex-ml-night1 \
+  'cd /home/clive/dev/NIROSETI_SPHEREx && .venv/bin/python tools/run_visible_sky_injection_campaign.py \
+    --config configs/campaign_with_ml_transformer.yaml \
+    --campaign-prefix cv_june_g11_16_f500_ml_transformer_night1 \
+    2>&1 | tee /mnt/niroseti/spherex_cache/campaigns/cv_june_g11_16_f500_ml_transformer_night1/campaign_stdout.log'
+```
+
+## Command-Line Examples
 
 Smoke one target:
 
@@ -128,15 +173,18 @@ no measured parent fields in this prototype.
 For each target anchor, the runner performs:
 
 1. Baseline depth run.
-2. Mixed-laser injection plan generation from baseline spectra.
-3. FITS-level injection into copied files.
-4. Injected depth run using `path_overrides.json`.
-5. Raw science blind scan on the baseline run.
-6. Raw injected blind scan on the injected run.
-7. Focused raw blind scan only on injected truth target IDs.
-8. Paired baseline/injected matched-filter classification.
-9. Recovery scoring against injection truth.
-10. False-positive review manifest generation.
+2. Raw science blind scan on the baseline run.
+3. Optional ML sandbox score on baseline spectra.
+4. Mixed-laser injection plan generation from baseline spectra.
+5. FITS-level injection into copied files.
+6. Injected depth run using `path_overrides.json`.
+7. Raw injected blind scan on the injected run.
+8. Optional ML sandbox score on injected spectra.
+9. Focused raw blind scan only on injected truth target IDs.
+10. Optional ML sandbox score on injected truth target IDs.
+11. Paired baseline/injected matched-filter classification.
+12. Recovery scoring against injection truth.
+13. False-positive review manifest generation.
 
 Outputs are resumable. If a stage output exists, the runner skips that stage
 unless `--force` is supplied.
@@ -163,6 +211,9 @@ logs/<target>_inject.log
 logs/<target>_injected.log
 logs/<target>_narrowband_injected_raw.log
 logs/<target>_narrowband_raw_recovery.log
+logs/<target>_ml_narrowband_baseline.log
+logs/<target>_ml_narrowband_injected.log
+logs/<target>_ml_narrowband_truth.log
 logs/<target>_blind_paired_delta_aperture.log
 logs/<target>_blind_paired_delta_psf.log
 logs/<target>_blind_paired_delta_joint.log
@@ -176,6 +227,27 @@ Per-target run outputs live under:
 ```text
 /mnt/niroseti/spherex_cache/runs/<campaign>_<target>_baseline/
 /mnt/niroseti/spherex_cache/runs/<campaign>_<target>_injected/
+```
+
+Exploratory transformer ML sandbox products:
+
+```text
+<baseline_run>/ml_narrowband_transformer/
+  target_scores.parquet
+  ml_candidates.parquet
+  ml_narrowband_summary.json
+
+<injected_run>/ml_narrowband_transformer/
+  target_scores.parquet
+  ml_candidates.parquet
+  ml_injection_recovery.parquet
+  ml_narrowband_summary.json
+
+<injected_run>/ml_narrowband_transformer_truth/
+  target_scores.parquet
+  ml_candidates.parquet
+  ml_injection_recovery.parquet
+  ml_narrowband_summary.json
 ```
 
 Injection campaign products live under:

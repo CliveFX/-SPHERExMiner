@@ -406,8 +406,52 @@ def _run_narrowband_detector(
     _run(cmd, log_path=log_path, env=env, dry_run=args.dry_run)
 
 
+def _run_ml_narrowband(
+    *,
+    ml_py: str,
+    run_dir: Path,
+    output_dir: Path,
+    args: argparse.Namespace,
+    log_path: Path,
+    env: dict[str, str],
+    manifest_path: Path | None = None,
+    target_ids_file: Path | None = None,
+) -> None:
+    cmd = [
+        ml_py,
+        "ml/narrowband_signal/infer_line.py",
+        "--run-dir",
+        str(run_dir),
+        "--checkpoint",
+        str(args.ml_narrowband_checkpoint),
+        "--output-dir",
+        str(output_dir),
+        "--device",
+        args.ml_narrowband_device,
+        "--batch-size",
+        str(args.ml_narrowband_batch_size),
+        "--max-points",
+        str(args.ml_narrowband_max_points),
+        "--candidate-threshold",
+        str(args.ml_narrowband_candidate_threshold),
+        "--recovery-tolerance-nm",
+        str(args.wavelength_tolerance_nm),
+    ]
+    if manifest_path is not None:
+        cmd.extend(["--manifest", str(manifest_path)])
+    if target_ids_file is not None:
+        cmd.extend(["--target-ids-file", str(target_ids_file)])
+    _run(cmd, log_path=log_path, env=env, dry_run=args.dry_run)
+
+
 def main() -> None:
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", type=Path, help="Optional YAML file of campaign runner defaults. CLI flags override it.")
+    pre_args, _remaining = pre_parser.parse_known_args()
+    config_defaults = _load_runner_config(pre_args.config)
+
     parser = argparse.ArgumentParser(
+        parents=[pre_parser],
         description="Run baseline, injected, paired-delta recovery campaigns for visible June sky anchors."
     )
     parser.add_argument("--targets", type=Path, default=DEFAULT_TARGETS)
@@ -459,9 +503,22 @@ def main() -> None:
         default=REPO_ROOT / "configs" / "blind_candidate_quality_injection.yaml",
     )
     parser.add_argument("--blind-raw-recovery", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--ml-narrowband-scan", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument(
+        "--ml-narrowband-checkpoint",
+        type=Path,
+        default=Path("/mnt/niroseti/spherex_cache/ml_runs/narrowband_line_cv_mega_v0_transformer_train8/checkpoints/best.pt"),
+    )
+    parser.add_argument("--ml-narrowband-device", default="cuda")
+    parser.add_argument("--ml-narrowband-batch-size", type=int, default=128)
+    parser.add_argument("--ml-narrowband-max-points", type=int, default=384)
+    parser.add_argument("--ml-narrowband-candidate-threshold", type=float, default=0.5)
     parser.add_argument("--viewer-base-url", default="http://127.0.0.1:8765")
     parser.add_argument("--force", action="store_true", help="Rerun stages even when expected outputs exist.")
     parser.add_argument("--dry-run", action="store_true")
+    if config_defaults:
+        valid_dests = {action.dest for action in parser._actions}
+        parser.set_defaults(**{key: value for key, value in config_defaults.items() if key in valid_dests})
     args = parser.parse_args()
 
     target_rows = _targets(args.targets, args.limit_targets, set(args.only_target or []) or None)
@@ -478,6 +535,7 @@ def main() -> None:
     env["SPHEREX_CACHE_ROOT"] = str(args.cache_root)
     bin_path = str(REPO_ROOT / ".venv" / "bin" / "spherex-mine")
     py = str(REPO_ROOT / ".venv" / "bin" / "python")
+    ml_py = str(REPO_ROOT / "ml" / ".venv" / "bin" / "python")
     manifest_rows: list[dict[str, Any]] = []
 
     for index, target in enumerate(target_rows, start=1):
@@ -599,6 +657,18 @@ def main() -> None:
                         env=env,
                         quality_config=args.blind_science_quality_config,
                     )
+
+        if args.ml_narrowband_scan:
+            baseline_ml_dir = baseline_run / "ml_narrowband_transformer"
+            if args.force or not _done(baseline_ml_dir / "ml_narrowband_summary.json"):
+                _run_ml_narrowband(
+                    ml_py=ml_py,
+                    run_dir=baseline_run,
+                    output_dir=baseline_ml_dir,
+                    args=args,
+                    log_path=campaign_root / "logs" / f"{target_id}_ml_narrowband_baseline.log",
+                    env=env,
+                )
 
         if args.force or not _done(plan_path):
             plan_cmd = [
@@ -786,8 +856,21 @@ def main() -> None:
                             args=args,
                             log_path=campaign_root / "logs" / f"{target_id}_blind_{scope}_joint.log",
                             env=env,
-                            quality_config=args.blind_injection_quality_config if scope == "injected" else args.blind_injection_quality_config,
-                        )
+                        quality_config=args.blind_injection_quality_config if scope == "injected" else args.blind_injection_quality_config,
+                    )
+
+        if args.ml_narrowband_scan:
+            injected_ml_dir = injected_run / "ml_narrowband_transformer"
+            if args.force or not _done(injected_ml_dir / "ml_narrowband_summary.json"):
+                _run_ml_narrowband(
+                    ml_py=ml_py,
+                    run_dir=injected_run,
+                    output_dir=injected_ml_dir,
+                    args=args,
+                    log_path=campaign_root / "logs" / f"{target_id}_ml_narrowband_injected.log",
+                    env=env,
+                    manifest_path=manifest_path,
+                )
 
         if args.blind_scan and args.blind_raw_recovery and args.blind_scanner == "narrowband_gpu":
             truth_ids_path = injected_run / "blind_raw_recovery_truth_target_ids.txt"
@@ -824,6 +907,7 @@ def main() -> None:
                     env=env,
                     target_ids_file=truth_ids_path,
                 )
+
             if args.force or not _done(truth_psf_dir / "blind_candidate_clusters.parquet"):
                 _run_blind_raw(
                     py=py,
@@ -856,6 +940,23 @@ def main() -> None:
                     args=args,
                     log_path=campaign_root / "logs" / f"{target_id}_blind_raw_recovery_score.log",
                     env=env,
+                )
+
+        if args.ml_narrowband_scan and args.blind_raw_recovery:
+            truth_ids_path = injected_run / "blind_raw_recovery_truth_target_ids.txt"
+            if args.force or not _done(truth_ids_path):
+                _write_injection_target_ids(manifest_path, truth_ids_path)
+            truth_ml_dir = injected_run / "ml_narrowband_transformer_truth"
+            if args.force or not _done(truth_ml_dir / "ml_narrowband_summary.json"):
+                _run_ml_narrowband(
+                    ml_py=ml_py,
+                    run_dir=injected_run,
+                    output_dir=truth_ml_dir,
+                    args=args,
+                    log_path=campaign_root / "logs" / f"{target_id}_ml_narrowband_truth.log",
+                    env=env,
+                    manifest_path=manifest_path,
+                    target_ids_file=truth_ids_path,
                 )
 
         if args.force or not _done(classifier_dir / "matched_filter_candidates.parquet"):
@@ -925,6 +1026,9 @@ def main() -> None:
                     injected_run
                     / ("narrowband_detector_truth/narrowband_detector_summary.json" if args.blind_scanner == "narrowband_gpu" else "blind_raw_recovery_truth_topk/blind_raw_recovery_summary.json")
                 ),
+                "baseline_ml_narrowband_summary": str(baseline_run / "ml_narrowband_transformer" / "ml_narrowband_summary.json"),
+                "injected_ml_narrowband_summary": str(injected_run / "ml_narrowband_transformer" / "ml_narrowband_summary.json"),
+                "truth_ml_narrowband_summary": str(injected_run / "ml_narrowband_transformer_truth" / "ml_narrowband_summary.json"),
                 "false_positive_review": str(review_path),
                 "review_url": review.get("review_url"),
             }
@@ -932,6 +1036,24 @@ def main() -> None:
         _write_manifest(campaign_root, manifest_rows)
 
     print(json.dumps({"campaign_root": str(campaign_root), "targets": len(manifest_rows)}, indent=2), flush=True)
+
+
+def _load_runner_config(path: Path | None) -> dict[str, Any]:
+    if path is None:
+        return {}
+    if not path.exists():
+        raise SystemExit(f"Campaign config does not exist: {path}")
+    doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(doc, dict):
+        raise SystemExit(f"Campaign config must be a YAML mapping: {path}")
+    out: dict[str, Any] = {}
+    for key, value in doc.items():
+        dest = str(key).strip().replace("-", "_")
+        if isinstance(value, str) and (dest.endswith("_path") or dest in {"targets", "cache_root", "ml_narrowband_checkpoint"}):
+            out[dest] = Path(value)
+        else:
+            out[dest] = value
+    return out
 
 
 if __name__ == "__main__":

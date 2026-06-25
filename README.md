@@ -339,6 +339,7 @@ These are median-binned documentation samples, not canonical science products.
 - [GPU PSF grid notes](docs/gpu_psf_grid_notes.md)
 - [Arcturus magnitude calibration notes](docs/arcturus_magnitude_calibration_notes.md)
 - [Local Gaia lite index spec](docs/local_gaia_lite_spec.md)
+- [Gaia cache cold start](docs/gaia_cache_cold_start.md)
 
 ## Scientific And Technical References
 

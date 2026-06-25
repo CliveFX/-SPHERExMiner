@@ -304,6 +304,17 @@ def _campaign_metrics(runs_root: Path, campaign_name: str, target_rows: list[dic
         "raw_injected_candidates": 0,
         "quality_baseline_candidates": 0,
         "quality_injected_candidates": 0,
+        "ml_baseline_scored": 0,
+        "ml_injected_scored": 0,
+        "ml_truth_scored": 0,
+        "ml_baseline_candidates": 0,
+        "ml_injected_candidates": 0,
+        "ml_truth_candidates": 0,
+        "ml_truth_injections": 0,
+        "ml_truth_detected": 0,
+        "ml_truth_recovered": 0,
+        "ml_total_sec": 0.0,
+        "ml_inference_sec": 0.0,
         "candidate_grades": {},
         "score_kernel_sec": 0.0,
         "score_total_sec": 0.0,
@@ -317,12 +328,15 @@ def _campaign_metrics(runs_root: Path, campaign_name: str, target_rows: list[dic
             metrics["baseline_runs"] = int(metrics["baseline_runs"]) + 1
             _add_assembly_metrics(metrics, base, "baseline")
             _add_candidate_metrics(metrics, base / "narrowband_detector_raw", "baseline", grade_counts)
+            _add_ml_narrowband_metrics(metrics, base / "ml_narrowband_transformer", "baseline")
         if inj.exists():
             metrics["injected_runs"] = int(metrics["injected_runs"]) + 1
             _add_assembly_metrics(metrics, inj, "injected")
             _add_candidate_metrics(metrics, inj / "narrowband_detector_raw", "injected", grade_counts)
             _add_truth_recovery_metrics(metrics, inj / "narrowband_detector_truth" / "narrowband_recovery.parquet")
             _add_paired_recovery_metrics(metrics, inj / "recovery_score_mixed_lasers" / "recovery_summary.json")
+            _add_ml_narrowband_metrics(metrics, inj / "ml_narrowband_transformer", "injected")
+            _add_ml_narrowband_metrics(metrics, inj / "ml_narrowband_transformer_truth", "truth")
     metrics["candidate_grades"] = dict(sorted(grade_counts.items()))
     raw = int(metrics["gpu_raw_recovered"])
     total = int(metrics["injected_signals"])
@@ -331,6 +345,13 @@ def _campaign_metrics(runs_root: Path, campaign_name: str, target_rows: list[dic
     metrics["gpu_raw_recovery_fraction"] = float(raw / total) if total else None
     metrics["gpu_quality_recovery_fraction"] = float(quality / total) if total else None
     metrics["paired_recovery_fraction"] = float(paired / total) if total else None
+    ml_truth_total = int(metrics["ml_truth_injections"])
+    metrics["ml_truth_detected_fraction"] = (
+        float(int(metrics["ml_truth_detected"]) / ml_truth_total) if ml_truth_total else None
+    )
+    metrics["ml_truth_recovery_fraction"] = (
+        float(int(metrics["ml_truth_recovered"]) / ml_truth_total) if ml_truth_total else None
+    )
     return metrics
 
 
@@ -385,6 +406,20 @@ def _add_paired_recovery_metrics(metrics: dict[str, object], path: Path) -> None
     if not isinstance(summary, dict):
         return
     metrics["paired_recovered"] = int(metrics.get("paired_recovered", 0) or 0) + int(summary.get("recovered_count") or 0)
+
+
+def _add_ml_narrowband_metrics(metrics: dict[str, object], output_dir: Path, prefix: str) -> None:
+    summary = _read_json(output_dir / "ml_narrowband_summary.json")
+    if not isinstance(summary, dict):
+        return
+    metrics[f"ml_{prefix}_scored"] = int(metrics.get(f"ml_{prefix}_scored", 0) or 0) + int(summary.get("scored_target_count") or 0)
+    metrics[f"ml_{prefix}_candidates"] = int(metrics.get(f"ml_{prefix}_candidates", 0) or 0) + int(summary.get("candidate_count") or 0)
+    metrics["ml_total_sec"] = float(metrics.get("ml_total_sec", 0.0) or 0.0) + float(summary.get("total_sec") or 0.0)
+    metrics["ml_inference_sec"] = float(metrics.get("ml_inference_sec", 0.0) or 0.0) + float(summary.get("inference_sec") or 0.0)
+    if prefix == "truth":
+        metrics["ml_truth_injections"] = int(metrics.get("ml_truth_injections", 0) or 0) + int(summary.get("injection_count") or 0)
+        metrics["ml_truth_detected"] = int(metrics.get("ml_truth_detected", 0) or 0) + int(summary.get("ml_detected_any_line_count") or 0)
+        metrics["ml_truth_recovered"] = int(metrics.get("ml_truth_recovered", 0) or 0) + int(summary.get("ml_recovered_count") or 0)
 
 
 def _campaign_stage_timing(target_rows: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -492,6 +527,9 @@ def _campaign_target_stages(runs_root: Path, campaign_root: Path, campaign_name:
             ),
         ),
         ("paired recovery", inj / "recovery_score_mixed_lasers" / "recovery_summary.json", logs / f"{target_id}_score.log"),
+        ("ml science raw", base / "ml_narrowband_transformer" / "ml_narrowband_summary.json", logs / f"{target_id}_ml_narrowband_baseline.log"),
+        ("ml injected raw", inj / "ml_narrowband_transformer" / "ml_narrowband_summary.json", logs / f"{target_id}_ml_narrowband_injected.log"),
+        ("ml truth recovery", inj / "ml_narrowband_transformer_truth" / "ml_narrowband_summary.json", logs / f"{target_id}_ml_narrowband_truth.log"),
     ]
     return [_campaign_stage_status(stage, output_path, log_path) for stage, output_path, log_path in specs]
 
@@ -3204,38 +3242,51 @@ def _campaign_status_html() -> str:
 </header>
 <main>
   <div class="cards">
-    <div class="card"><div class="k">Targets</div><div id="targets" class="v">-</div></div>
-    <div class="card"><div class="k">Done</div><div id="done" class="v done">-</div></div>
-    <div class="card"><div class="k">Active</div><div id="active" class="v active">-</div></div>
-    <div class="card"><div class="k">Errors</div><div id="errors" class="v error">-</div></div>
-    <div class="card"><div class="k">Waiting</div><div id="waiting" class="v waiting">-</div></div>
-    <div class="card"><div class="k">Manifest Rows</div><div id="manifest" class="v">-</div></div>
+    <div class="card" title="Number of named sky-center anchors in this campaign. Each is resolved to a safer nearby Gaia anchor before mining."><div class="k">Targets</div><div id="targets" class="v">-</div></div>
+    <div class="card" title="Campaign targets whose required stages have completed."><div class="k">Done</div><div id="done" class="v done">-</div></div>
+    <div class="card" title="Campaign targets with a currently running or recently started stage."><div class="k">Active</div><div id="active" class="v active">-</div></div>
+    <div class="card" title="Campaign targets with at least one failed stage. The runner is fail-and-continue, so later targets can still run."><div class="k">Errors</div><div id="errors" class="v error">-</div></div>
+    <div class="card" title="Campaign targets not started yet."><div class="k">Waiting</div><div id="waiting" class="v waiting">-</div></div>
+    <div class="card" title="Rows currently written to the campaign manifest. This usually tracks targets that have started or completed."><div class="k">Manifest Rows</div><div id="manifest" class="v">-</div></div>
   </div>
   <div class="cards">
-    <div class="card"><div class="k">Star Spectra</div><div id="starSpectra" class="v">-</div><div id="starSpectraSub" class="sub"></div></div>
-    <div class="card"><div class="k">Measurements</div><div id="measurements" class="v">-</div><div id="measurementSub" class="sub"></div></div>
-    <div class="card"><div class="k">Injected Signals</div><div id="injectedSignals" class="v">-</div><div id="injectedSignalsSub" class="sub"></div></div>
-    <div class="card"><div class="k">GPU Raw Recovery</div><div id="gpuRecovered" class="v done">-</div><div id="gpuRecoveredSub" class="sub"></div></div>
-    <div class="card"><div class="k">Quality Recovery</div><div id="qualityRecovered" class="v active">-</div><div id="qualityRecoveredSub" class="sub"></div></div>
-    <div class="card"><div class="k">Paired Recovery</div><div id="pairedRecovered" class="v">-</div><div id="pairedRecoveredSub" class="sub"></div></div>
+    <div class="card" title="Number of target spectra assembled from baseline runs. The subtext shows spectra assembled from injected runs."><div class="k">Star Spectra</div><div id="starSpectra" class="v">-</div><div id="starSpectraSub" class="sub"></div></div>
+    <div class="card" title="Individual photometry measurements across all assembled spectra. The subtext shows injected-run measurements."><div class="k">Measurements</div><div id="measurements" class="v">-</div><div id="measurementSub" class="sub"></div></div>
+    <div class="card" title="Known fake narrowband signals inserted at the FITS level for recovery testing."><div class="k">Injected Signals</div><div id="injectedSignals" class="v">-</div><div id="injectedSignalsSub" class="sub"></div></div>
+    <div class="card" title="Truth-target GPU narrowband scanner recovery: injected signals with a raw candidate near the injected wavelength. This is a direct detector sensitivity check before review-quality cuts."><div class="k">GPU Raw Recovery</div><div id="gpuRecovered" class="v done">-</div><div id="gpuRecoveredSub" class="sub"></div></div>
+    <div class="card" title="Injected signals recovered by the GPU scanner that also survive quality filters such as support count, flags, candidate crowding, and aperture/PSF sanity."><div class="k">Quality Recovery</div><div id="qualityRecovered" class="v active">-</div><div id="qualityRecoveredSub" class="sub"></div></div>
+    <div class="card" title="Controlled baseline-vs-injected paired matched-filter recovery. This is the cleanest check that the pipeline can see signals it injected."><div class="k">Paired Recovery</div><div id="pairedRecovered" class="v">-</div><div id="pairedRecoveredSub" class="sub"></div></div>
   </div>
   <div class="cards">
-    <div class="card"><div class="k">Baseline Candidates</div><div id="baselineCandidates" class="v">-</div><div id="baselineCandidatesSub" class="sub"></div></div>
-    <div class="card"><div class="k">Injected Candidates</div><div id="injectedCandidates" class="v">-</div><div id="injectedCandidatesSub" class="sub"></div></div>
-    <div class="card"><div class="k">Detected Symbols</div><div id="detectedSymbols" class="v">-</div><div id="detectedSymbolsSub" class="sub"></div></div>
-    <div class="card"><div class="k">Score Kernel</div><div id="scoreKernel" class="v">-</div><div id="scoreKernelSub" class="sub"></div></div>
-    <div class="card"><div class="k">Score Total</div><div id="scoreTotal" class="v">-</div><div id="scoreTotalSub" class="sub"></div></div>
-    <div class="card"><div class="k">Field Shards</div><div id="fieldShards" class="v">-</div><div class="sub">baseline + injected</div></div>
+    <div class="card" title="Raw narrowband candidates found in uninjected science/baseline runs. Subtext shows how many pass candidate quality cuts."><div class="k">Baseline Candidates</div><div id="baselineCandidates" class="v">-</div><div id="baselineCandidatesSub" class="sub"></div></div>
+    <div class="card" title="Raw narrowband candidates found in injected runs. Subtext shows how many pass candidate quality cuts."><div class="k">Injected Candidates</div><div id="injectedCandidates" class="v">-</div><div id="injectedCandidatesSub" class="sub"></div></div>
+    <div class="card" title="Review tiers from the deterministic blind candidate ranker. S is reserved for obvious high-value events; A/B/C/D are progressively weaker or noisier candidates."><div class="k">Detected Symbols</div><div id="detectedSymbols" class="v">-</div><div id="detectedSymbolsSub" class="sub"></div></div>
+    <div class="card" title="Only the GPU scoring kernel time inside the narrowband scanner. This excludes packing, file reads, writes, and Python bookkeeping."><div class="k">Score Kernel</div><div id="scoreKernel" class="v">-</div><div id="scoreKernelSub" class="sub"></div></div>
+    <div class="card" title="Total scorer wall time including data packing, GPU scoring, copyback, candidate ranking, and file writes."><div class="k">Score Total</div><div id="scoreTotal" class="v">-</div><div id="scoreTotalSub" class="sub"></div></div>
+    <div class="card" title="Per-field parquet shards written by the miner. Baseline plus injected shards are counted together."><div class="k">Field Shards</div><div id="fieldShards" class="v">-</div><div class="sub">baseline + injected</div></div>
   </div>
-  <section>
+  <div class="cards">
+    <div class="card" title="Experimental transformer scorer on uninjected science spectra. This is a sandbox signal-likeness score, not a science gate."><div class="k">ML Science Raw</div><div id="mlBaselineCandidates" class="v">-</div><div id="mlBaselineSub" class="sub"></div></div>
+    <div class="card" title="Experimental transformer scorer on injected spectra. Useful for checking whether injected runs look more signal-like to the model."><div class="k">ML Injected Raw</div><div id="mlInjectedCandidates" class="v">-</div><div id="mlInjectedSub" class="sub"></div></div>
+    <div class="card" title="ML truth-target detection: injected targets where the model says some narrowband-like signal exists, regardless of whether it localized the wavelength correctly."><div class="k">ML Truth Detect</div><div id="mlTruthDetected" class="v done">-</div><div id="mlTruthDetectedSub" class="sub"></div></div>
+    <div class="card" title="ML truth-target recovery: injected targets where the model both detected a signal and predicted a wavelength within tolerance. Currently experimental and expected to lag deterministic recovery."><div class="k">ML Truth Recover</div><div id="mlTruthRecovered" class="v active">-</div><div id="mlTruthRecoveredSub" class="sub"></div></div>
+    <div class="card" title="Transformer model forward-pass time only. This excludes feature building and file writes."><div class="k">ML Inference</div><div id="mlInference" class="v">-</div><div id="mlInferenceSub" class="sub"></div></div>
+    <div class="card" title="End-to-end ML scorer time including feature construction, model inference, and output writes."><div class="k">ML Total</div><div id="mlTotal" class="v">-</div><div id="mlTotalSub" class="sub"></div></div>
+  </div>
+  <div class="cards">
+    <div class="card" title="Per-target completion status for the ML scorer on uninjected baseline spectra."><div class="k">ML Science Stage</div><div id="mlScienceStage" class="v">-</div><div id="mlScienceStageSub" class="sub"></div></div>
+    <div class="card" title="Per-target completion status for the ML scorer on injected spectra."><div class="k">ML Injected Stage</div><div id="mlInjectedStage" class="v">-</div><div id="mlInjectedStageSub" class="sub"></div></div>
+    <div class="card" title="Per-target completion status for the ML scorer restricted to injected truth targets."><div class="k">ML Truth Stage</div><div id="mlTruthStage" class="v">-</div><div id="mlTruthStageSub" class="sub"></div></div>
+  </div>
+  <section title="Per-stage done/active/error/waiting totals across the campaign.">
     <h2>Stage Totals</h2>
     <div id="stageTotals"></div>
   </section>
-  <section>
+  <section title="Elapsed wall-clock time per stage, aggregated over completed target stages.">
     <h2>Stage Timing</h2>
     <div id="stageTiming"></div>
   </section>
-  <section>
+  <section title="Per-target stage status. Use this to see which named sky center is currently running, waiting, done, or failed.">
     <h2>Targets</h2>
     <div id="targetRows"></div>
   </section>
@@ -3315,8 +3366,32 @@ function renderMetricCards(m) {
   setText('scoreTotal', fmtDuration(m.score_total_sec));
   setText('scoreTotalSub', 'scorer wall time');
   setText('fieldShards', fmtInt(m.field_shards));
+  setText('mlBaselineCandidates', fmtInt(m.ml_baseline_candidates));
+  setText('mlBaselineSub', `${fmtInt(m.ml_baseline_scored)} spectra scored`);
+  setText('mlInjectedCandidates', fmtInt(m.ml_injected_candidates));
+  setText('mlInjectedSub', `${fmtInt(m.ml_injected_scored)} spectra scored`);
+  setText('mlTruthDetected', `${fmtInt(m.ml_truth_detected)} / ${fmtInt(m.ml_truth_injections)}`);
+  setText('mlTruthDetectedSub', pct(m.ml_truth_detected_fraction));
+  setText('mlTruthRecovered', `${fmtInt(m.ml_truth_recovered)} / ${fmtInt(m.ml_truth_injections)}`);
+  setText('mlTruthRecoveredSub', pct(m.ml_truth_recovery_fraction));
+  setText('mlInference', fmtDuration(m.ml_inference_sec));
+  setText('mlInferenceSub', 'model forward time');
+  setText('mlTotal', fmtDuration(m.ml_total_sec));
+  setText('mlTotalSub', 'feature + infer + write');
+}
+function renderMlStageCards(totals) {
+  setStageCard('mlScienceStage', 'mlScienceStageSub', totals['ml science raw']);
+  setStageCard('mlInjectedStage', 'mlInjectedStageSub', totals['ml injected raw']);
+  setStageCard('mlTruthStage', 'mlTruthStageSub', totals['ml truth recovery']);
+}
+function setStageCard(mainId, subId, row) {
+  row = row || {};
+  const done = row.done || 0, active = row.active || 0, error = row.error || 0, waiting = row.waiting || 0;
+  setText(mainId, `${fmtInt(done)} done`);
+  setText(subId, `${fmtInt(active)} active · ${fmtInt(error)} errors · ${fmtInt(waiting)} waiting`);
 }
 function renderStageTotals(totals) {
+  renderMlStageCards(totals || {});
   const rows = Object.entries(totals).map(([stage, v]) => ({stage, done:v.done||0, active:v.active||0, error:v.error||0, waiting:v.waiting||0}));
   document.getElementById('stageTotals').innerHTML = table(rows, ['stage','done','active','error','waiting']);
 }

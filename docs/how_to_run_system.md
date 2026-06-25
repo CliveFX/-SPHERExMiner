@@ -14,6 +14,9 @@ All examples use the NAS cache root:
 /mnt/niroseti/spherex_cache
 ```
 
+Cold-starting a new machine or rebuilding the local Gaia cache is covered in
+[Gaia Cache Cold Start](gaia_cache_cold_start.md).
+
 ## 1. Preflight
 
 Confirm the NAS and Python environment:
@@ -158,85 +161,100 @@ The campaign runner performs, per safe Gaia anchor:
 
 1. Baseline depth run.
 2. Raw baseline GPU narrowband scan.
-3. Mixed-laser injection plan.
-4. FITS-level injection into copied FITS files.
-5. Injected depth run using `path_overrides.json`.
-6. Raw injected GPU narrowband scan.
-7. Paired-delta sanity scan.
-8. Truth-target raw injected recovery scan.
-9. Recovery scoring and false-positive review manifest.
+3. Optional transformer ML sandbox score on baseline spectra.
+4. Mixed-laser injection plan.
+5. FITS-level injection into copied FITS files.
+6. Injected depth run using `path_overrides.json`.
+7. Raw injected GPU narrowband scan.
+8. Optional transformer ML sandbox score on injected spectra.
+9. Paired-delta sanity scan.
+10. Truth-target raw injected recovery scan.
+11. Optional transformer ML sandbox score on truth-target injected spectra.
+12. Recovery scoring and false-positive review manifest.
 
-Deep overnight-style command:
+Current full overnight magnitude sequence:
 
 ```bash
-tmux new-session -d -s spherex-overnight-diag \
+tmux new-session -d -s spherex-ml-mag-sequence \
+  'cd /home/clive/dev/NIROSETI_SPHEREx && bash tools/run_tonight_ml_mag_sequence.sh'
+```
+
+This runs full baseline/injection/recovery campaigns over all named Castro
+Valley June anchors in this order:
+
+1. `G 11-16`, known-good range.
+2. `G 8-11`, brighter stress range.
+3. `G 5-8`, brightest stress range.
+
+The sequence defaults to:
+
+```text
+LIMIT_FIELDS=500
+MAX_GAIA_SOURCES=3000
+MAX_FIELD_WORKERS=24
+WARP_DEVICES=cuda:0,cuda:1,cuda:2
+```
+
+Override values without editing the script:
+
+```bash
+MAX_GAIA_SOURCES=3000 LIMIT_FIELDS=500 EXTRA_ARGS="--limit-targets 3" \
+  bash tools/run_tonight_ml_mag_sequence.sh
+```
+
+Single-bin YAML-driven command:
+
+```bash
+tmux new-session -d -s spherex-g11-16 \
   'cd /home/clive/dev/NIROSETI_SPHEREx && .venv/bin/python tools/run_visible_sky_injection_campaign.py \
-    --campaign-prefix cv_june_g11_16_f500_diag_overnight_v1 \
-    --targets configs/castro_valley_june_survey_targets.yaml \
-    --resolve-gaia-anchors \
-    --only-target cvj_regulus \
-    --only-target cvj_denebola \
-    --only-target cvj_porrima \
-    --only-target cvj_spica \
-    --only-target cvj_arcturus \
-    --only-target cvj_izar \
-    --only-target cvj_alphecca \
-    --only-target cvj_unukalhai \
-    --only-target cvj_antarest \
-    --only-target cvj_rasalhague \
-    --only-target cvj_vega \
-    --only-target cvj_sheltan \
-    --only-target cvj_tarazed \
-    --only-target cvj_deneb \
-    --only-target cvj_sadr \
-    --only-target cvj_enif \
-    --only-target cvj_scheat \
-    --only-target cvj_markab \
-    --only-target cvj_fomalhaut \
+    --config configs/campaign_with_ml_transformer.yaml \
+    --campaign-prefix cv_june_g11_16_f500_n3000_ml \
     --limit-fields 500 \
-    --max-gaia-sources 500 \
+    --max-gaia-sources 3000 \
     --gaia-g-min 11 \
     --gaia-g-max 16 \
-    --max-field-workers 24 \
-    --warp-devices cuda:0,cuda:1,cuda:2 \
-    --strengths-sigma 1,3,8 \
-    --max-line-flux-uJy 50000 \
-    --min-snr 1.5 \
-    --blind-scanner narrowband_gpu \
-    --blind-grid-step-nm 1.0 \
-    --blind-top-k-per-target 20 \
-    --narrowband-min-joint-rho 3.0 \
-    --narrowband-diagnostic-line-half-window-nm 80 \
-    --narrowband-diagnostic-line-max-rows-per-candidate 201 \
-    --viewer-base-url http://192.168.1.224:8765 \
-    2>&1 | tee /mnt/niroseti/spherex_cache/campaigns/cv_june_g11_16_f500_diag_overnight_v1/campaign_stdout.log'
+    2>&1 | tee /mnt/niroseti/spherex_cache/campaigns/cv_june_g11_16_f500_n3000_ml/campaign_stdout.log'
 ```
 
 Notes:
 
 - `--resolve-gaia-anchors` converts bright sky centers into nearby safe Gaia
   anchors. This avoids centering on saturated bright stars.
-- The command above excludes `cvj_altair`, which previously lacked measured
-  parent fields in this prototype.
-- `--max-gaia-sources 500` is a thin target sample for reviewable overnight
-  runs. Increase it only when you are ready for larger outputs.
+- `configs/campaign_with_ml_transformer.yaml` preserves the current campaign
+  defaults. Command-line flags override config values.
+- The transformer ML scorer is exploratory. Its outputs are written as separate
+  `ml_narrowband_transformer` products and campaign cards, but it is not a
+  science gate.
 - The runner is stage-resumable. Re-running the same command skips completed
   stages. Use `--force` only to intentionally overwrite stage products.
+- Recovery Summary shows only targets that have finished
+  `recovery_score_mixed_lasers/recovery_summary.json`; active targets appear
+  later.
+
+Campaign Status recovery cards:
+
+- `GPU Raw Recovery`: truth-target GPU scanner matches near injected
+  wavelengths before strict review cuts.
+- `Quality Recovery`: raw recovery matches that also pass candidate quality
+  filters.
+- `Paired Recovery`: baseline-vs-injected matched-filter recovery. This is the
+  cleanest check that the system can see fake signals it injected.
+- `ML Truth Detect`: experimental transformer says a truth target looks
+  line-like, regardless of wavelength accuracy.
+- `ML Truth Recover`: experimental transformer detects and predicts the
+  injected wavelength within tolerance.
 
 Small campaign smoke test:
 
 ```bash
 .venv/bin/python tools/run_visible_sky_injection_campaign.py \
-  --campaign-prefix smoke_one_target \
-  --targets configs/castro_valley_june_survey_targets.yaml \
-  --resolve-gaia-anchors \
+  --config configs/campaign_with_ml_transformer.yaml \
+  --campaign-prefix smoke_full_pipeline_g11_16_f120_n150 \
   --limit-targets 1 \
-  --limit-fields 40 \
-  --max-gaia-sources 100 \
-  --max-field-workers 8 \
-  --warp-devices cuda:0 \
-  --blind-scanner narrowband_gpu \
-  --viewer-base-url http://192.168.1.224:8765
+  --limit-fields 120 \
+  --max-gaia-sources 150 \
+  --gaia-g-min 11 \
+  --gaia-g-max 16
 ```
 
 ## 6. Monitor Jobs

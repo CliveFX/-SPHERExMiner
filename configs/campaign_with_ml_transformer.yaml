@@ -1,0 +1,52 @@
+# Example campaign runner config with deterministic GPU blind scans plus
+# transformer ML line scoring in all three modes:
+# science raw, injected raw, and truth-target recovery.
+
+targets: configs/castro_valley_june_survey_targets.yaml
+cache_root: /mnt/niroseti/spherex_cache
+campaign_prefix: cv_june_g11_16_f500_ml_transformer
+
+resolve_gaia_anchors: true
+anchor_search_radius_deg: 1.0
+anchor_g_min: 12.0
+anchor_g_max: 14.0
+anchor_preferred_g: 13.0
+
+limit_fields: 500
+max_gaia_sources: 500
+gaia_g_min: 11.0
+gaia_g_max: 16.0
+max_field_workers: 24
+warp_devices: cuda:0,cuda:1,cuda:2
+
+strengths_sigma: "1,3,8"
+targets_per_cell: 3
+line_width_nm: 1.0
+max_line_flux_uJy: 50000
+min_snr: 1.5
+wavelength_tolerance_nm: 10.0
+
+blind_scan: true
+blind_scanner: narrowband_gpu
+blind_grid_step_nm: 1.0
+blind_raw_scan: true
+blind_raw_recovery: true
+blind_top_k_per_target: 20
+blind_warp_device: cuda:0
+
+narrowband_min_joint_rho: 3.0
+narrowband_quality_min_support: 3
+narrowband_quality_max_flagged_points: 3
+narrowband_quality_max_candidates_per_target: 5
+narrowband_quality_max_aperture_psf_ratio: 3.0
+narrowband_diagnostic_line_half_window_nm: 80.0
+narrowband_diagnostic_line_max_rows_per_candidate: 201
+
+ml_narrowband_scan: true
+ml_narrowband_checkpoint: /mnt/niroseti/spherex_cache/ml_runs/narrowband_line_cv_mega_v0_transformer_train8/checkpoints/best.pt
+ml_narrowband_device: cuda
+ml_narrowband_batch_size: 128
+ml_narrowband_max_points: 384
+ml_narrowband_candidate_threshold: 0.5
+
+viewer_base_url: http://192.168.1.224:8765
