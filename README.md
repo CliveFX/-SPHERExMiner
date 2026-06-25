@@ -387,6 +387,10 @@ Medium term:
 - Build a scheduler that keeps GPUs fed with large frame/target batches.
 - Make spectra rebuilds operate from shards rather than monolithic run folders.
 - Package candidate bundles for static web review.
+- Prototype the next-generation blind object miner described in
+  [docs/next_generation_blind_object_miner.md](docs/next_generation_blind_object_miner.md):
+  residual source finding, ultracool-dwarf candidate recovery, and
+  Tycho-style proper-motion stacking for objects missing from Gaia.
 
 Long term:
 
@@ -395,6 +399,8 @@ Long term:
 - Store raw/cache data in S3 or an S3-compatible object store.
 - Run full-sky or large-region surveys as resumable chunk campaigns.
 - Support Kubernetes/EKS deployment for multi-node GPU mining.
+- Turn blind frame-scale object discovery into a first-class survey mode
+  alongside the current catalog-driven Gaia/SIMP/UCS miner.
 
 ## Current Status
 

@@ -483,6 +483,23 @@ Features:
 - Add training job status snapshots.
 - Start testing on large campaign archives.
 
+### Phase 5: Blind Object Discovery
+
+The two-model ML stack should eventually support sources that were not selected
+from Gaia or a manual catalog. The next-generation design is documented in
+[`next_generation_blind_object_miner.md`](next_generation_blind_object_miner.md).
+
+Core idea:
+
+- start from SPHEREx frames, not a target catalog
+- mask/subtract known Gaia/2MASS/WISE sources
+- detect residual point-source candidates
+- associate detections across frames and visits
+- optionally shift-stack over proper-motion vectors, Tycho-Tracker style
+- extract spectra for blind candidates using the same spectra schema
+- use the science embedding and ultracool/reference anchors to rank brown-dwarf
+  and other unusual-object candidates
+
 ## Open Questions
 
 - How should source photon noise be modeled and written into injected variance?
