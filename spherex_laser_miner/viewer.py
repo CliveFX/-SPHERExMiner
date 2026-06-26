@@ -1294,6 +1294,7 @@ def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[st
     rows: list[dict[str, object]] = []
     campaigns: set[str] = set()
     campaign_dirs = _campaign_names(runs_root.parent / "campaigns")
+    grid_campaigns = _grid_dispatch_campaigns(runs_root)
     scanned_runs = 0
     candidate_runs = 0
     if not runs_root.exists():
@@ -1303,8 +1304,8 @@ def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[st
         run_source, scope = _candidate_source_for_run(run_dir.name, source)
         if run_source is None or scope is None:
             continue
-        campaign, target = _campaign_and_target_from_run(run_dir.name)
-        if campaign_filter and campaign != campaign_filter:
+        campaign, target = _campaign_and_target_from_run(run_dir.name, grid_campaigns)
+        if campaign_filter and campaign != campaign_filter and not run_dir.name.startswith(f"{campaign_filter}_"):
             continue
         campaigns.add(campaign)
         path = _blind_joint_path(run_dir, scope)
@@ -1376,7 +1377,7 @@ def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[st
     rows = _sort_candidate_summary_rows(rows, (params.get("sort") or ["quality"])[0])
     total = len(rows)
     page = rows[offset : offset + limit]
-    campaign_options = campaign_dirs or sorted(campaigns)
+    campaign_options = sorted({*campaign_dirs, *grid_campaigns, *campaigns})
     return _candidate_summary_payload(page, campaign_options, source, campaign_filter, scanned_runs, candidate_runs, limit, offset, total, quality)
 
 

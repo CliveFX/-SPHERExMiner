@@ -95,6 +95,14 @@ def main() -> None:
     summary["fixed_targets_path"] = baseline_spec.get("fixed_targets_path")
     summary["anchor_targets_path"] = baseline_spec.get("anchor_targets_path")
 
+    baseline_raw_dir = baseline_run / "narrowband_detector_raw"
+    if args.force or not (baseline_raw_dir / "narrowband_candidates.parquet").exists():
+        _run_stage(
+            "baseline_narrowband_raw",
+            _narrowband_detector_cmd(args=args, run_dir=baseline_run, output_dir=baseline_raw_dir),
+            logs / "baseline_narrowband_raw.log",
+        )
+
     _run_stage(
         "make_injection_plan",
         [
@@ -155,6 +163,14 @@ def main() -> None:
     )
     injected_cmd = [*injected_spec["cmd"], "--path-overrides", str(overrides_path)]
     _run_stage("injected", injected_cmd, logs / "injected.log", env=injected_spec.get("env"))
+
+    injected_raw_dir = injected_run / "narrowband_detector_raw"
+    if args.force or not (injected_raw_dir / "narrowband_candidates.parquet").exists():
+        _run_stage(
+            "injected_narrowband_raw",
+            _narrowband_detector_cmd(args=args, run_dir=injected_run, output_dir=injected_raw_dir),
+            logs / "injected_narrowband_raw.log",
+        )
 
     truth_ids_path = injected_run / "blind_raw_recovery_truth_target_ids.txt"
     _write_truth_ids(manifest_path, truth_ids_path)
@@ -238,6 +254,10 @@ def main() -> None:
             "injection_manifest": str(manifest_path),
             "path_overrides": str(overrides_path),
             "truth_detector_dir": str(detector_dir),
+            "baseline_narrowband_raw_dir": str(baseline_raw_dir),
+            "baseline_narrowband_raw_summary": str(baseline_raw_dir / "narrowband_detector_summary.json"),
+            "injected_narrowband_raw_dir": str(injected_raw_dir),
+            "injected_narrowband_raw_summary": str(injected_raw_dir / "narrowband_detector_summary.json"),
             "narrowband_recovery": str(recovery_path),
             "narrowband_detector_summary": str(detector_summary),
             "paired_classifier_dir": str(paired_dir),
@@ -272,6 +292,27 @@ def _direct_args(args: argparse.Namespace, run_name: str) -> argparse.Namespace:
         twomass_hpx_level=args.twomass_hpx_level,
         twomass_selection=args.twomass_selection,
     )
+
+
+def _narrowband_detector_cmd(args: argparse.Namespace, run_dir: Path, output_dir: Path) -> list[str]:
+    return [
+        sys.executable,
+        str(REPO_ROOT / "tools" / "warp_narrowband_detector.py"),
+        "--run-dir",
+        str(run_dir),
+        "--output-dir",
+        str(output_dir),
+        "--grid-step-nm",
+        str(args.blind_grid_step_nm),
+        "--min-supporting-points",
+        str(args.blind_min_supporting_points),
+        "--top-k-per-target",
+        str(args.blind_top_k_per_target),
+        "--min-joint-rho",
+        str(args.blind_min_joint_rho),
+        "--device",
+        args.device,
+    ]
 
 
 def _run_stage(
