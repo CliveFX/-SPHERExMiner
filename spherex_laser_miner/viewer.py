@@ -603,6 +603,8 @@ def _grid_dispatch_command(cache_root: Path, payload: dict[str, object], prefix:
         str(payload.get("warp_devices") or "cuda:0,cuda:1,cuda:2"),
         "--pipeline",
         str(payload.get("pipeline") or "baseline"),
+        "--catalog",
+        str(payload.get("catalog") or "gaia"),
     ]
     hpx_values = _parse_hpx_payload(payload)
     for hpx in hpx_values:
@@ -630,6 +632,16 @@ def _grid_dispatch_command(cache_root: Path, payload: dict[str, object], prefix:
         cmd.extend(["--injection-targets-per-cell", str(int(payload.get("injection_targets_per_cell") or 3))])
     if payload.get("injection_max_lines_per_target"):
         cmd.extend(["--injection-max-lines-per-target", str(int(payload.get("injection_max_lines_per_target") or 1))])
+    if payload.get("twomass_band"):
+        cmd.extend(["--twomass-band", str(payload.get("twomass_band"))])
+    if payload.get("twomass_quality"):
+        cmd.extend(["--twomass-quality", str(payload.get("twomass_quality"))])
+    if payload.get("twomass_selection"):
+        cmd.extend(["--twomass-selection", str(payload.get("twomass_selection"))])
+    if payload.get("twomass_dataset_name"):
+        cmd.extend(["--twomass-dataset-name", str(payload.get("twomass_dataset_name"))])
+    if payload.get("twomass_hpx_level"):
+        cmd.extend(["--twomass-hpx-level", str(int(payload.get("twomass_hpx_level") or 5))])
     if execute:
         cmd.append("--execute")
     return cmd
@@ -3539,7 +3551,11 @@ def _grid_survey_html() -> str:
       <input id="campaignPrefix" value="grid_v1_ui_smoke">
       <div class="row">
         <div><label>Pipeline</label><select id="pipeline"><option value="baseline">baseline</option><option value="injection">injection/recovery</option></select></div>
+        <div><label>Catalog</label><select id="catalog"><option value="gaia">Gaia</option><option value="2mass">2MASS</option><option value="all">Gaia + 2MASS</option></select></div>
+      </div>
+      <div class="row">
         <div><label>HEALPix nside</label><input id="nside" type="number" value="8" min="1" max="32"></div>
+        <div><label>2MASS band</label><select id="twomassBand"><option value="Ks">Ks</option><option value="H">H</option><option value="J">J</option></select></div>
       </div>
       <label>Specific HPX cells</label>
       <input id="hpx" placeholder="136 or 136,137 or 136-140">
@@ -3554,6 +3570,14 @@ def _grid_survey_html() -> str:
       <div class="row">
         <div><label>Workers</label><input id="workers" type="number" value="24" min="1"></div>
         <div><label>GPU devices</label><input id="warpDevices" value="cuda:0,cuda:1,cuda:2"></div>
+      </div>
+      <div class="row">
+        <div><label>2MASS quality</label><input id="twomassQuality" value="ABC"></div>
+        <div><label>2MASS selection</label><select id="twomassSelection"><option value="stratified">stratified</option><option value="brightest">brightest</option><option value="random">random</option></select></div>
+      </div>
+      <div class="row">
+        <div><label>2MASS hpx level</label><input id="twomassHpxLevel" type="number" value="5" min="0" max="12"></div>
+        <div><label>2MASS dataset</label><input id="twomassDatasetName" value="psc_lite"></div>
       </div>
       <label>Magnitude bins</label>
       <textarea id="magBins" rows="4">mid_g11_16:11:16:3000
@@ -3612,7 +3636,7 @@ verybright_g5_8:5:8:3000</textarea>
   </div>
 </main>
 <script>
-let state = {prefix:'', tiles:[], status:null, hover:null, selected:null, view:{scale:1, tx:0, ty:0}, dragging:false, dragged:false, dragLast:null};
+let state = {prefix:'', tiles:[], status:null, hover:null, selected:null, view:{scale:1, tx:0, ty:0}, dragging:false, dragged:false, dragLast:null, lastTileLoad:0};
 const $ = id => document.getElementById(id);
 function esc(v){return String(v ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
 async function getJSON(url){const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); return await r.json();}
@@ -3622,6 +3646,7 @@ function payload(execute){
     campaign_prefix:$('campaignPrefix').value.trim(),
     execute,
     pipeline:$('pipeline').value,
+    catalog:$('catalog').value,
     nside:Number($('nside').value || 8),
     hpx:$('hpx').value.trim(),
     start_hpx:Number($('startHpx').value || 0),
@@ -3633,6 +3658,11 @@ function payload(execute){
     injection_strengths_sigma:$('injStrengths').value.trim(),
     injection_targets_per_cell:Number($('injTargetsPerCell').value || 3),
     injection_max_lines_per_target:Number($('injMaxLinesPerTarget').value || 1),
+    twomass_band:$('twomassBand').value,
+    twomass_quality:$('twomassQuality').value.trim(),
+    twomass_selection:$('twomassSelection').value,
+    twomass_dataset_name:$('twomassDatasetName').value.trim(),
+    twomass_hpx_level:Number($('twomassHpxLevel').value || 5),
     mag_bins:$('magBins').value.split(/\\n+/).map(line=>line.trim()).filter(Boolean).map(line=>{const p=line.split(':'); return {name:p[0], g_min:Number(p[1]), g_max:Number(p[2]), max_sources:Number(p[3] || 3000)};})
   };
 }
@@ -3656,18 +3686,27 @@ function selectDispatch(){
 }
 async function refresh(){
   const prefix = state.prefix || $('campaignPrefix').value.trim();
-  const status = await getJSON('/api/grid-survey/status?campaign_prefix=' + encodeURIComponent(prefix) + '&ts=' + Date.now());
-  state.status = status;
-  if (!state.prefix && status.selected) state.prefix = status.selected;
-  renderStatus(status);
-  await loadTiles();
+  try {
+    const status = await getJSON('/api/grid-survey/status?campaign_prefix=' + encodeURIComponent(prefix) + '&ts=' + Date.now());
+    state.status = status;
+    if (!state.prefix && status.selected) state.prefix = status.selected;
+    renderStatus(status);
+    if (Date.now() - state.lastTileLoad > 20000) await loadTiles(true);
+  } catch (err) {
+    $('message').textContent = 'status refresh failed: ' + err.message;
+  }
 }
-async function loadTiles(){
+async function loadTiles(withStatus=false){
   const nside = Number($('nside').value || 8);
-  const prefix = $('campaignPrefix').value.trim() || state.prefix || '';
-  const data = await getJSON('/api/grid-survey/tiles?nside=' + encodeURIComponent(nside) + '&campaign_prefix=' + encodeURIComponent(prefix) + '&max_tiles=12288&ts=' + Date.now());
-  state.tiles = data.tiles || [];
-  draw();
+  const prefix = withStatus ? ($('campaignPrefix').value.trim() || state.prefix || '') : '';
+  try {
+    const data = await getJSON('/api/grid-survey/tiles?nside=' + encodeURIComponent(nside) + '&campaign_prefix=' + encodeURIComponent(prefix) + '&max_tiles=12288&ts=' + Date.now());
+    state.tiles = data.tiles || [];
+    state.lastTileLoad = Date.now();
+    draw();
+  } catch (err) {
+    $('message').textContent = 'tile refresh failed: ' + err.message;
+  }
 }
 function renderStatus(data){
   const ds = data.dispatches || [];
@@ -3783,8 +3822,8 @@ function renderTileReadout(){
   $('hoverTile').textContent = lines.length ? lines.join('\\n') : 'hover a cell';
 }
 window.addEventListener('resize', resize);
-$('nside').addEventListener('change', loadTiles);
-resize(); refresh(); setInterval(refresh, 5000);
+$('nside').addEventListener('change', ()=>{ state.lastTileLoad = 0; loadTiles(false); });
+resize(); loadTiles(false); refresh(); setInterval(refresh, 5000);
 </script>
 </body>
 </html>"""

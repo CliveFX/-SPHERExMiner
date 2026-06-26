@@ -9,14 +9,14 @@ selection:
 ```text
 HEALPix cell id
   -> cell polygon
-  -> local Gaia DuckDB query
+  -> local catalog DuckDB query
   -> target YAML/parquet manifest
   -> existing per-target pipeline
 ```
 
-The important design rule is that every selected Gaia source still runs through
-the same target-of-interest pipeline: photometry, spectrum assembly, spectrum
-quality, injection/recovery when requested, and narrowband scoring.
+The important design rule is that every selected catalog source still runs
+through the same target-of-interest pipeline: photometry, spectrum assembly,
+spectrum quality, injection/recovery when requested, and narrowband scoring.
 
 ## First Tool
 
@@ -29,6 +29,7 @@ grid_survey_v1/.venv/bin/python grid_survey_v1/tools/build_healpix_target_manife
   --g-min 11 \
   --g-max 16 \
   --max-sources 3000 \
+  --catalog gaia \
   --batch-size 3000 \
   --output-root /mnt/niroseti/spherex_cache/grid_survey_v1/smoke
 ```
@@ -47,14 +48,15 @@ Outputs:
 
 The generated `targets.yaml` can be passed to the existing pipeline as fixed
 targets. In grid mode, the HEALPix cell center is only used to select SPHEREx
-frames; the Gaia rows in the manifest are passed directly as the measured target
-list.
+frames; the catalog rows in the manifest are passed directly as the measured
+target list.
 
 ```bash
 grid_survey_v1/.venv/bin/python grid_survey_v1/tools/dispatch_healpix_mag_bins.py \
   --campaign-prefix grid_v1_hpx0064_00001234_g11_16_f500 \
   --nside 64 \
   --hpx 1234 \
+  --catalog gaia \
   --mag-bin mid_g11_16:11:16:3000 \
   --limit-fields 500 \
   --pipeline baseline \
@@ -77,6 +79,47 @@ Important: `--pipeline baseline` is direct grid mode. It runs one
 `--fixed-targets-path`. It does **not** iterate each Gaia source as a separate
 target-of-interest anchor. The legacy recursive target-of-interest behavior is
 available only as `--pipeline anchor_ladder` for diagnostics.
+
+Catalog modes:
+
+```text
+--catalog gaia    local Gaia lite query, Gaia G magnitude bins
+--catalog 2mass   local 2MASS PSC query, 2MASS band magnitude bins
+--catalog all     Gaia plus 2MASS rows in the same fixed-target manifest
+```
+
+For 2MASS grid runs, `g_min/g_max` in the `--mag-bin` string are interpreted as
+the selected 2MASS band magnitude bounds. The default band is Ks:
+
+```bash
+grid_survey_v1/.venv/bin/python grid_survey_v1/tools/dispatch_healpix_mag_bins.py \
+  --campaign-prefix grid_v1_2mass_k11_15 \
+  --nside 64 \
+  --hpx 1234 \
+  --catalog 2mass \
+  --twomass-band Ks \
+  --twomass-quality ABC \
+  --twomass-selection stratified \
+  --mag-bin k11_15:11:15:3000 \
+  --limit-fields 500 \
+  --pipeline baseline \
+  --execute
+```
+
+2MASS selection modes:
+
+```text
+--twomass-selection stratified  spread targets across the requested mag range
+--twomass-selection brightest   take the bright edge first
+--twomass-selection random      deterministic hash-random sample
+```
+
+Use `stratified` for survey planning. Otherwise a wide bin such as
+`11:16:300` will mostly sample the bright edge near `Ks=11`.
+
+Raw 2MASS PSC rows do not include proper motion or parallax, so catalog 2MASS
+targets are static J2000/ICRS positions until the HPM enrichment pass exists.
+Manual targets still use their configured proper-motion metadata.
 
 Plan a three-bin grid run without starting photometry:
 
@@ -138,12 +181,15 @@ The UI supports:
 - HEALPix `nside`, explicit cell lists, or start/count ranges.
 - Multiple magnitude bins in `name:g_min:g_max:max_sources` form.
 - Spectral depth, batch size, worker count, and GPU devices.
+- Catalog selection: Gaia, 2MASS, or Gaia + 2MASS.
+- 2MASS band, quality, selection mode, dataset, and HEALPix level controls.
 - Direct baseline runs or direct injection/recovery runs.
 - Pause/resume/stop files for batch-safe dispatch control.
 - Pan/zoom/click on the sky map, with HEALPix cell borders colored by status.
 
-`Plan` writes manifests and `dispatch_plan.json` only. `Start` regenerates the
-plan from current UI values and then runs it.
+`Plan` writes manifests and `dispatch_plan.json` only. `Start` currently
+regenerates the plan from current UI values and then runs it, so reviewed plans
+must be started without changing the controls.
 
 For injection/recovery, the direct grid wrapper writes both raw truth-target
 recovery products and the legacy paired-delta recovery products:
@@ -164,6 +210,7 @@ families.
 - HEALPix order is `nested`.
 - Coordinates are ICRS.
 - Gaia query uses the existing local Gaia lite DuckDB path.
+- 2MASS query uses the processed local PSC lite Parquet cache.
 - Without `--execute`, the dispatcher writes manifests only; it does not start
   photometry.
 - No large outputs should be committed to git.

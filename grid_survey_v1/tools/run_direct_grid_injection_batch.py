@@ -32,6 +32,12 @@ def main() -> None:
     parser.add_argument("--batch-index", type=int, required=True)
     parser.add_argument("--targets-path", type=Path, required=True)
     parser.add_argument("--mag-bin", required=True, help="name:g_min:g_max:max_sources")
+    parser.add_argument("--catalog", choices=["gaia", "2mass", "all"], default="gaia")
+    parser.add_argument("--twomass-band", choices=["J", "H", "Ks"], default="Ks")
+    parser.add_argument("--twomass-quality", default="ABC")
+    parser.add_argument("--twomass-dataset-name", default="psc_lite")
+    parser.add_argument("--twomass-hpx-level", type=int, default=5)
+    parser.add_argument("--twomass-selection", choices=["stratified", "brightest", "random"], default="stratified")
     parser.add_argument("--limit-fields", type=int, default=500)
     parser.add_argument("--max-field-workers", type=int, default=24)
     parser.add_argument("--warp-devices", default="cuda:0,cuda:1,cuda:2")
@@ -74,6 +80,7 @@ def main() -> None:
         "injected_run": str(injected_run),
         "injection_plan": str(plan_path),
         "injection_manifest": str(manifest_path),
+        "catalog": args.catalog,
     }
 
     baseline_spec = _direct_tile_command(
@@ -258,6 +265,12 @@ def _direct_args(args: argparse.Namespace, run_name: str) -> argparse.Namespace:
         warp_devices=args.warp_devices,
         force=args.force,
         campaign_prefix=run_name,
+        catalog=args.catalog,
+        twomass_band=args.twomass_band,
+        twomass_quality=args.twomass_quality,
+        twomass_dataset_name=args.twomass_dataset_name,
+        twomass_hpx_level=args.twomass_hpx_level,
+        twomass_selection=args.twomass_selection,
     )
 
 

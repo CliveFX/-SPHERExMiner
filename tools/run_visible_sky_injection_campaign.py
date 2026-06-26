@@ -18,6 +18,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from spherex_laser_miner.catalog.local_gaia_lite import query_local_gaia_lite_duckdb
+from tools.make_2mass_fixed_targets import query_2mass_cone, to_fixed_targets
 
 DEFAULT_CACHE_ROOT = Path("/mnt/niroseti/spherex_cache")
 DEFAULT_TARGETS = REPO_ROOT / "configs" / "castro_valley_june_survey_targets.yaml"
@@ -336,6 +337,68 @@ def _write_injection_target_ids(manifest_path: Path, output_path: Path) -> Path:
     return output_path
 
 
+def _catalog_source_limit(args: argparse.Namespace) -> int:
+    return int(args.max_catalog_sources if args.max_catalog_sources is not None else args.max_gaia_sources)
+
+
+def _build_2mass_fixed_targets(target: dict[str, Any], args: argparse.Namespace, campaign_root: Path) -> Path:
+    parquet_root = args.twomass_parquet_root or (args.cache_root / "2mass" / "parquet" / args.twomass_dataset_name)
+    glob_path = str(parquet_root / "hpx_level=*" / "hpx=*" / "part-*.parquet")
+    if not any(parquet_root.glob("hpx_level=*/hpx=*/part-*.parquet")):
+        raise FileNotFoundError(f"No 2MASS Parquet shards found under {parquet_root}")
+    ra = float(target["ra_deg"])
+    dec = float(target["dec_deg"])
+    df = query_2mass_cone(
+        glob_path=glob_path,
+        ra_deg=ra,
+        dec_deg=dec,
+        radius_deg=float(args.catalog_radius_deg),
+        hpx_level=int(args.twomass_hpx_level),
+        band=str(args.twomass_band),
+        mag_min=float(args.twomass_mag_min),
+        mag_max=float(args.twomass_mag_max),
+        max_sources=_catalog_source_limit(args),
+        quality=str(args.twomass_quality),
+        selection=str(args.twomass_selection),
+    )
+    fixed = to_fixed_targets(df)
+    out_dir = campaign_root / "catalog_targets"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{_safe_name(str(target['target_id']))}_2mass_fixed_targets.parquet"
+    fixed.to_parquet(out_path, index=False)
+    summary = {
+        "catalog": "2mass_psc",
+        "target_id": str(target["target_id"]),
+        "center_ra_deg": ra,
+        "center_dec_deg": dec,
+        "radius_deg": float(args.catalog_radius_deg),
+        "parquet_root": str(parquet_root),
+        "output": str(out_path),
+        "row_count": int(len(fixed)),
+        "band": args.twomass_band,
+        "mag_min": args.twomass_mag_min,
+        "mag_max": args.twomass_mag_max,
+        "quality": args.twomass_quality,
+        "max_sources": _catalog_source_limit(args),
+    }
+    out_path.with_suffix(".summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    if fixed.empty:
+        raise RuntimeError(
+            f"2MASS catalog returned zero targets around {target['target_id']} "
+            f"within {args.catalog_radius_deg} deg, {args.twomass_band}={args.twomass_mag_min}-{args.twomass_mag_max}"
+        )
+    print(f"wrote {len(fixed)} 2MASS fixed targets -> {out_path}", flush=True)
+    return out_path
+
+
+def _fixed_target_args(path: Path | None) -> list[str]:
+    return ["--fixed-targets-path", str(path)] if path is not None else []
+
+
+def _safe_name(value: str) -> str:
+    return "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value)
+
+
 def _run_blind_raw_recovery_score(
     *,
     py: str,
@@ -472,9 +535,20 @@ def main() -> None:
     parser.add_argument("--limit-targets", type=int)
     parser.add_argument("--only-target", action="append", help="Run one target_id; may be passed multiple times.")
     parser.add_argument("--limit-fields", type=int, default=500)
+    parser.add_argument("--catalog", choices=["gaia", "2mass", "all"], default="gaia")
+    parser.add_argument("--catalog-radius-deg", type=float, default=0.5)
+    parser.add_argument("--max-catalog-sources", type=int)
     parser.add_argument("--max-gaia-sources", type=int, default=6000)
     parser.add_argument("--gaia-g-min", type=float, default=11.0)
     parser.add_argument("--gaia-g-max", type=float, default=16.0)
+    parser.add_argument("--twomass-parquet-root", type=Path)
+    parser.add_argument("--twomass-dataset-name", default="psc_lite")
+    parser.add_argument("--twomass-hpx-level", type=int, default=5)
+    parser.add_argument("--twomass-band", choices=["J", "H", "Ks"], default="Ks")
+    parser.add_argument("--twomass-mag-min", type=float, default=8.0)
+    parser.add_argument("--twomass-mag-max", type=float, default=15.0)
+    parser.add_argument("--twomass-quality", default="ABC")
+    parser.add_argument("--twomass-selection", choices=["stratified", "brightest", "random"], default="stratified")
     parser.add_argument("--max-field-workers", type=int, default=24)
     parser.add_argument("--warp-devices", default="cuda:0,cuda:1,cuda:2")
     parser.add_argument("--resolve-gaia-anchors", action=argparse.BooleanOptionalAction, default=True)
@@ -566,6 +640,28 @@ def main() -> None:
         review_path = campaign_root / "false_positive_reviews" / f"{target_id}.json"
         print(f"\n##### target {index}/{len(target_rows)} {target_id} #####", flush=True)
 
+        fixed_targets_path: Path | None = None
+        if args.catalog == "2mass":
+            try:
+                fixed_targets_path = _build_2mass_fixed_targets(target, args, campaign_root)
+            except Exception as exc:
+                reason = f"2MASS fixed-target selection failed: {type(exc).__name__}: {exc}"
+                print(f"skipping {target_id}: {reason}", flush=True)
+                manifest_rows.append(
+                    _skipped_manifest_row(
+                        target=target,
+                        baseline_run=baseline_run,
+                        injected_run=injected_run,
+                        plan_path=plan_path,
+                        manifest_path=manifest_path,
+                        recovery_dir=recovery_dir,
+                        review_path=review_path,
+                        reason=reason,
+                    )
+                )
+                _write_manifest(campaign_root, manifest_rows)
+                continue
+
         if not args.force and _has_zero_measured_parent(baseline_run):
             reason = "baseline has zero measured parent fields"
             print(f"skipping {target_id}: {reason}", flush=True)
@@ -599,11 +695,27 @@ def main() -> None:
                         "--limit-fields",
                         str(args.limit_fields),
                         "--max-gaia-sources",
-                        str(args.max_gaia_sources),
+                        str(0 if fixed_targets_path is not None else args.max_gaia_sources),
                         "--gaia-g-min",
                         str(args.gaia_g_min),
                         "--gaia-g-max",
                         str(args.gaia_g_max),
+                        "--catalog",
+                        args.catalog,
+                        "--twomass-band",
+                        args.twomass_band,
+                        "--twomass-mag-min",
+                        str(args.twomass_mag_min),
+                        "--twomass-mag-max",
+                        str(args.twomass_mag_max),
+                        "--twomass-quality",
+                        args.twomass_quality,
+                        "--twomass-dataset-name",
+                        args.twomass_dataset_name,
+                        "--twomass-hpx-level",
+                        str(args.twomass_hpx_level),
+                        "--twomass-selection",
+                        args.twomass_selection,
                         "--max-field-workers",
                         str(args.max_field_workers),
                         "--photometry-backend",
@@ -627,7 +739,8 @@ def main() -> None:
                         "snr",
                         "--cache-root",
                         str(args.cache_root),
-                    ],
+                    ]
+                    + _fixed_target_args(fixed_targets_path),
                     log_path=campaign_root / "logs" / f"{target_id}_baseline.log",
                     env=env,
                     dry_run=args.dry_run,
@@ -784,11 +897,27 @@ def main() -> None:
                     "--limit-fields",
                     str(args.limit_fields),
                     "--max-gaia-sources",
-                    str(args.max_gaia_sources),
+                    str(0 if fixed_targets_path is not None else args.max_gaia_sources),
                     "--gaia-g-min",
                     str(args.gaia_g_min),
                     "--gaia-g-max",
                     str(args.gaia_g_max),
+                    "--catalog",
+                    args.catalog,
+                    "--twomass-band",
+                    args.twomass_band,
+                    "--twomass-mag-min",
+                    str(args.twomass_mag_min),
+                    "--twomass-mag-max",
+                    str(args.twomass_mag_max),
+                    "--twomass-quality",
+                    args.twomass_quality,
+                    "--twomass-dataset-name",
+                    args.twomass_dataset_name,
+                    "--twomass-hpx-level",
+                    str(args.twomass_hpx_level),
+                    "--twomass-selection",
+                    args.twomass_selection,
                     "--max-field-workers",
                     str(args.max_field_workers),
                     "--photometry-backend",
@@ -814,7 +943,8 @@ def main() -> None:
                     str(args.cache_root),
                     "--path-overrides",
                     str(overrides_path),
-                ],
+                ]
+                + _fixed_target_args(fixed_targets_path),
                 log_path=campaign_root / "logs" / f"{target_id}_injected.log",
                 env=env,
                 dry_run=args.dry_run,
@@ -1058,6 +1188,8 @@ def main() -> None:
                 "target_id": target_id,
                 "object_name": target.get("object_name"),
                 "status": "done",
+                "catalog": args.catalog,
+                "fixed_targets_path": str(fixed_targets_path) if fixed_targets_path is not None else None,
                 "baseline_run": str(baseline_run),
                 "injected_run": str(injected_run),
                 "injection_plan": str(plan_path),

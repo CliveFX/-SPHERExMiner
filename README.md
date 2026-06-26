@@ -26,9 +26,9 @@ main review surfaces are visible from GitHub:
 | --- | --- |
 | ![Blind candidate browser](docs/screenshots/blind_candidates.png) | ![Simple status dashboard](docs/screenshots/status.png) |
 
-| Narrowband response simulator |
-| --- |
-| ![Narrowband response simulator](docs/screenshots/narrowband_simulator.png) |
+| Grid survey planner | Narrowband response simulator |
+| --- | --- |
+| ![Grid survey planner](docs/screenshots/grid_survey.png) | ![Narrowband response simulator](docs/screenshots/narrowband_simulator.png) |
 
 | Science embedding UMAP | ML training status |
 | --- | --- |

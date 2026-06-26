@@ -168,6 +168,44 @@ tmux new-session -d -s spherex-overnight-diag \
 The command above intentionally skips `cvj_altair`, which previously produced
 no measured parent fields in this prototype.
 
+## 2MASS Catalog Mode
+
+The default campaign mode still uses the existing Gaia target selection path.
+To run the same baseline -> inject -> injected -> recovery pipeline on local
+2MASS PSC targets, pass `--catalog 2mass`. The runner writes one fixed-target
+Parquet file per campaign center under:
+
+```text
+/mnt/niroseti/spherex_cache/campaigns/<campaign>/catalog_targets/
+```
+
+That exact fixed-target file is passed to both baseline and injected
+`spherex-mine run-depth-test` calls. This is the important injection-safety
+property: the injected run does not re-query the catalog and accidentally change
+the target set.
+
+Example:
+
+```bash
+cd /home/clive/dev/NIROSETI_SPHEREx
+.venv/bin/python tools/run_visible_sky_injection_campaign.py \
+  --campaign-prefix cv_june_2mass_k11_15_f500 \
+  --catalog 2mass \
+  --twomass-parquet-root /mnt/niroseti/spherex_cache/2mass/parquet/psc_lite \
+  --twomass-band Ks \
+  --twomass-mag-min 11 \
+  --twomass-mag-max 15 \
+  --twomass-quality ABC \
+  --catalog-radius-deg 0.5 \
+  --max-catalog-sources 3000 \
+  --limit-fields 500 \
+  --max-field-workers 24
+```
+
+For `--catalog 2mass`, the runner passes `--max-gaia-sources 0` to
+`run-depth-test` because the fixed-target Parquet bypasses Gaia. Use
+`--max-catalog-sources` to control the 2MASS source cap.
+
 ## Per-Target Workflow
 
 For each target anchor, the runner performs:

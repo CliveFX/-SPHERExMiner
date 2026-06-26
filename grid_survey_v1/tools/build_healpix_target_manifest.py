@@ -12,7 +12,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from grid_survey_v1.grid_survey.gaia_targets import query_tile_gaia, write_tile_outputs
+from grid_survey_v1.grid_survey.gaia_targets import query_tile_catalog, write_tile_outputs
 from grid_survey_v1.grid_survey.healpix_tiles import healpix_tile, iter_hpx
 
 
@@ -21,7 +21,7 @@ DEFAULT_OUTPUT_ROOT = DEFAULT_CACHE_ROOT / "grid_survey_v1"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Build Gaia target manifests for HEALPix survey cells.")
+    parser = argparse.ArgumentParser(description="Build catalog target manifests for HEALPix survey cells.")
     parser.add_argument("--cache-root", type=Path, default=DEFAULT_CACHE_ROOT)
     parser.add_argument("--output-root", type=Path, default=DEFAULT_OUTPUT_ROOT)
     parser.add_argument("--nside", type=int, required=True, help="HEALPix nside, power of two.")
@@ -29,8 +29,14 @@ def main() -> None:
     parser.add_argument("--start-hpx", type=int, help="First HEALPix id for sequential generation.")
     parser.add_argument("--count", type=int, default=1, help="Number of sequential HEALPix ids from --start-hpx.")
     parser.add_argument("--order", choices=["nested", "ring"], default="nested")
+    parser.add_argument("--catalog", choices=["gaia", "2mass", "all"], default="gaia")
     parser.add_argument("--g-min", type=float, default=11.0)
     parser.add_argument("--g-max", type=float, default=16.0)
+    parser.add_argument("--twomass-band", choices=["J", "H", "Ks"], default="Ks")
+    parser.add_argument("--twomass-quality", default="ABC")
+    parser.add_argument("--twomass-dataset-name", default="psc_lite")
+    parser.add_argument("--twomass-hpx-level", type=int, default=5)
+    parser.add_argument("--twomass-selection", choices=["stratified", "brightest", "random"], default="stratified")
     parser.add_argument("--max-sources", type=int, default=3000)
     parser.add_argument("--batch-size", type=int, default=3000, help="Split large target YAMLs into this many targets per batch. Use 0 to disable batching.")
     parser.add_argument("--overwrite", action="store_true")
@@ -53,36 +59,54 @@ def main() -> None:
             summaries.append(json.loads(summary_path.read_text(encoding="utf-8")))
             print(json.dumps({"status": "skipped_existing", "tile_id": tile.tile_id, "summary": str(summary_path)}), flush=True)
             continue
-        gaia = query_tile_gaia(
+        catalog_df = query_tile_catalog(
             tile,
             cache_root=args.cache_root,
-            g_min=args.g_min,
-            g_max=args.g_max,
+            catalog=args.catalog,
+            mag_min=args.g_min,
+            mag_max=args.g_max,
             max_sources=args.max_sources,
+            twomass_band=args.twomass_band,
+            twomass_quality=args.twomass_quality,
+            twomass_dataset_name=args.twomass_dataset_name,
+            twomass_hpx_level=args.twomass_hpx_level,
+            twomass_selection=args.twomass_selection,
         )
         summary = write_tile_outputs(
             tile=tile,
-            gaia=gaia,
+            gaia=catalog_df,
             output_dir=out_dir,
             cache_root=args.cache_root,
             g_min=args.g_min,
             g_max=args.g_max,
             max_sources=args.max_sources,
             batch_size=args.batch_size,
+            catalog=args.catalog,
+            twomass_band=args.twomass_band,
+            twomass_quality=args.twomass_quality,
+            twomass_dataset_name=args.twomass_dataset_name,
+            twomass_hpx_level=args.twomass_hpx_level,
+            twomass_selection=args.twomass_selection,
         )
         summaries.append(summary)
         print(json.dumps({"status": "done", "tile_id": tile.tile_id, "target_count": summary["target_count"]}), flush=True)
 
     manifest = {
-        "survey_mode": "grid_survey_v1_healpix_gaia",
+        "survey_mode": f"grid_survey_v1_healpix_{args.catalog}",
         "created_utc": datetime.now(UTC).isoformat(),
         "cache_root": str(args.cache_root),
         "output_root": str(args.output_root),
         "nside": args.nside,
         "order": args.order,
+        "catalog": args.catalog,
         "g_min": args.g_min,
         "g_max": args.g_max,
+        "mag_min": args.g_min,
+        "mag_max": args.g_max,
         "max_sources": args.max_sources,
+        "twomass_band": args.twomass_band if args.catalog in {"2mass", "all"} else None,
+        "twomass_quality": args.twomass_quality if args.catalog in {"2mass", "all"} else None,
+        "twomass_selection": args.twomass_selection if args.catalog in {"2mass", "all"} else None,
         "batch_size": args.batch_size,
         "tile_count": len(summaries),
         "total_targets": int(sum(int(row.get("target_count") or 0) for row in summaries)),

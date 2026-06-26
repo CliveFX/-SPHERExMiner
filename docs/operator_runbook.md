@@ -278,7 +278,7 @@ http://192.168.1.224:8765/recovery-summary?campaign=<grid_campaign_prefix>
 
 ## Catalog Cache Notes
 
-Gaia remains the primary astrometric source. 2MASS support is being added as a
+Gaia remains the primary astrometric source. 2MASS is available as a local
 near-infrared companion catalog. The NAS-side downloader container is:
 
 ```text
@@ -291,10 +291,23 @@ Its status page is:
 http://<nas-ip>:18767/
 ```
 
-The next code step is to add a catalog provider boundary, likely exposed as a
-runner flag such as `--catalog gaia`, `--catalog 2mass`, or
-`--catalog gaia,2mass`, instead of hard-wiring Gaia-specific selection into each
-runner.
+The miner and grid dispatcher expose the catalog selector as:
+
+```text
+--catalog gaia
+--catalog 2mass
+--catalog all
+```
+
+2MASS rows use the processed Parquet cache under:
+
+```text
+/mnt/niroseti/spherex_cache/2mass/parquet/psc_lite
+```
+
+Raw 2MASS positions are static J2000/ICRS positions. High-proper-motion
+crossmatch/enrichment is still future work; manual HPM targets should stay in
+`configs/manual_targets.yaml`.
 
 Check process state:
 

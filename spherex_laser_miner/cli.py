@@ -15,6 +15,7 @@ from spherex_laser_miner.catalog.local_gaia_lite import (
     query_local_gaia_lite_duckdb,
     validate_local_gaia_result,
 )
+from spherex_laser_miner.catalog.local_2mass import query_local_2mass_duckdb, twomass_to_fixed_target_rows
 from spherex_laser_miner.catalog.manual_targets import get_manual_target, load_manual_targets
 from spherex_laser_miner.config import load_config
 from spherex_laser_miner.coarse_status import append_status_event, reset_coarse_status
@@ -352,8 +353,16 @@ def run_depth_test(
     release: str = typer.Option("qr2", help="SPHEREx release."),
     limit_fields: int = typer.Option(220, min=1, help="Number of SIA candidates to evaluate/process."),
     max_gaia_sources: int = typer.Option(100, min=0, help="Fixed Gaia targets carried through every field."),
+    catalog: str = typer.Option("gaia", help="Catalog source for automatic fixed targets: gaia, 2mass, or all."),
     gaia_g_min: float = typer.Option(7.0, help="Minimum Gaia G magnitude for fixed depth targets."),
     gaia_g_max: float = typer.Option(10.0, help="Maximum Gaia G magnitude for fixed depth targets."),
+    twomass_band: str = typer.Option("Ks", help="2MASS magnitude band for --catalog 2mass/all: J, H, or Ks."),
+    twomass_mag_min: float = typer.Option(8.0, help="Minimum 2MASS magnitude for --catalog 2mass/all."),
+    twomass_mag_max: float = typer.Option(15.0, help="Maximum 2MASS magnitude for --catalog 2mass/all."),
+    twomass_quality: str = typer.Option("ABC", help="Allowed 2MASS ph_qual letters for selected band."),
+    twomass_dataset_name: str = typer.Option("psc_lite", help="2MASS local Parquet dataset name."),
+    twomass_hpx_level: int = typer.Option(5, help="2MASS local Parquet HEALPix level."),
+    twomass_selection: str = typer.Option("stratified", help="2MASS target selection mode: stratified, brightest, or random."),
     max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
     photometry_backend: str = typer.Option("cpu_numpy", help="Photometry backend: cpu_numpy or warp_calibrated."),
     warp_devices: str = typer.Option("cuda:0,cuda:1,cuda:2", help="Comma-separated Warp CUDA devices."),
@@ -379,8 +388,16 @@ def run_depth_test(
         release=release,
         limit_fields=limit_fields,
         max_gaia_sources=max_gaia_sources,
+        catalog=catalog,
         gaia_g_min=gaia_g_min,
         gaia_g_max=gaia_g_max,
+        twomass_band=twomass_band,
+        twomass_mag_min=twomass_mag_min,
+        twomass_mag_max=twomass_mag_max,
+        twomass_quality=twomass_quality,
+        twomass_dataset_name=twomass_dataset_name,
+        twomass_hpx_level=twomass_hpx_level,
+        twomass_selection=twomass_selection,
         max_field_workers=max_field_workers,
         photometry_backend=photometry_backend,
         warp_devices=warp_devices,
@@ -409,8 +426,16 @@ def run_benchmark(
     release: str = typer.Option("qr2", help="SPHEREx release."),
     limit_fields: int = typer.Option(30, min=1, help="Number of SIA candidates to evaluate/process."),
     max_gaia_sources: int = typer.Option(100, min=0, help="Fixed Gaia targets carried through every field."),
+    catalog: str = typer.Option("gaia", help="Catalog source for automatic fixed targets: gaia, 2mass, or all."),
     gaia_g_min: float = typer.Option(12.5, help="Minimum Gaia G magnitude for fixed benchmark targets."),
     gaia_g_max: float = typer.Option(14.0, help="Maximum Gaia G magnitude for fixed benchmark targets."),
+    twomass_band: str = typer.Option("Ks", help="2MASS magnitude band for --catalog 2mass/all: J, H, or Ks."),
+    twomass_mag_min: float = typer.Option(8.0, help="Minimum 2MASS magnitude for --catalog 2mass/all."),
+    twomass_mag_max: float = typer.Option(15.0, help="Maximum 2MASS magnitude for --catalog 2mass/all."),
+    twomass_quality: str = typer.Option("ABC", help="Allowed 2MASS ph_qual letters for selected band."),
+    twomass_dataset_name: str = typer.Option("psc_lite", help="2MASS local Parquet dataset name."),
+    twomass_hpx_level: int = typer.Option(5, help="2MASS local Parquet HEALPix level."),
+    twomass_selection: str = typer.Option("stratified", help="2MASS target selection mode: stratified, brightest, or random."),
     max_field_workers: int = typer.Option(24, min=1, help="Concurrent parent-field workers."),
     photometry_backend: str = typer.Option("cpu_numpy", help="Photometry backend: cpu_numpy or warp_calibrated."),
     warp_devices: str = typer.Option("cuda:0,cuda:1,cuda:2", help="Comma-separated Warp CUDA devices."),
@@ -438,8 +463,16 @@ def run_benchmark(
         release=release,
         limit_fields=limit_fields,
         max_gaia_sources=max_gaia_sources,
+        catalog=catalog,
         gaia_g_min=gaia_g_min,
         gaia_g_max=gaia_g_max,
+        twomass_band=twomass_band,
+        twomass_mag_min=twomass_mag_min,
+        twomass_mag_max=twomass_mag_max,
+        twomass_quality=twomass_quality,
+        twomass_dataset_name=twomass_dataset_name,
+        twomass_hpx_level=twomass_hpx_level,
+        twomass_selection=twomass_selection,
         max_field_workers=max_field_workers,
         photometry_backend=photometry_backend,
         warp_devices=warp_devices,
@@ -488,8 +521,16 @@ def _run_depth_pipeline(
     release: str,
     limit_fields: int,
     max_gaia_sources: int,
+    catalog: str,
     gaia_g_min: float,
     gaia_g_max: float,
+    twomass_band: str = "Ks",
+    twomass_mag_min: float = 8.0,
+    twomass_mag_max: float = 15.0,
+    twomass_quality: str = "ABC",
+    twomass_dataset_name: str = "psc_lite",
+    twomass_hpx_level: int = 5,
+    twomass_selection: str = "stratified",
     max_field_workers: int,
     photometry_backend: str,
     warp_devices: str,
@@ -514,6 +555,10 @@ def _run_depth_pipeline(
     cfg.release = release
     if photometry_backend not in {"cpu_numpy", "warp_calibrated"}:
         raise typer.BadParameter("photometry_backend must be cpu_numpy or warp_calibrated")
+    if catalog not in {"gaia", "2mass", "all"}:
+        raise typer.BadParameter("catalog must be gaia, 2mass, or all")
+    if twomass_band not in {"J", "H", "Ks"}:
+        raise typer.BadParameter("twomass_band must be J, H, or Ks")
     if psf_photometry_backend not in {"cpu_single", "warp_grid"}:
         raise typer.BadParameter("psf_photometry_backend must be cpu_single or warp_grid")
     if psf_kernel_build_mode not in {"cpu_scipy", "gpu_bilinear", "gpu_spline"}:
@@ -550,6 +595,7 @@ def _run_depth_pipeline(
             gaia_g_min=gaia_g_min,
             gaia_g_max=gaia_g_max,
             photometry_backend=photometry_backend,
+            catalog=catalog,
             psf_photometry_backend=psf_photometry_backend,
             psf_kernel_build_mode=psf_kernel_build_mode,
             psf_grid_half_range_pix=psf_grid_half_range_pix,
@@ -584,13 +630,21 @@ def _run_depth_pipeline(
     if fixed_targets_path is not None:
         fixed_targets = _load_fixed_targets(fixed_targets_path)
     else:
-        fixed_targets = build_fixed_target_rows_from_trial(
+        fixed_targets = _build_catalog_target_rows_from_trial(
             target=manual_target,
             cfg=cfg,
             trial=best_trial,
-            max_gaia_sources=max_gaia_sources,
+            max_sources=max_gaia_sources,
+            catalog=catalog,
             gaia_g_min=gaia_g_min,
             gaia_g_max=gaia_g_max,
+            twomass_band=twomass_band,
+            twomass_mag_min=twomass_mag_min,
+            twomass_mag_max=twomass_mag_max,
+            twomass_quality=twomass_quality,
+            twomass_dataset_name=twomass_dataset_name,
+            twomass_hpx_level=twomass_hpx_level,
+            twomass_selection=twomass_selection,
         )
     fixed_targets = _dedupe_target_rows(fixed_targets)
     jobs = run_multi_trial_field_workers(
@@ -617,6 +671,12 @@ def _run_depth_pipeline(
         "trial_count": len(trials),
         "measured_trial_count": len(measured_trials),
         "fixed_target_count": len(fixed_targets),
+        "catalog": catalog,
+        "twomass_band": twomass_band if catalog in {"2mass", "all"} else None,
+        "twomass_mag_min": twomass_mag_min if catalog in {"2mass", "all"} else None,
+        "twomass_mag_max": twomass_mag_max if catalog in {"2mass", "all"} else None,
+        "twomass_quality": twomass_quality if catalog in {"2mass", "all"} else None,
+        "twomass_selection": twomass_selection if catalog in {"2mass", "all"} else None,
         "gaia_g_min": gaia_g_min,
         "gaia_g_max": gaia_g_max,
         "field_job_count": len(jobs),
@@ -716,6 +776,70 @@ def _load_fixed_targets(path: Path) -> list[dict[str, object]]:
     if df.empty:
         raise typer.BadParameter("Fixed target file is empty")
     return df.where(pd.notna(df), None).to_dict(orient="records")
+
+
+def _build_catalog_target_rows_from_trial(
+    *,
+    target,
+    cfg,
+    trial: dict[str, object],
+    max_sources: int,
+    catalog: str,
+    gaia_g_min: float,
+    gaia_g_max: float,
+    twomass_band: str,
+    twomass_mag_min: float,
+    twomass_mag_max: float,
+    twomass_quality: str,
+    twomass_dataset_name: str,
+    twomass_hpx_level: int,
+    twomass_selection: str,
+) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    if catalog in {"gaia", "all"}:
+        rows.extend(
+            build_fixed_target_rows_from_trial(
+                target=target,
+                cfg=cfg,
+                trial=trial,
+                max_gaia_sources=max_sources,
+                gaia_g_min=gaia_g_min,
+                gaia_g_max=gaia_g_max,
+            )
+        )
+    else:
+        rows.append(
+            {
+                "target_id": target.target_id,
+                "target_type": target.target_type,
+                "source_id": None,
+                "object_name": target.object_name,
+                "ra_reference_deg": target.ra_deg,
+                "dec_reference_deg": target.dec_deg,
+                "reference_epoch_yr": target.reference_epoch_yr,
+                "pmra_masyr": target.pmra_masyr,
+                "pmdec_masyr": target.pmdec_masyr,
+                "parallax_mas": target.parallax_mas,
+                "priority_score": target.priority_score,
+                "target_filter_flags": "manual_include",
+            }
+        )
+    if catalog in {"2mass", "all"}:
+        candidate = dict(trial["candidate"])
+        twomass = query_local_2mass_duckdb(
+            s_region=str(candidate["s_region"]),
+            cache_root=cfg.cache_root,
+            max_sources=max_sources,
+            mag_min=twomass_mag_min,
+            mag_max=twomass_mag_max,
+            band=twomass_band,
+            quality=twomass_quality,
+            dataset_name=twomass_dataset_name,
+            hpx_level=twomass_hpx_level,
+            selection=twomass_selection,
+        )
+        rows.extend(twomass_to_fixed_target_rows(twomass))
+    return rows
 
 
 def _dedupe_target_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
