@@ -151,6 +151,13 @@ def main() -> None:
             "smoothness_score",
             "aperture_psf_corr",
             "median_abs_aperture_snr",
+            "campaign",
+            "mag_bin",
+            "grid_tile_id",
+            "grid_nside",
+            "grid_order",
+            "grid_hpx",
+            "grid_batch_index",
         )
         if col in targets.columns
     ]

@@ -69,6 +69,16 @@ POINT_COLUMNS = [
     "ruwe",
 ]
 
+GRID_METADATA_COLUMNS = [
+    "campaign",
+    "mag_bin",
+    "grid_tile_id",
+    "grid_nside",
+    "grid_order",
+    "grid_hpx",
+    "grid_batch_index",
+]
+
 QUALITY_COLUMNS = [
     "target_id",
     "spectrum_quality_score",
@@ -92,6 +102,7 @@ def main() -> None:
     parser.add_argument("--run-dir", type=Path, action="append", help="Specific run directory to include.")
     parser.add_argument("--campaign", action="append", help="Include run dirs matching '<campaign>_*'.")
     parser.add_argument("--run-glob", action="append", help="Include run dirs matching a glob under --run-root.")
+    parser.add_argument("--run-kind", action="append", choices=["baseline", "injected", "unknown"], help="Keep only selected run kinds.")
     parser.add_argument("--limit-runs", type=int, help="Limit number of selected runs after sorting.")
     parser.add_argument(
         "--quality-category",
@@ -254,6 +265,9 @@ def _select_run_dirs(args: argparse.Namespace) -> list[Path]:
         seen.add(str(path))
         out.append(path)
     out.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    if args.run_kind:
+        keep_kinds = set(args.run_kind)
+        out = [path for path in out if _run_kind_from_name(path.name) in keep_kinds]
     if args.limit_runs:
         out = out[: int(args.limit_runs)]
     return out
@@ -293,14 +307,17 @@ def _build_run_tables(
         targets = _cap_targets_preserving_injections(targets, max_targets)
     keep_targets = set(targets["target_id"].astype(str))
     spectra = spectra[spectra["target_id"].astype(str).isin(keep_targets)].copy()
+    grid_meta = _grid_metadata_from_run_name(run_dir.name)
 
     split_map = {
         str(row["target_id"]): _split_for_key(row.get("source_id") or row["target_id"])
         for row in targets.to_dict(orient="records")
     }
     targets["split_id"] = targets["target_id"].astype(str).map(split_map)
+    _add_metadata_columns(targets, grid_meta)
     target_injection_map = targets.set_index(targets["target_id"].astype(str))["is_injected_target"].to_dict()
     points = _point_table(dataset_name, run_dir, spectra, split_map, target_injection_map)
+    _add_metadata_columns(points, grid_meta)
     narrow_targets = targets.copy()
     narrow_points = points.copy()
     split_rows = [
@@ -309,6 +326,7 @@ def _build_run_tables(
             "run_name": run_dir.name,
             "target_id": target_id,
             "split_id": split_id,
+            **grid_meta,
         }
         for target_id, split_id in split_map.items()
     ]
@@ -444,6 +462,71 @@ def _point_table(
     points["is_injected_measurement"] = points.get("point_injection_applied", False)
     points["is_injected_target"] = points["target_id"].astype(str).map(target_injection_map).fillna(False).astype(bool)
     return points
+
+
+def _add_metadata_columns(df: pd.DataFrame, values: dict[str, object]) -> None:
+    for key, value in values.items():
+        df[key] = value
+
+
+def _grid_metadata_from_run_name(run_name: str) -> dict[str, object]:
+    stem = run_name.removesuffix("_injected").removesuffix("_baseline")
+    parts = stem.split("_")
+    hpx_index = None
+    for index, part in enumerate(parts):
+        if part == "hpx" and index + 4 < len(parts) and parts[index + 1].startswith("nside"):
+            hpx_index = index
+            break
+    if hpx_index is None:
+        return {
+            "campaign": _campaign_from_non_grid_run(stem),
+            "mag_bin": None,
+            "grid_tile_id": None,
+            "grid_nside": None,
+            "grid_order": None,
+            "grid_hpx": None,
+            "grid_batch_index": None,
+        }
+    campaign_mag = parts[:hpx_index]
+    mag_start = None
+    for index, part in enumerate(campaign_mag):
+        if part in {"mid", "bright", "verybright", "faint"} and index + 1 < len(campaign_mag):
+            mag_start = index
+    if mag_start is None:
+        mag_start = max(0, len(campaign_mag) - 2)
+    campaign = "_".join(campaign_mag[:mag_start]) or "_".join(campaign_mag)
+    mag_bin = "_".join(campaign_mag[mag_start:]) if mag_start < len(campaign_mag) else None
+    nside = _parse_int(parts[hpx_index + 1].removeprefix("nside"))
+    order = parts[hpx_index + 2]
+    hpx = _parse_int(parts[hpx_index + 3])
+    batch = None
+    for part in parts[hpx_index + 4 :]:
+        if part.startswith("b") and part[1:].isdigit():
+            batch = int(part[1:])
+            break
+    tile_id = "_".join(parts[hpx_index : hpx_index + 4])
+    return {
+        "campaign": campaign or None,
+        "mag_bin": mag_bin,
+        "grid_tile_id": tile_id,
+        "grid_nside": nside,
+        "grid_order": order,
+        "grid_hpx": hpx,
+        "grid_batch_index": batch,
+    }
+
+
+def _campaign_from_non_grid_run(stem: str) -> str | None:
+    if "_cvj_" in stem:
+        return stem.split("_cvj_", 1)[0]
+    return stem.rsplit("_", 1)[0] if "_" in stem else None
+
+
+def _parse_int(value: str) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _read_injection_truth(manifest_path: Path | None, run_name: str, dataset_name: str) -> pd.DataFrame:

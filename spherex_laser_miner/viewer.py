@@ -675,6 +675,14 @@ def _grid_dispatch_command(cache_root: Path, payload: dict[str, object], prefix:
         cmd.extend(["--twomass-dataset-name", str(payload.get("twomass_dataset_name"))])
     if payload.get("twomass_hpx_level"):
         cmd.extend(["--twomass-hpx-level", str(int(payload.get("twomass_hpx_level") or 5))])
+    if bool(payload.get("science_embedding")):
+        cmd.append("--science-embedding")
+        if payload.get("science_embedding_checkpoint"):
+            cmd.extend(["--science-embedding-checkpoint", str(payload.get("science_embedding_checkpoint"))])
+        if payload.get("science_embedding_workers"):
+            cmd.extend(["--science-embedding-workers", str(int(payload.get("science_embedding_workers") or 24))])
+        if payload.get("science_embedding_device"):
+            cmd.extend(["--science-embedding-device", str(payload.get("science_embedding_device"))])
     if execute:
         cmd.append("--execute")
     return cmd
@@ -2502,7 +2510,7 @@ def _umap_payload(embeddings_root: Path, params: dict[str, list[str]]) -> dict[s
     df = pd.read_parquet(projection_path)
     if q:
         mask = df["target_id"].astype(str).str.lower().str.contains(q, regex=False)
-        for col in ("run_name", "source_id", "object_name", "spectrum_quality_category"):
+        for col in ("run_name", "source_id", "object_name", "spectrum_quality_category", "campaign", "mag_bin", "grid_tile_id"):
             if col in df:
                 mask |= df[col].astype(str).str.lower().str.contains(q, regex=False)
         df = df[mask]
@@ -2545,6 +2553,13 @@ def _umap_payload(embeddings_root: Path, params: dict[str, list[str]]) -> dict[s
             "n_input_points",
             "flag_fraction",
             "smoothness_score",
+            "campaign",
+            "mag_bin",
+            "grid_tile_id",
+            "grid_nside",
+            "grid_order",
+            "grid_hpx",
+            "grid_batch_index",
         )
         if col in df.columns
     ]
@@ -2626,6 +2641,13 @@ def _embedding_display_cols(df: pd.DataFrame) -> list[str]:
             "n_measurements",
             "flag_fraction",
             "smoothness_score",
+            "campaign",
+            "mag_bin",
+            "grid_tile_id",
+            "grid_nside",
+            "grid_order",
+            "grid_hpx",
+            "grid_batch_index",
         )
         if col in df.columns
     ]
@@ -3846,6 +3868,14 @@ verybright_g5_8:5:8:3000</textarea>
         <div><label>Max lines/target</label><input id="injMaxLinesPerTarget" type="number" value="1" min="1"></div>
         <div></div>
       </div>
+      <h2 style="margin-top:14px">Post Run ML</h2>
+      <label><input id="scienceEmbedding" type="checkbox" style="width:auto; margin-right:6px"> Build science embedding + UMAP after dispatch</label>
+      <div class="row">
+        <div><label>ML workers</label><input id="scienceEmbeddingWorkers" type="number" value="24" min="1"></div>
+        <div><label>ML device</label><input id="scienceEmbeddingDevice" value="cuda"></div>
+      </div>
+      <label>Science checkpoint</label>
+      <input id="scienceEmbeddingCheckpoint" value="/mnt/niroseti/spherex_cache/ml_runs/science_cv_mega_v2_train10/checkpoints/best.pt">
       <div class="row" style="margin-top:10px">
         <button onclick="dispatch(false)">Plan</button>
         <button class="warn" onclick="dispatch(true)">Start</button>
@@ -3918,6 +3948,10 @@ function payload(execute){
     twomass_selection:$('twomassSelection').value,
     twomass_dataset_name:$('twomassDatasetName').value.trim(),
     twomass_hpx_level:Number($('twomassHpxLevel').value || 5),
+    science_embedding:$('scienceEmbedding').checked,
+    science_embedding_checkpoint:$('scienceEmbeddingCheckpoint').value.trim(),
+    science_embedding_workers:Number($('scienceEmbeddingWorkers').value || 24),
+    science_embedding_device:$('scienceEmbeddingDevice').value.trim(),
     mag_bins:$('magBins').value.split(/\\n+/).map(line=>line.trim()).filter(Boolean).map(line=>{const p=line.split(':'); return {name:p[0], g_min:Number(p[1]), g_max:Number(p[2]), max_sources:Number(p[3] || 3000)};})
   };
 }

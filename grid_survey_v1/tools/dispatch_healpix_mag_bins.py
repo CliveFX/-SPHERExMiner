@@ -79,6 +79,13 @@ def main() -> None:
     parser.add_argument("--injection-max-lines-per-target", type=int, default=1)
     parser.add_argument("--injection-line-width-nm", type=float, default=1.0)
     parser.add_argument("--injection-max-line-flux-uJy", type=float)
+    parser.add_argument("--science-embedding", action="store_true", help="After executed grid campaigns finish, export science embeddings and UMAP for this campaign prefix.")
+    parser.add_argument("--science-embedding-checkpoint", type=Path, default=DEFAULT_CACHE_ROOT / "ml_runs" / "science_cv_mega_v2_train10" / "checkpoints" / "best.pt")
+    parser.add_argument("--science-embedding-run-kind", choices=["baseline", "injected", "all"], default="baseline")
+    parser.add_argument("--science-embedding-workers", type=int, default=24)
+    parser.add_argument("--science-embedding-device", default="cuda")
+    parser.add_argument("--science-embedding-max-targets", type=int)
+    parser.add_argument("--science-embedding-force", action="store_true")
     parser.add_argument("--force", action="store_true", help="Pass --force to the downstream campaign runner.")
     parser.add_argument("--overwrite-manifests", action="store_true")
     parser.add_argument("--execute", action="store_true", help="Actually run downstream campaigns. Without this, only writes the plan.")
@@ -184,6 +191,8 @@ def main() -> None:
         commands=commands,
     )
     print(json.dumps({"status": "dispatch_plan", "path": str(plan_path), "commands": len(commands)}), flush=True)
+    if args.execute and args.science_embedding:
+        _run_science_embedding(args, log_root)
 
 
 def _parse_mag_bins(values: list[str]) -> list[MagBin]:
@@ -565,6 +574,33 @@ def _run_or_print(row: dict[str, Any], log_root: Path, execute: bool) -> None:
     with log_path.open("w", encoding="utf-8") as log:
         proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=log, stderr=subprocess.STDOUT, check=False, env=env)
     print(json.dumps({"status": "done" if proc.returncode == 0 else "failed", "returncode": proc.returncode, "log": str(log_path)}), flush=True)
+
+
+def _run_science_embedding(args: argparse.Namespace, log_root: Path) -> None:
+    cmd = [
+        sys.executable,
+        str(REPO_ROOT / "tools" / "run_grid_science_embedding.py"),
+        "--cache-root",
+        str(args.cache_root),
+        "--campaign-prefix",
+        args.campaign_prefix,
+        "--checkpoint",
+        str(args.science_embedding_checkpoint),
+        "--run-kind",
+        args.science_embedding_run_kind,
+        "--workers",
+        str(args.science_embedding_workers),
+        "--prep-workers",
+        str(args.science_embedding_workers),
+        "--device",
+        args.science_embedding_device,
+    ]
+    if args.science_embedding_max_targets is not None:
+        cmd.extend(["--max-targets", str(args.science_embedding_max_targets)])
+    if args.science_embedding_force:
+        cmd.append("--force")
+    row = {"stage": "science_embedding", "campaign_prefix": args.campaign_prefix, "cmd": cmd}
+    _run_or_print(row, log_root, True)
 
 
 def _wait_if_paused(pause_file: Path, stop_file: Path) -> None:

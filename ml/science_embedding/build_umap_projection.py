@@ -116,6 +116,13 @@ def _display_cols(df: pd.DataFrame) -> list[str]:
             "n_measurements",
             "flag_fraction",
             "smoothness_score",
+            "campaign",
+            "mag_bin",
+            "grid_tile_id",
+            "grid_nside",
+            "grid_order",
+            "grid_hpx",
+            "grid_batch_index",
         )
         if col in df.columns
     ]
