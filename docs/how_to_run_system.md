@@ -16,6 +16,8 @@ All examples use the NAS cache root:
 
 Cold-starting a new machine or rebuilding the local Gaia cache is covered in
 [Gaia Cache Cold Start](gaia_cache_cold_start.md).
+Starting the local 2MASS cache is covered in
+[2MASS Cache Cold Start](twomass_cache_cold_start.md).
 
 ## 1. Preflight
 
@@ -69,6 +71,7 @@ http://192.168.1.224:8765/spectra?run=<run_name>
 http://192.168.1.224:8765/candidate-summary?campaign=<campaign>&quality=pass
 http://192.168.1.224:8765/blind-candidates?run=<run_name>&scope=raw
 http://192.168.1.224:8765/injections?run=<injected_run_name>
+http://192.168.1.224:8765/grid-survey
 ```
 
 ## 3. Run One Depth Miner
@@ -357,7 +360,48 @@ with:
 --narrowband-diagnostic-line-max-rows-per-candidate 201
 ```
 
-## 8. Stop Or Resume
+## 8. Run A HEALPix Grid Survey
+
+The grid survey page is the current front end for HEALPix-based survey work:
+
+```text
+http://192.168.1.224:8765/grid-survey
+```
+
+`Plan` builds Gaia target manifests and writes a `dispatch_plan.json` but does
+not run photometry. `Start` regenerates the plan from the current UI values and
+executes it.
+
+The corrected grid behavior is that each HEALPix/magnitude/batch command passes
+a fixed target batch directly into one miner run:
+
+```text
+--fixed-targets-path <batch_fixed_targets.parquet>
+```
+
+It does not recursively launch one target-centered run per Gaia source.
+
+For injection/recovery grid runs, each batch performs:
+
+1. Direct baseline run.
+2. Mixed laser injection plan.
+3. FITS injection and `path_overrides.json`.
+4. Direct injected run using the same fixed targets.
+5. GPU truth-target raw narrowband recovery.
+6. Paired-delta recovery products for the existing recovery summary viewer.
+
+Low-multiplicity injection settings:
+
+```text
+Injection strengths: 8
+Inj targets/cell: 1
+Max lines/target: 1
+```
+
+`Max lines/target` prevents one target spectrum from receiving several
+different fake laser families unless explicitly dialed up.
+
+## 9. Stop Or Resume
 
 Stop a campaign session:
 

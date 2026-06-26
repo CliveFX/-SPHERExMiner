@@ -72,6 +72,12 @@ def main() -> None:
     )
     parser.add_argument("--strengths-sigma", default="3,5,8,12,20")
     parser.add_argument("--targets-per-cell", type=int, default=20)
+    parser.add_argument(
+        "--max-lines-per-target",
+        type=int,
+        default=1,
+        help="Maximum distinct line-family injections allowed on one target. Use 1 for one fake line per spectrum.",
+    )
     parser.add_argument("--line-width-nm", type=float, default=1.0)
     parser.add_argument("--min-response", type=float, default=1e-3)
     parser.add_argument("--max-frames-per-injection", type=int)
@@ -108,6 +114,7 @@ def main() -> None:
     strengths = _parse_csv_floats(args.strengths_sigma)
     rng = np.random.default_rng(args.seed)
     used_target_line: set[tuple[str, str]] = set()
+    target_line_counts: dict[str, int] = {}
     targets_by_id: dict[str, dict[str, Any]] = {}
     injections: list[dict[str, Any]] = []
 
@@ -133,6 +140,8 @@ def main() -> None:
                 target_line_key = (target_id, line_family)
                 if target_line_key in used_target_line:
                     continue
+                if args.max_lines_per_target > 0 and target_line_counts.get(target_id, 0) >= args.max_lines_per_target:
+                    continue
                 median_unc = _finite_float(row["median_unc_uJy"])
                 max_response = _finite_float(row["max_response"])
                 estimated_line_flux = None
@@ -146,6 +155,7 @@ def main() -> None:
                     skipped_cap += 1
                     continue
                 used_target_line.add(target_line_key)
+                target_line_counts[target_id] = target_line_counts.get(target_id, 0) + 1
                 targets_by_id[target_id] = {
                     "target_id": target_id,
                     "n_measurements": int(row["n_measurements"]),
@@ -192,6 +202,7 @@ def main() -> None:
             "line_families": args.line_families,
             "strengths_sigma": strengths,
             "targets_per_cell": args.targets_per_cell,
+            "max_lines_per_target": args.max_lines_per_target,
             "line_width_nm": args.line_width_nm,
             "min_response": args.min_response,
             "min_measurements": args.min_measurements,

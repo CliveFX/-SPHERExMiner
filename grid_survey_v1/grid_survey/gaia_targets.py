@@ -44,7 +44,7 @@ def gaia_to_manual_targets(df: pd.DataFrame, tile: HealpixTile) -> list[dict[str
         g_mag = _float_or_none(row.get("phot_g_mean_mag"))
         rows.append(
             {
-                "target_id": f"grid_{tile.tile_id}_gaia_dr3_{source_id}",
+                "target_id": f"gaia_dr3_{source_id}",
                 "target_type": "gaia_dr3_grid_survey",
                 "object_name": f"Gaia DR3 {source_id} in {tile.tile_id}",
                 "ra_deg": float(row["ra"]),
@@ -56,7 +56,10 @@ def gaia_to_manual_targets(df: pd.DataFrame, tile: HealpixTile) -> list[dict[str
                 "source_catalog": "gaia_dr3",
                 "source_catalog_id": source_id,
                 "priority_score": float(100.0 - min(g_mag if g_mag is not None else 99.0, 99.0)),
-                "notes": f"grid_survey_v1 tile={tile.tile_id} rank={rank} G={g_mag}",
+                "notes": (
+                    f"grid_survey_v1 tile={tile.tile_id} nside={tile.nside} "
+                    f"hpx={tile.hpx} order={tile.order} rank={rank} G={g_mag}"
+                ),
             }
         )
     return rows

@@ -45,17 +45,20 @@ Outputs:
     targets_batch_0000.yaml
 ```
 
-The generated `targets.yaml` can be passed to the existing campaign runner:
+The generated `targets.yaml` can be passed to the existing pipeline as fixed
+targets. In grid mode, the HEALPix cell center is only used to select SPHEREx
+frames; the Gaia rows in the manifest are passed directly as the measured target
+list.
 
 ```bash
-grid_survey_v1/.venv/bin/python tools/run_visible_sky_injection_campaign.py \
-  --targets <output-root>/hpx_nside0064_nested_00001234/targets.yaml \
+grid_survey_v1/.venv/bin/python grid_survey_v1/tools/dispatch_healpix_mag_bins.py \
   --campaign-prefix grid_v1_hpx0064_00001234_g11_16_f500 \
-  --no-resolve-gaia-anchors \
-  --gaia-g-min 11 \
-  --gaia-g-max 16 \
-  --max-gaia-sources 3000 \
-  --limit-fields 500
+  --nside 64 \
+  --hpx 1234 \
+  --mag-bin mid_g11_16:11:16:3000 \
+  --limit-fields 500 \
+  --pipeline baseline \
+  --execute
 ```
 
 For large tiles, prefer the files under `batches/`. A 100k-target YAML can be
@@ -63,10 +66,104 @@ For large tiles, prefer the files under `batches/`. A 100k-target YAML can be
 `--batch-size 3000` keeps each campaign shard at the scale we have already been
 running successfully.
 
+## Dispatching Magnitude Bins
+
+`tools/dispatch_healpix_mag_bins.py` is the grid-survey wrapper. It builds one
+target manifest per HEALPix cell and magnitude bin, then either writes a dry
+plan or runs one direct pipeline job per target batch.
+
+Important: `--pipeline baseline` is direct grid mode. It runs one
+`spherex-mine run-depth-test` per HEALPix/magnitude/batch with
+`--fixed-targets-path`. It does **not** iterate each Gaia source as a separate
+target-of-interest anchor. The legacy recursive target-of-interest behavior is
+available only as `--pipeline anchor_ladder` for diagnostics.
+
+Plan a three-bin grid run without starting photometry:
+
+```bash
+grid_survey_v1/.venv/bin/python grid_survey_v1/tools/dispatch_healpix_mag_bins.py \
+  --campaign-prefix grid_v1_mag_sweep_smoke \
+  --nside 64 \
+  --hpx 1234 \
+  --mag-bin lowmag_bright_g5_8:5:8:3000 \
+  --mag-bin mid_g11_16:11:16:3000 \
+  --mag-bin highmag_faint_g16_19:16:19:3000 \
+  --limit-fields 500 \
+  --max-field-workers 24 \
+  --warp-devices cuda:0,cuda:1,cuda:2 \
+  --pipeline baseline
+```
+
+Add `--execute` to run it. Without `--execute`, it only writes:
+
+```text
+/mnt/niroseti/spherex_cache/grid_survey_v1/dispatches/<campaign-prefix>/dispatch_plan.json
+```
+
+The same wrapper can run full injection/recovery campaigns:
+
+```bash
+grid_survey_v1/.venv/bin/python grid_survey_v1/tools/dispatch_healpix_mag_bins.py \
+  --campaign-prefix grid_v1_mag_sweep_injected \
+  --nside 64 \
+  --hpx 1234 \
+  --mag-bin mid_g11_16:11:16:3000 \
+  --limit-fields 500 \
+  --max-field-workers 24 \
+  --warp-devices cuda:0,cuda:1,cuda:2 \
+  --pipeline injection \
+  --execute
+```
+
+Naming convention:
+
+- `lowmag_bright_g5_8` means numerically low Gaia G magnitude and bright stars.
+- `mid_g11_16` is the current safest science range.
+- `highmag_faint_g16_19` means numerically high Gaia G magnitude and faint stars.
+
+The wrapper deliberately keeps the miner output format unchanged. Each batch is
+still a normal campaign/run under `spherex_cache`, so the existing spectra,
+candidate, recovery, and status viewers can read the products.
+
+## Web UI
+
+The main viewer exposes a grid dispatcher at:
+
+```text
+http://192.168.1.224:8765/grid-survey
+```
+
+The UI supports:
+
+- HEALPix `nside`, explicit cell lists, or start/count ranges.
+- Multiple magnitude bins in `name:g_min:g_max:max_sources` form.
+- Spectral depth, batch size, worker count, and GPU devices.
+- Direct baseline runs or direct injection/recovery runs.
+- Pause/resume/stop files for batch-safe dispatch control.
+- Pan/zoom/click on the sky map, with HEALPix cell borders colored by status.
+
+`Plan` writes manifests and `dispatch_plan.json` only. `Start` regenerates the
+plan from current UI values and then runs it.
+
+For injection/recovery, the direct grid wrapper writes both raw truth-target
+recovery products and the legacy paired-delta recovery products:
+
+```text
+runs/<prefix>_injected/narrowband_detector_truth/
+runs/<prefix>_injected/classifier_paired_delta/
+runs/<prefix>_injected/recovery_score_mixed_lasers/
+grid_survey_v1/direct_injection/<prefix>/direct_injection_summary.json
+```
+
+Use `--injection-max-lines-per-target 1` or the UI `Max lines/target = 1`
+control to prevent one target spectrum from receiving several injected laser
+families.
+
 ## Notes
 
 - HEALPix order is `nested`.
 - Coordinates are ICRS.
 - Gaia query uses the existing local Gaia lite DuckDB path.
-- The tool writes manifests only; it does not start photometry.
+- Without `--execute`, the dispatcher writes manifests only; it does not start
+  photometry.
 - No large outputs should be committed to git.

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import json
 import html
+import os
+import signal
 import subprocess
+import sys
 import threading
 import urllib.parse
 import time
@@ -77,6 +80,8 @@ def _make_handler(run_dir: Path):
                     self._send_html(_campaign_status_html())
                 elif path == "/recovery-summary":
                     self._send_html(_recovery_summary_html())
+                elif path == "/grid-survey":
+                    self._send_html(_grid_survey_html())
                 elif path == "/frame-point":
                     self._send_html(_frame_point_html(active_run_dir, params))
                 elif path == "/api/runs":
@@ -126,6 +131,10 @@ def _make_handler(run_dir: Path):
                     self._send_json(_campaign_status(runs_root, params))
                 elif path == "/api/recovery-summary":
                     self._send_json(_recovery_summary(runs_root, params))
+                elif path == "/api/grid-survey/status":
+                    self._send_json(_grid_survey_status(runs_root.parent, params))
+                elif path == "/api/grid-survey/tiles":
+                    self._send_json(_grid_survey_tiles(runs_root.parent, params))
                 elif path.startswith("/api/injection/"):
                     injection_id = urllib.parse.unquote(path.removeprefix("/api/injection/"))
                     self._send_json(_injection_detail(active_run_dir, injection_id))
@@ -135,6 +144,20 @@ def _make_handler(run_dir: Path):
                 elif path.startswith("/api/fits/"):
                     idx = int(path.split("/")[3])
                     self._send_json(_fits_info(active_run_dir, idx))
+                else:
+                    self.send_error(404)
+            except Exception as exc:
+                self._send_json({"error": type(exc).__name__, "message": str(exc)}, status=500)
+
+        def do_POST(self) -> None:
+            parsed = urllib.parse.urlparse(self.path)
+            path = parsed.path
+            try:
+                payload = self._read_json_body()
+                if path == "/api/grid-survey/dispatch":
+                    self._send_json(_grid_survey_dispatch(runs_root.parent, payload))
+                elif path == "/api/grid-survey/control":
+                    self._send_json(_grid_survey_control(runs_root.parent, payload))
                 else:
                     self.send_error(404)
             except Exception as exc:
@@ -151,6 +174,16 @@ def _make_handler(run_dir: Path):
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _read_json_body(self) -> dict[str, object]:
+            length = int(self.headers.get("Content-Length") or "0")
+            if length <= 0:
+                return {}
+            body = self.rfile.read(length).decode("utf-8")
+            data = json.loads(body)
+            if not isinstance(data, dict):
+                raise ValueError("POST body must be a JSON object")
+            return data
 
         def _send_html(self, html: str) -> None:
             body = html.encode("utf-8")
@@ -220,6 +253,441 @@ def _runs(runs_root: Path, active_run_dir: Path) -> list[dict[str, object]]:
             }
         )
     return rows
+
+
+def _grid_survey_root(cache_root: Path) -> Path:
+    return cache_root / "grid_survey_v1" / "dispatches"
+
+
+def _grid_survey_status(cache_root: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    root = _grid_survey_root(cache_root)
+    prefix = (params.get("campaign_prefix") or params.get("prefix") or [""])[0].strip()
+    dispatches = _grid_dispatches(root)
+    selected = prefix or (dispatches[0]["campaign_prefix"] if dispatches else "")
+    detail = _grid_dispatch_detail(cache_root, selected) if selected else {}
+    return {"root": str(root), "dispatches": dispatches, "selected": selected, "detail": detail}
+
+
+def _grid_dispatches(root: Path) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    if not root.exists():
+        return rows
+    for path in sorted([p for p in root.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True):
+        plan = _read_json(path / "dispatch_plan.json")
+        proc = _read_json(path / "dispatch_process.json")
+        rows.append(
+            {
+                "campaign_prefix": path.name,
+                "path": str(path),
+                "mtime": path.stat().st_mtime,
+                "mtime_iso": _format_time(path.stat().st_mtime),
+                "has_plan": bool(plan),
+                "command_count": plan.get("command_count") if isinstance(plan, dict) else None,
+                "nside": plan.get("nside") if isinstance(plan, dict) else None,
+                "pipeline": plan.get("pipeline") if isinstance(plan, dict) else None,
+                "paused": (path / "PAUSE").exists(),
+                "stop_requested": (path / "STOP").exists(),
+                "process": _grid_process_state(proc),
+            }
+        )
+    return rows
+
+
+def _grid_dispatch_detail(cache_root: Path, prefix: str) -> dict[str, object]:
+    dispatch_root = _grid_survey_root(cache_root) / Path(prefix).name
+    plan = _read_json(dispatch_root / "dispatch_plan.json")
+    proc = _read_json(dispatch_root / "dispatch_process.json")
+    commands = plan.get("commands", []) if isinstance(plan, dict) else []
+    command_rows: list[dict[str, object]] = []
+    tile_state: dict[str, dict[str, object]] = {}
+    for cmd in commands if isinstance(commands, list) else []:
+        if not isinstance(cmd, dict):
+            continue
+        campaign_prefix = str(cmd.get("campaign_prefix") or "")
+        state = _grid_campaign_state(cache_root, campaign_prefix)
+        row = {
+            **{key: cmd.get(key) for key in ("pipeline", "tile_id", "batch_index", "target_count", "targets_path", "campaign_prefix")},
+            **state,
+        }
+        command_rows.append(row)
+        tile_id = str(cmd.get("tile_id") or "")
+        if tile_id:
+            entry = tile_state.setdefault(
+                tile_id,
+                {"tile_id": tile_id, "status": "pending", "campaigns": 0, "done": 0, "failed": 0, "active": 0, "pending": 0},
+            )
+            entry["campaigns"] = int(entry["campaigns"]) + 1
+            status = str(state["status"])
+            entry[status] = int(entry.get(status, 0) or 0) + 1
+            entry["status"] = _merge_grid_status(str(entry["status"]), status)
+    return {
+        "dispatch_root": str(dispatch_root),
+        "plan": plan,
+        "paused": (dispatch_root / "PAUSE").exists(),
+        "stop_requested": (dispatch_root / "STOP").exists(),
+        "process": _grid_process_state(proc),
+        "commands": command_rows,
+        "tiles": sorted(tile_state.values(), key=lambda row: str(row["tile_id"])),
+        "summary": _grid_summary(command_rows),
+    }
+
+
+def _grid_campaign_state(cache_root: Path, campaign_prefix: str) -> dict[str, object]:
+    direct_root = _grid_survey_root(cache_root).parent / "direct_injection" / campaign_prefix
+    direct_summary_path = direct_root / "direct_injection_summary.json"
+    if direct_summary_path.exists():
+        summary = _read_json(direct_summary_path)
+        paired = summary.get("paired_recovery") if isinstance(summary, dict) else None
+        raw = summary.get("recovery") if isinstance(summary, dict) else None
+        return {
+            "status": "done",
+            "campaign_root": str(direct_root),
+            "manifest_rows": 1,
+            "done_rows": 1,
+            "failed_rows": 0,
+            "active_rows": 0,
+            "waiting_rows": 0,
+            "baseline_run": summary.get("baseline_run") if isinstance(summary, dict) else None,
+            "injected_run": summary.get("injected_run") if isinstance(summary, dict) else None,
+            "injection_count": paired.get("injection_count") if isinstance(paired, dict) else None,
+            "paired_recovered": paired.get("recovered_count") if isinstance(paired, dict) else None,
+            "paired_recovery_fraction": paired.get("recovery_fraction") if isinstance(paired, dict) else None,
+            "raw_recovered": raw.get("match_count") if isinstance(raw, dict) else None,
+            "raw_recovery_fraction": raw.get("match_fraction") if isinstance(raw, dict) else None,
+        }
+    if direct_root.exists():
+        logs = direct_root / "logs"
+        log_paths = sorted(logs.glob("*.log")) if logs.exists() else []
+        stage_names = [path.stem for path in log_paths]
+        active_stage = _active_direct_injection_stage(stage_names)
+        failed = any(_log_has_error(path) for path in log_paths)
+        return {
+            "status": "failed" if failed else "active",
+            "campaign_root": str(direct_root),
+            "manifest_rows": 1,
+            "done_rows": 0,
+            "failed_rows": 1 if failed else 0,
+            "active_rows": 0 if failed else 1,
+            "waiting_rows": 0,
+            "current_stage": active_stage,
+        }
+
+    run_root = cache_root / "runs" / campaign_prefix
+    if run_root.exists():
+        assembly_path = run_root / "spectra" / "assembly_summary.json"
+        error_path = run_root / "field_errors.json"
+        if assembly_path.exists():
+            assembly = _read_json(assembly_path)
+            return {
+                "status": "done",
+                "campaign_root": str(run_root),
+                "manifest_rows": 1,
+                "done_rows": 1,
+                "failed_rows": 0,
+                "active_rows": 0,
+                "waiting_rows": 0,
+                "measurement_rows": assembly.get("measurement_rows") if isinstance(assembly, dict) else None,
+                "target_count": assembly.get("target_count") if isinstance(assembly, dict) else None,
+            }
+        return {
+            "status": "active",
+            "campaign_root": str(run_root),
+            "manifest_rows": 1,
+            "done_rows": 0,
+            "failed_rows": 1 if error_path.exists() else 0,
+            "active_rows": 0 if error_path.exists() else 1,
+            "waiting_rows": 0,
+        }
+    campaign_root = cache_root / "campaigns" / campaign_prefix
+    manifest = _read_json(campaign_root / "campaign_manifest.json")
+    if isinstance(manifest, list) and manifest:
+        statuses = [str(row.get("status") or "") for row in manifest if isinstance(row, dict)]
+        failed = sum(1 for status in statuses if "failed" in status or "error" in status)
+        done = sum(1 for status in statuses if status in {"done", "completed"} or status.endswith("_done"))
+        active = sum(1 for status in statuses if "active" in status or "running" in status)
+        waiting = max(0, len(statuses) - done - failed - active)
+        if active:
+            status = "active"
+        elif failed:
+            status = "failed"
+        elif done and done >= len(statuses):
+            status = "done"
+        elif done:
+            status = "active"
+        else:
+            status = "pending"
+        return {
+            "status": status,
+            "campaign_root": str(campaign_root),
+            "manifest_rows": len(statuses),
+            "done_rows": done,
+            "failed_rows": failed,
+            "active_rows": active,
+            "waiting_rows": waiting,
+        }
+    if (campaign_root / "campaign_summary.json").exists():
+        return {
+            "status": "done",
+            "campaign_root": str(campaign_root),
+            "manifest_rows": 0,
+            "done_rows": 0,
+            "failed_rows": 0,
+            "active_rows": 0,
+            "waiting_rows": 0,
+        }
+    return {
+        "status": "pending",
+        "campaign_root": str(campaign_root),
+        "manifest_rows": 0,
+        "done_rows": 0,
+        "failed_rows": 0,
+        "active_rows": 0,
+        "waiting_rows": 0,
+    }
+
+
+def _active_direct_injection_stage(stage_names: list[str]) -> str:
+    order = [
+        "baseline",
+        "make_injection_plan",
+        "inject",
+        "injected",
+        "narrowband_truth",
+        "paired_delta_classifier",
+        "paired_delta_recovery",
+    ]
+    done = set(stage_names)
+    for stage in order:
+        if stage not in done:
+            return stage
+    return order[-1] if order else ""
+
+
+def _log_has_error(path: Path) -> bool:
+    text = _tail_text(path, 4096).lower()
+    return any(token in text for token in ("traceback", "failed;", "error:", "calledprocesserror"))
+
+
+def _merge_grid_status(current: str, new: str) -> str:
+    priority = {"failed": 5, "active": 4, "pending": 3, "done": 2, "idle": 1}
+    return new if priority.get(new, 0) > priority.get(current, 0) else current
+
+
+def _grid_summary(commands: list[dict[str, object]]) -> dict[str, int]:
+    counts = {"total": len(commands), "done": 0, "active": 0, "failed": 0, "pending": 0}
+    for row in commands:
+        status = str(row.get("status") or "pending")
+        counts[status if status in counts else "pending"] += 1
+    return counts
+
+
+def _grid_process_state(proc: object) -> dict[str, object]:
+    if not isinstance(proc, dict) or not proc.get("pid"):
+        return {"running": False}
+    pid = int(proc["pid"])
+    return {**proc, "running": _pid_running(pid)}
+
+
+def _pid_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _grid_survey_tiles(cache_root: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    nside = max(1, min(32, _query_int(params, "nside", 8)))
+    max_tiles = max(1, min(12288, _query_int(params, "max_tiles", 12288)))
+    order = (params.get("order") or ["nested"])[0]
+    prefix = (params.get("campaign_prefix") or params.get("prefix") or [""])[0].strip()
+    status_by_tile: dict[str, str] = {}
+    if prefix:
+        detail = _grid_dispatch_detail(cache_root, prefix)
+        status_by_tile = {str(row.get("tile_id")): str(row.get("status") or "pending") for row in detail.get("tiles", []) if isinstance(row, dict)}
+    tiles = _healpix_tile_paths(nside=nside, order=order, max_tiles=max_tiles)
+    for tile in tiles:
+        tile["status"] = status_by_tile.get(str(tile["tile_id"]), "idle")
+    return {"nside": nside, "order": order, "tile_count": 12 * nside * nside, "returned": len(tiles), "tiles": tiles}
+
+
+def _healpix_tile_paths(*, nside: int, order: str, max_tiles: int) -> list[dict[str, object]]:
+    try:
+        from astropy_healpix import HEALPix
+    except Exception as exc:
+        raise RuntimeError(f"astropy-healpix is required for grid rendering: {exc}") from exc
+    hp = HEALPix(nside=nside, order=order, frame=None)
+    count = min(12 * nside * nside, max_tiles)
+    rows: list[dict[str, object]] = []
+    for hpx in range(count):
+        lon, lat = hp.boundaries_lonlat([hpx], step=1)
+        lon_deg = np.asarray(lon.to_value(u.deg))[0]
+        lat_deg = np.asarray(lat.to_value(u.deg))[0]
+        pts = [_sky_to_map_xy(float(ra), float(dec)) for ra, dec in zip(lon_deg, lat_deg, strict=False)]
+        rows.append({"hpx": hpx, "tile_id": f"hpx_nside{nside:04d}_{order}_{hpx:08d}", "points": pts})
+    return rows
+
+
+def _sky_to_map_xy(ra_deg: float, dec_deg: float) -> list[float]:
+    ra = ((ra_deg + 180.0) % 360.0) - 180.0
+    return [(180.0 - ra) / 360.0, (90.0 - dec_deg) / 180.0]
+
+
+def _grid_survey_dispatch(cache_root: Path, payload: dict[str, object]) -> dict[str, object]:
+    prefix = _safe_token(str(payload.get("campaign_prefix") or "grid_v1_ui"))
+    execute = bool(payload.get("execute"))
+    cmd = _grid_dispatch_command(cache_root, payload, prefix, execute)
+    dispatch_root = _grid_survey_root(cache_root) / prefix
+    dispatch_root.mkdir(parents=True, exist_ok=True)
+    if execute:
+        log_path = dispatch_root / "dispatcher.log"
+        proc_file = dispatch_root / "dispatch_process.json"
+        existing = _grid_process_state(_read_json(proc_file))
+        if bool(existing.get("running")):
+            return {
+                "status": "already_running",
+                "campaign_prefix": prefix,
+                "process": existing,
+                "message": "Dispatcher is already running for this campaign prefix. Pause/resume/stop it before starting another.",
+            }
+        log = log_path.open("a", encoding="utf-8")
+        proc = subprocess.Popen(
+            cmd,
+            cwd=Path(__file__).resolve().parents[1],
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            text=True,
+        )
+        proc_file.write_text(
+            json.dumps({"pid": proc.pid, "started_utc": datetime.utcnow().isoformat() + "Z", "log": str(log_path), "cmd": cmd}, indent=2),
+            encoding="utf-8",
+        )
+        return {"status": "started", "campaign_prefix": prefix, "pid": proc.pid, "log": str(log_path), "cmd": cmd}
+    completed = subprocess.run(cmd, cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True, check=False)
+    return {
+        "status": "planned" if completed.returncode == 0 else "failed",
+        "campaign_prefix": prefix,
+        "returncode": completed.returncode,
+        "stdout": completed.stdout[-12000:],
+        "stderr": completed.stderr[-4000:],
+        "cmd": cmd,
+    }
+
+
+def _grid_dispatch_command(cache_root: Path, payload: dict[str, object], prefix: str, execute: bool) -> list[str]:
+    repo_root = Path(__file__).resolve().parents[1]
+    grid_python = repo_root / "grid_survey_v1" / ".venv" / "bin" / "python"
+    python = str(grid_python if grid_python.exists() else Path(sys.executable))
+    script = repo_root / "grid_survey_v1" / "tools" / "dispatch_healpix_mag_bins.py"
+    cmd = [
+        python,
+        str(script),
+        "--campaign-prefix",
+        prefix,
+        "--cache-root",
+        str(cache_root),
+        "--nside",
+        str(int(payload.get("nside") or 8)),
+        "--order",
+        str(payload.get("order") or "nested"),
+        "--batch-size",
+        str(int(payload.get("batch_size") or 3000)),
+        "--limit-fields",
+        str(int(payload.get("limit_fields") or 500)),
+        "--max-field-workers",
+        str(int(payload.get("max_field_workers") or 24)),
+        "--warp-devices",
+        str(payload.get("warp_devices") or "cuda:0,cuda:1,cuda:2"),
+        "--pipeline",
+        str(payload.get("pipeline") or "baseline"),
+    ]
+    hpx_values = _parse_hpx_payload(payload)
+    for hpx in hpx_values:
+        cmd.extend(["--hpx", str(hpx)])
+    if not hpx_values:
+        cmd.extend(["--start-hpx", str(int(payload.get("start_hpx") or 0)), "--count", str(int(payload.get("count") or 1))])
+    for mag in payload.get("mag_bins") or []:
+        if isinstance(mag, dict):
+            cmd.extend(
+                [
+                    "--mag-bin",
+                    f"{_safe_token(str(mag.get('name') or 'mag'))}:{float(mag.get('g_min'))}:{float(mag.get('g_max'))}:{int(mag.get('max_sources') or 3000)}",
+                ]
+            )
+    if "--mag-bin" not in cmd:
+        cmd.extend(["--mag-bin", "mid_g11_16:11:16:3000"])
+    cmd.append("--blind-scan" if bool(payload.get("blind_scan", True)) else "--no-blind-scan")
+    if bool(payload.get("overwrite_manifests", True)):
+        cmd.append("--overwrite-manifests")
+    if bool(payload.get("force")):
+        cmd.append("--force")
+    if payload.get("injection_strengths_sigma"):
+        cmd.extend(["--injection-strengths-sigma", str(payload.get("injection_strengths_sigma"))])
+    if payload.get("injection_targets_per_cell"):
+        cmd.extend(["--injection-targets-per-cell", str(int(payload.get("injection_targets_per_cell") or 3))])
+    if payload.get("injection_max_lines_per_target"):
+        cmd.extend(["--injection-max-lines-per-target", str(int(payload.get("injection_max_lines_per_target") or 1))])
+    if execute:
+        cmd.append("--execute")
+    return cmd
+
+
+def _parse_hpx_payload(payload: dict[str, object]) -> list[int]:
+    raw = payload.get("hpx")
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [int(v) for v in raw if str(v).strip()]
+    text = str(raw).strip()
+    if not text:
+        return []
+    out: list[int] = []
+    for part in text.replace("\n", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = [int(v.strip()) for v in part.split("-", 1)]
+            out.extend(range(min(a, b), max(a, b) + 1))
+        else:
+            out.append(int(part))
+    return list(dict.fromkeys(out))
+
+
+def _grid_survey_control(cache_root: Path, payload: dict[str, object]) -> dict[str, object]:
+    prefix = _safe_token(str(payload.get("campaign_prefix") or ""))
+    action = str(payload.get("action") or "").lower()
+    if not prefix:
+        raise ValueError("campaign_prefix is required")
+    dispatch_root = _grid_survey_root(cache_root) / prefix
+    dispatch_root.mkdir(parents=True, exist_ok=True)
+    pause_file = dispatch_root / "PAUSE"
+    stop_file = dispatch_root / "STOP"
+    if action == "pause":
+        pause_file.write_text(datetime.utcnow().isoformat() + "Z\n", encoding="utf-8")
+    elif action == "resume":
+        pause_file.unlink(missing_ok=True)
+        stop_file.unlink(missing_ok=True)
+    elif action == "stop":
+        stop_file.write_text(datetime.utcnow().isoformat() + "Z\n", encoding="utf-8")
+        proc = _read_json(dispatch_root / "dispatch_process.json")
+        pid = int(proc.get("pid") or 0) if isinstance(proc, dict) else 0
+        if pid and _pid_running(pid):
+            try:
+                os.killpg(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+    else:
+        raise ValueError("action must be pause, resume, or stop")
+    return {"status": "ok", "campaign_prefix": prefix, "action": action, "paused": pause_file.exists(), "stop_requested": stop_file.exists()}
+
+
+def _safe_token(value: str) -> str:
+    token = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in value.strip())
+    return token.strip("._-") or "grid_v1_ui"
 
 
 def _campaign_status(runs_root: Path, params: dict[str, list[str]]) -> dict[str, object]:
@@ -650,6 +1118,7 @@ def _recovery_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[str
     if not runs_root.exists():
         return _recovery_summary_payload([], [], [], [], campaign_filter)
 
+    grid_campaigns = _grid_dispatch_campaigns(runs_root)
     run_dirs = sorted([path for path in runs_root.iterdir() if path.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True)
     for run_dir in run_dirs:
         recovery_dir = run_dir / "recovery_score_mixed_lasers"
@@ -659,8 +1128,8 @@ def _recovery_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[str
         summary = _read_json(summary_path)
         if not isinstance(summary, dict):
             continue
-        campaign, target = _campaign_and_target_from_run(run_dir.name)
-        if campaign_filter and campaign != campaign_filter:
+        campaign, target = _campaign_and_target_from_run(run_dir.name, grid_campaigns)
+        if campaign_filter and campaign != campaign_filter and not run_dir.name.startswith(f"{campaign_filter}_"):
             continue
         if q and q not in run_dir.name.lower() and q not in str(target).lower() and q not in str(campaign).lower():
             continue
@@ -698,8 +1167,25 @@ def _recovery_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[str
     return _recovery_summary_payload(run_rows, strength_rows, line_rows, false_rows[:limit_false], campaign_filter, campaigns)
 
 
-def _campaign_and_target_from_run(run_name: str) -> tuple[str, str]:
+def _grid_dispatch_campaigns(runs_root: Path) -> list[str]:
+    dispatch_root = runs_root.parent / "grid_survey_v1" / "dispatches"
+    if not dispatch_root.exists():
+        return []
+    try:
+        names = [path.name for path in dispatch_root.iterdir() if path.is_dir()]
+    except Exception:
+        return []
+    return sorted(names, key=len, reverse=True)
+
+
+def _campaign_and_target_from_run(run_name: str, grid_campaigns: list[str] | None = None) -> tuple[str, str]:
     stem = run_name.removesuffix("_injected").removesuffix("_baseline")
+    for campaign in grid_campaigns or []:
+        if stem == campaign:
+            return campaign, stem
+        prefix = f"{campaign}_"
+        if stem.startswith(prefix):
+            return campaign, stem[len(prefix) :]
     if "_cvj_" in stem:
         campaign, rest = stem.split("_cvj_", 1)
         return campaign, "cvj_" + rest
@@ -2974,6 +3460,7 @@ def _dashboards_html() -> str:
 </header>
 <main>
   <a class="card" href="/campaign-status"><div class="title">Campaign Status</div><div class="desc">Campaign stage progress, aggregate recovery/candidate statistics, and timing cards.</div><div class="tag">/campaign-status</div></a>
+  <a class="card" href="/grid-survey"><div class="title">Grid Survey</div><div class="desc">HEALPix sky-map dispatcher for baseline or injection/recovery survey batches.</div><div class="tag">/grid-survey</div></a>
   <a class="card" href="/simple-status"><div class="title">Simple Run Status</div><div class="desc">Field-worker progress, throughput, recent events, and per-field worker timing.</div><div class="tag">/simple-status</div></a>
   <a class="card" href="/spectra"><div class="title">Spectra Browser</div><div class="desc">Per-target aperture and PSF spectra, flags, injections, and point metadata.</div><div class="tag">/spectra</div></a>
   <a class="card" href="/spectrum-quality"><div class="title">Spectrum Quality</div><div class="desc">Ranked good/review/bad spectra using flags, smoothness, aperture/PSF agreement, and usable coverage.</div><div class="tag">/spectrum-quality</div></a>
@@ -2986,6 +3473,319 @@ def _dashboards_html() -> str:
   <a class="card" href="/recovery-summary"><div class="title">Recovery Summary</div><div class="desc">Campaign injection recovery rates by run, strength, line family, and false-positive review links.</div><div class="tag">/recovery-summary</div></a>
   <a class="card" href="/"><div class="title">Field Viewer</div><div class="desc">FITS field previews, selected targets, field-level metadata, and target overlays.</div><div class="tag">/</div></a>
 </main>
+</body>
+</html>"""
+
+
+def _grid_survey_html() -> str:
+    return """<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>LuxQuarry Grid Survey</title>
+  <style>
+    :root { --bg:#030711; --panel:#07111f; --panel2:#0b1729; --line:#164e63; --text:#e6fdff; --muted:#8cc8d8; --cyan:#22d3ee; --amber:#f59e0b; --green:#22c55e; --red:#ef4444; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:13px Inter, ui-sans-serif, system-ui, sans-serif; letter-spacing:0; }
+    header { height:54px; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:0 16px; border-bottom:1px solid var(--line); background:rgba(3,7,17,.96); }
+    header strong { color:var(--cyan); font-size:17px; }
+    a { color:var(--cyan); text-decoration:none; }
+    main { display:grid; grid-template-columns:360px minmax(0,1fr); min-height:calc(100vh - 54px); }
+    aside { border-right:1px solid var(--line); background:rgba(7,17,31,.96); padding:14px; overflow:auto; }
+    section { border:1px solid var(--line); border-radius:6px; background:rgba(11,23,41,.88); padding:12px; margin-bottom:12px; }
+    h2 { margin:0 0 10px; color:var(--cyan); font-size:14px; }
+    label { display:block; color:#b8d7e8; margin:8px 0 4px; }
+    input, select, textarea, button { width:100%; color:var(--text); background:#06101d; border:1px solid #1f5f76; border-radius:5px; padding:7px 8px; font:13px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+    button { cursor:pointer; color:#021016; background:var(--cyan); border-color:var(--cyan); font:700 13px Inter,ui-sans-serif,system-ui,sans-serif; }
+    button.secondary { color:var(--text); background:#0a1b2c; border-color:#256b83; }
+    button.warn { background:var(--amber); border-color:var(--amber); }
+    button.danger { background:var(--red); border-color:var(--red); color:white; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+    .row3 { display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; }
+    .small { color:var(--muted); font-size:12px; line-height:1.35; }
+    .cards { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; margin-bottom:10px; }
+    .card { border:1px solid #17455a; border-radius:6px; padding:10px; background:rgba(3,12,24,.78); }
+    .card .k { color:var(--muted); font-size:11px; text-transform:uppercase; }
+    .card .v { color:var(--text); font:700 18px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; margin-top:4px; }
+    .mapWrap { position:relative; min-height:calc(100vh - 54px); overflow:hidden; background:#02040a; }
+    #sky { position:absolute; inset:0; width:100%; height:100%; object-fit:fill; opacity:.72; filter:saturate(1.12) contrast(1.12) brightness(.72); }
+    #grid { position:absolute; inset:0; width:100%; height:100%; cursor:grab; touch-action:none; }
+    #grid.dragging { cursor:grabbing; }
+    .hud { position:absolute; left:14px; right:14px; bottom:14px; display:grid; grid-template-columns:minmax(0,1fr) 360px; gap:10px; pointer-events:none; max-height:50vh; }
+    .hud.collapsed { grid-template-columns:360px; right:auto; }
+    .hud.collapsed #commandHud { display:none; }
+    .hud > div { pointer-events:auto; border:1px solid rgba(34,211,238,.35); border-radius:6px; background:rgba(3,7,17,.78); padding:10px; backdrop-filter:blur(8px); min-height:0; overflow:hidden; }
+    table { width:100%; border-collapse:collapse; font-size:12px; }
+    th,td { text-align:left; border-bottom:1px solid rgba(34,211,238,.18); padding:5px 6px; vertical-align:top; }
+    th { color:var(--cyan); position:sticky; top:0; background:#06101d; }
+    .scroll { max-height:calc(50vh - 132px); overflow:auto; }
+    .pill { display:inline-block; padding:2px 7px; border-radius:999px; border:1px solid #255f76; color:var(--muted); }
+    .idle { color:#94a3b8; } .pending { color:#cbd5e1; } .active { color:var(--amber); } .done { color:var(--green); } .failed { color:var(--red); }
+    .mono { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; white-space:pre-wrap; }
+    .hudTop { display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:8px; }
+    .hudTop button { width:auto; min-width:92px; padding:5px 8px; }
+  </style>
+</head>
+<body>
+<header>
+  <strong>LuxQuarry Grid Survey</strong>
+  <nav><a href="/dashboards">Dashboards</a> · <a href="/campaign-status">Campaigns</a> · <a href="/spectra">Spectra</a></nav>
+</header>
+<main>
+  <aside>
+    <section>
+      <h2>Dispatch</h2>
+      <label>Campaign prefix</label>
+      <input id="campaignPrefix" value="grid_v1_ui_smoke">
+      <div class="row">
+        <div><label>Pipeline</label><select id="pipeline"><option value="baseline">baseline</option><option value="injection">injection/recovery</option></select></div>
+        <div><label>HEALPix nside</label><input id="nside" type="number" value="8" min="1" max="32"></div>
+      </div>
+      <label>Specific HPX cells</label>
+      <input id="hpx" placeholder="136 or 136,137 or 136-140">
+      <div class="row">
+        <div><label>Start HPX</label><input id="startHpx" type="number" value="136" min="0"></div>
+        <div><label>Count</label><input id="count" type="number" value="1" min="1"></div>
+      </div>
+      <div class="row">
+        <div><label>Spectral depth</label><input id="limitFields" type="number" value="500" min="1"></div>
+        <div><label>Batch size</label><input id="batchSize" type="number" value="3000" min="1"></div>
+      </div>
+      <div class="row">
+        <div><label>Workers</label><input id="workers" type="number" value="24" min="1"></div>
+        <div><label>GPU devices</label><input id="warpDevices" value="cuda:0,cuda:1,cuda:2"></div>
+      </div>
+      <label>Magnitude bins</label>
+      <textarea id="magBins" rows="4">mid_g11_16:11:16:3000
+bright_g8_11:8:11:3000
+verybright_g5_8:5:8:3000</textarea>
+      <div class="row">
+        <div><label>Injection strengths</label><input id="injStrengths" value="5,8,12"></div>
+        <div><label>Inj targets/cell</label><input id="injTargetsPerCell" type="number" value="3" min="1"></div>
+      </div>
+      <div class="row">
+        <div><label>Max lines/target</label><input id="injMaxLinesPerTarget" type="number" value="1" min="1"></div>
+        <div></div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button onclick="dispatch(false)">Plan</button>
+        <button class="warn" onclick="dispatch(true)">Start</button>
+      </div>
+      <div class="row3" style="margin-top:8px">
+        <button class="secondary" onclick="control('pause')">Pause</button>
+        <button class="secondary" onclick="control('resume')">Resume</button>
+        <button class="danger" onclick="control('stop')">Stop</button>
+      </div>
+      <div class="small" style="margin-top:8px">Pause is batch-safe: current campaign finishes, then the dispatcher waits before launching the next batch.</div>
+    </section>
+    <section>
+      <h2>Existing Dispatches</h2>
+      <select id="dispatchSelect" onchange="selectDispatch()"></select>
+      <div id="dispatchInfo" class="small" style="margin-top:8px"></div>
+    </section>
+    <section>
+      <h2>Legend</h2>
+      <div><span class="idle">grey</span> idle</div>
+      <div><span class="pending">white</span> planned/pending</div>
+      <div><span class="active">amber</span> active/in work</div>
+      <div><span class="done">green</span> done</div>
+      <div><span class="failed">red</span> failed</div>
+      <div class="small" style="margin-top:8px">Background: NASA SVS Deep Star Maps 2020, plate carrée celestial coordinates.</div>
+    </section>
+  </aside>
+  <div class="mapWrap">
+    <img id="sky" src="https://svs.gsfc.nasa.gov/vis/a000000/a004800/a004851/starmap_2020_4k_print.jpg" alt="">
+    <canvas id="grid"></canvas>
+    <div class="hud" id="statusHud">
+      <div id="commandHud">
+        <div class="hudTop"><span class="small">Run status</span><button class="secondary" onclick="toggleHud()">Minimize</button></div>
+        <div class="cards" id="cards"></div>
+        <div class="scroll"><table id="commands"></table></div>
+      </div>
+      <div>
+        <div class="hudTop"><span class="small">Cell</span><button class="secondary" onclick="toggleHud()">Status</button></div>
+        <div id="hoverTile" class="mono small">hover a cell</div>
+        <button class="secondary" style="margin-top:8px" onclick="resetView()">Reset View</button>
+        <div id="message" class="mono small" style="margin-top:8px"></div>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+let state = {prefix:'', tiles:[], status:null, hover:null, selected:null, view:{scale:1, tx:0, ty:0}, dragging:false, dragged:false, dragLast:null};
+const $ = id => document.getElementById(id);
+function esc(v){return String(v ?? '').replace(/[&<>"']/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));}
+async function getJSON(url){const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); return await r.json();}
+async function postJSON(url,payload){const r=await fetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); if(!r.ok) throw new Error(await r.text()); return await r.json();}
+function payload(execute){
+  return {
+    campaign_prefix:$('campaignPrefix').value.trim(),
+    execute,
+    pipeline:$('pipeline').value,
+    nside:Number($('nside').value || 8),
+    hpx:$('hpx').value.trim(),
+    start_hpx:Number($('startHpx').value || 0),
+    count:Number($('count').value || 1),
+    limit_fields:Number($('limitFields').value || 500),
+    batch_size:Number($('batchSize').value || 3000),
+    max_field_workers:Number($('workers').value || 24),
+    warp_devices:$('warpDevices').value.trim(),
+    injection_strengths_sigma:$('injStrengths').value.trim(),
+    injection_targets_per_cell:Number($('injTargetsPerCell').value || 3),
+    injection_max_lines_per_target:Number($('injMaxLinesPerTarget').value || 1),
+    mag_bins:$('magBins').value.split(/\\n+/).map(line=>line.trim()).filter(Boolean).map(line=>{const p=line.split(':'); return {name:p[0], g_min:Number(p[1]), g_max:Number(p[2]), max_sources:Number(p[3] || 3000)};})
+  };
+}
+async function dispatch(execute){
+  $('message').textContent = execute ? 'starting dispatcher...' : 'building dispatch plan...';
+  const data = await postJSON('/api/grid-survey/dispatch', payload(execute));
+  $('message').textContent = JSON.stringify(data, null, 2);
+  state.prefix = data.campaign_prefix || $('campaignPrefix').value.trim();
+  await refresh();
+}
+async function control(action){
+  const campaign_prefix = $('campaignPrefix').value.trim() || state.prefix;
+  const data = await postJSON('/api/grid-survey/control', {campaign_prefix, action});
+  $('message').textContent = JSON.stringify(data, null, 2);
+  await refresh();
+}
+function selectDispatch(){
+  state.prefix = $('dispatchSelect').value;
+  $('campaignPrefix').value = state.prefix;
+  refresh();
+}
+async function refresh(){
+  const prefix = state.prefix || $('campaignPrefix').value.trim();
+  const status = await getJSON('/api/grid-survey/status?campaign_prefix=' + encodeURIComponent(prefix) + '&ts=' + Date.now());
+  state.status = status;
+  if (!state.prefix && status.selected) state.prefix = status.selected;
+  renderStatus(status);
+  await loadTiles();
+}
+async function loadTiles(){
+  const nside = Number($('nside').value || 8);
+  const prefix = $('campaignPrefix').value.trim() || state.prefix || '';
+  const data = await getJSON('/api/grid-survey/tiles?nside=' + encodeURIComponent(nside) + '&campaign_prefix=' + encodeURIComponent(prefix) + '&max_tiles=12288&ts=' + Date.now());
+  state.tiles = data.tiles || [];
+  draw();
+}
+function renderStatus(data){
+  const ds = data.dispatches || [];
+  $('dispatchSelect').innerHTML = ds.map(d=>`<option value="${esc(d.campaign_prefix)}">${esc(d.campaign_prefix)} ${d.process?.running ? '[running]' : ''}</option>`).join('');
+  if (data.selected) $('dispatchSelect').value = data.selected;
+  const detail = data.detail || {};
+  const s = detail.summary || {};
+  const proc = detail.process || {};
+  $('dispatchInfo').innerHTML = `root: <code>${esc(data.root)}</code><br>process: ${proc.running ? 'running pid '+esc(proc.pid) : 'not running'}<br>paused: ${!!detail.paused} stop: ${!!detail.stop_requested}`;
+  $('cards').innerHTML = [
+    ['Commands', s.total || 0], ['Done', s.done || 0], ['Active', s.active || 0], ['Failed', s.failed || 0]
+  ].map(([k,v])=>`<div class="card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+  const rows = (detail.commands || []).slice(0,80);
+  $('commands').innerHTML = '<thead><tr><th>status</th><th>tile</th><th>batch</th><th>targets</th><th>campaign</th></tr></thead><tbody>' + rows.map(r=>`<tr><td class="${esc(r.status)}">${esc(r.status)}</td><td>${esc(r.tile_id)}</td><td>${esc(r.batch_index)}</td><td>${esc(r.target_count)}</td><td><a href="/campaign-status?campaign=${encodeURIComponent(r.campaign_prefix)}">${esc(r.campaign_prefix)}</a></td></tr>`).join('') + '</tbody>';
+}
+function resize(){
+  const c=$('grid'); const r=c.getBoundingClientRect(); const dpr=window.devicePixelRatio||1;
+  c.width=Math.max(1,Math.floor(r.width*dpr)); c.height=Math.max(1,Math.floor(r.height*dpr)); draw();
+}
+function color(status){return {idle:'rgba(148,163,184,.52)',pending:'rgba(226,232,240,.82)',active:'rgba(245,158,11,.98)',done:'rgba(34,197,94,.98)',failed:'rgba(239,68,68,.98)'}[status] || 'rgba(148,163,184,.52)';}
+function applySkyTransform(){
+  const v=state.view;
+  $('sky').style.transformOrigin='0 0';
+  $('sky').style.transform=`translate(${v.tx}px, ${v.ty}px) scale(${v.scale})`;
+}
+function mapToScreen(p,w,h){ const v=state.view; return [p[0]*w*v.scale+v.tx, p[1]*h*v.scale+v.ty]; }
+function screenToMap(px,py,w,h){ const v=state.view; return [(px-v.tx)/(w*v.scale), (py-v.ty)/(h*v.scale)]; }
+function draw(){
+  const c=$('grid'), ctx=c.getContext('2d'), dpr=window.devicePixelRatio||1, w=c.width/dpr, h=c.height/dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0); ctx.clearRect(0,0,w,h);
+  applySkyTransform();
+  ctx.lineWidth=1.05; ctx.shadowBlur=0;
+  for (const t of state.tiles) {
+    ctx.strokeStyle=color(t.status);
+    drawTileBorder(ctx, t.points || [], w, h);
+  }
+  if (state.hover) {
+    ctx.lineWidth=2.2; ctx.strokeStyle='rgba(34,211,238,1)';
+    drawTileBorder(ctx, state.hover.points || [], w, h);
+  }
+  if (state.selected) {
+    ctx.lineWidth=3.0; ctx.strokeStyle='rgba(125,255,245,1)';
+    drawTileBorder(ctx, state.selected.points || [], w, h);
+  }
+}
+function drawTileBorder(ctx, pts, w, h){
+  if (!pts.length) return;
+  ctx.beginPath();
+  for (let i=0; i<pts.length; i++) {
+    const a = pts[i], b = pts[(i + 1) % pts.length];
+    if (Math.abs(a[0] - b[0]) > 0.45) continue;
+    const aa = mapToScreen(a,w,h), bb = mapToScreen(b,w,h);
+    ctx.moveTo(aa[0], aa[1]);
+    ctx.lineTo(bb[0], bb[1]);
+  }
+  ctx.stroke();
+}
+function crossesSeam(pts){
+  if (!pts.length) return false;
+  for (let i=0; i<pts.length; i++) {
+    if (Math.abs(pts[i][0] - pts[(i + 1) % pts.length][0]) > 0.45) return true;
+  }
+  return false;
+}
+function pointInPoly(x,y,pts){let inside=false; for(let i=0,j=pts.length-1;i<pts.length;j=i++){const xi=pts[i][0],yi=pts[i][1],xj=pts[j][0],yj=pts[j][1]; const hit=((yi>y)!=(yj>y)) && (x < (xj-xi)*(y-yi)/(yj-yi+1e-12)+xi); if(hit) inside=!inside;} return inside;}
+$('grid').addEventListener('mousemove', ev=>{
+  const r=$('grid').getBoundingClientRect();
+  if (state.dragging && state.dragLast) {
+    const dx = ev.clientX - state.dragLast.x;
+    const dy = ev.clientY - state.dragLast.y;
+    state.view.tx += dx;
+    state.view.ty += dy;
+    state.dragged = state.dragged || Math.abs(dx) + Math.abs(dy) > 2;
+    state.dragLast = {x:ev.clientX, y:ev.clientY};
+    draw();
+    return;
+  }
+  const p = screenToMap(ev.clientX-r.left, ev.clientY-r.top, r.width, r.height);
+  const x=p[0], y=p[1];
+  state.hover = null;
+  for (let i=state.tiles.length-1;i>=0;i--) { const t=state.tiles[i]; const pts=t.points||[]; if(!crossesSeam(pts) && pointInPoly(x,y,pts)){state.hover=t; break;} }
+  renderTileReadout();
+  draw();
+});
+$('grid').addEventListener('mousedown', ev=>{ state.dragging=true; state.dragged=false; state.dragLast={x:ev.clientX,y:ev.clientY}; $('grid').classList.add('dragging'); });
+window.addEventListener('mouseup', ()=>{ state.dragging=false; state.dragLast=null; $('grid').classList.remove('dragging'); });
+$('grid').addEventListener('wheel', ev=>{
+  ev.preventDefault();
+  const r=$('grid').getBoundingClientRect();
+  const mx=ev.clientX-r.left, my=ev.clientY-r.top;
+  const before=screenToMap(mx,my,r.width,r.height);
+  const factor=ev.deltaY < 0 ? 1.18 : 1/1.18;
+  state.view.scale=Math.max(1, Math.min(24, state.view.scale*factor));
+  state.view.tx=mx-before[0]*r.width*state.view.scale;
+  state.view.ty=my-before[1]*r.height*state.view.scale;
+  draw();
+}, {passive:false});
+$('grid').addEventListener('click', ()=>{
+  if (state.dragged) return;
+  if (!state.hover) return;
+  state.selected = state.hover;
+  $('hpx').value = String(state.hover.hpx);
+  $('startHpx').value = String(state.hover.hpx);
+  renderTileReadout();
+  draw();
+});
+function resetView(){ state.view={scale:1, tx:0, ty:0}; draw(); }
+function toggleHud(){ $('statusHud').classList.toggle('collapsed'); }
+function renderTileReadout(){
+  const lines = [];
+  if (state.selected) lines.push(`selected ${state.selected.tile_id}`, `hpx=${state.selected.hpx}`, `status=${state.selected.status}`);
+  if (state.hover) lines.push(`${state.selected ? '\\nhover ' : 'hover '}${state.hover.tile_id}`, `hpx=${state.hover.hpx}`, `status=${state.hover.status}`);
+  $('hoverTile').textContent = lines.length ? lines.join('\\n') : 'hover a cell';
+}
+window.addEventListener('resize', resize);
+$('nside').addEventListener('change', loadTiles);
+resize(); refresh(); setInterval(refresh, 5000);
+</script>
 </body>
 </html>"""
 
@@ -5981,6 +6781,9 @@ def _spectra_html() -> str:
     <div id="targetPageInfo" class="small"></div>
     <label for="targetList">Targets</label>
     <select id="targetList" size="24" onchange="loadSelected()"></select>
+    <div class="row" style="margin-top:8px">
+      <button onclick="loadSelected()">Load Spectrum</button>
+    </div>
     <div id="runSummary" class="mono"></div>
   </section>
   <div>

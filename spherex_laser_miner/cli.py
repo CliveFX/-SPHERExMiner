@@ -592,6 +592,7 @@ def _run_depth_pipeline(
             gaia_g_min=gaia_g_min,
             gaia_g_max=gaia_g_max,
         )
+    fixed_targets = _dedupe_target_rows(fixed_targets)
     jobs = run_multi_trial_field_workers(
         target=manual_target,
         cfg=cfg,
@@ -715,6 +716,22 @@ def _load_fixed_targets(path: Path) -> list[dict[str, object]]:
     if df.empty:
         raise typer.BadParameter("Fixed target file is empty")
     return df.where(pd.notna(df), None).to_dict(orient="records")
+
+
+def _dedupe_target_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Preserve launch order while preventing duplicate measurements for one target ID."""
+    out: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for row in rows:
+        target_id = str(row.get("target_id") or "").strip()
+        if not target_id:
+            out.append(row)
+            continue
+        if target_id in seen:
+            continue
+        seen.add(target_id)
+        out.append(row)
+    return out
 
 
 def _score_spectrum_quality_stage(run_dir: Path, status_mode: str) -> dict[str, object]:

@@ -12,6 +12,12 @@ selects SPHEREx fields around that anchor, selects Gaia sources in those fields,
 measures aperture and PSF photometry, assembles spectra, and optionally runs
 FITS-level fake signal injection plus paired recovery scoring.
 
+There is now also a HEALPix grid-survey front end. It changes the target
+selection layer while still using the same run products and viewers. In direct
+grid mode, a HEALPix cell produces fixed Gaia target batches that are passed to
+`spherex-mine run-depth-test` with `--fixed-targets-path`; it is not the old
+recursive one-run-per-Gaia-source behavior.
+
 ## Paths
 
 Run commands from the repo root:
@@ -38,6 +44,8 @@ Important output directories:
 /mnt/niroseti/spherex_cache/runs/<run_name>/
 /mnt/niroseti/spherex_cache/injection_campaigns/<campaign_name>/
 /mnt/niroseti/spherex_cache/campaigns/<campaign_name>/
+/mnt/niroseti/spherex_cache/grid_survey_v1/dispatches/<campaign_prefix>/
+/mnt/niroseti/spherex_cache/grid_survey_v1/direct_injection/<campaign_prefix>/
 ```
 
 The main spectra products for a completed run are:
@@ -238,6 +246,55 @@ Detach from tmux without stopping the job:
 ```text
 Ctrl-b, then d
 ```
+
+## Grid Survey UI
+
+Start the viewer and open:
+
+```text
+http://192.168.1.224:8765/grid-survey
+```
+
+Use `Plan` to build and inspect the dispatch plan. Use `Start` to regenerate
+from the current UI controls and execute. The grid status page is authoritative
+for direct HEALPix runs; older campaign pages only become useful once normal
+run/recovery products exist.
+
+For `pipeline=injection/recovery`, each grid batch writes:
+
+```text
+runs/<prefix>_baseline/
+runs/<prefix>_injected/
+injection_campaigns/<prefix>_mixed_lasers*/
+grid_survey_v1/direct_injection/<prefix>/direct_injection_summary.json
+```
+
+The recovery summary page can read the paired-delta products once the batch is
+complete:
+
+```text
+http://192.168.1.224:8765/recovery-summary?campaign=<grid_campaign_prefix>
+```
+
+## Catalog Cache Notes
+
+Gaia remains the primary astrometric source. 2MASS support is being added as a
+near-infrared companion catalog. The NAS-side downloader container is:
+
+```text
+/mnt/niroseti/spherex_cache/2mass/downloader_container
+```
+
+Its status page is:
+
+```text
+http://<nas-ip>:18767/
+```
+
+The next code step is to add a catalog provider boundary, likely exposed as a
+runner flag such as `--catalog gaia`, `--catalog 2mass`, or
+`--catalog gaia,2mass`, instead of hard-wiring Gaia-specific selection into each
+runner.
 
 Check process state:
 
