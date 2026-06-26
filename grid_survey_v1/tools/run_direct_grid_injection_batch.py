@@ -102,6 +102,7 @@ def main() -> None:
             _narrowband_detector_cmd(args=args, run_dir=baseline_run, output_dir=baseline_raw_dir),
             logs / "baseline_narrowband_raw.log",
         )
+    _update_viewer_index(args, baseline_run, logs / "baseline_viewer_index.log")
 
     _run_stage(
         "make_injection_plan",
@@ -171,6 +172,7 @@ def main() -> None:
             _narrowband_detector_cmd(args=args, run_dir=injected_run, output_dir=injected_raw_dir),
             logs / "injected_narrowband_raw.log",
         )
+    _update_viewer_index(args, injected_run, logs / "injected_viewer_index.log")
 
     truth_ids_path = injected_run / "blind_raw_recovery_truth_target_ids.txt"
     _write_truth_ids(manifest_path, truth_ids_path)
@@ -244,6 +246,7 @@ def main() -> None:
         ],
         logs / "paired_delta_recovery.log",
     )
+    _update_viewer_index(args, injected_run, logs / "injected_viewer_index_final.log")
 
     recovery_path = detector_dir / "narrowband_recovery.parquet"
     detector_summary = detector_dir / "narrowband_detector_summary.json"
@@ -313,6 +316,22 @@ def _narrowband_detector_cmd(args: argparse.Namespace, run_dir: Path, output_dir
         "--device",
         args.device,
     ]
+
+
+def _update_viewer_index(args: argparse.Namespace, run_dir: Path, log_path: Path) -> None:
+    _run_stage(
+        "viewer_index",
+        [
+            sys.executable,
+            str(REPO_ROOT / "tools" / "update_viewer_indexes.py"),
+            "--cache-root",
+            str(args.cache_root),
+            "--run-dir",
+            str(run_dir),
+            "--quiet",
+        ],
+        log_path,
+    )
 
 
 def _run_stage(

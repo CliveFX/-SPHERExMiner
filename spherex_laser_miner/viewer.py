@@ -31,7 +31,9 @@ from spherex_laser_miner.coarse_status import read_coarse_summary, tail_events
 
 _COMPLETED_TARGET_CACHE: dict[tuple[str, str, float, float], list[dict[str, object]]] = {}
 _SCIENCE_EMBEDDING_CACHE: dict[str, tuple[float, pd.DataFrame, np.ndarray, list[str]]] = {}
+_VIEWER_TTL_CACHE: dict[str, tuple[float, object]] = {}
 LIVE_TARGET_OVERLAY_LIMIT_PER_FRAME = 1200
+VIEWER_INDEX_VERSION = 1
 
 
 def serve_viewer(run_dir: Path, host: str, port: int) -> None:
@@ -226,32 +228,63 @@ def _requested_run_dir(params: dict[str, list[str]], runs_root: Path, default_ru
     return candidate
 
 
+def _ttl_cache(key: str, ttl_sec: float, builder):
+    now = time.monotonic()
+    cached = _VIEWER_TTL_CACHE.get(key)
+    if cached and now - cached[0] <= ttl_sec:
+        return cached[1]
+    value = builder()
+    _VIEWER_TTL_CACHE[key] = (now, value)
+    return value
+
+
+def _viewer_cache_key(prefix: str, paths: list[str]) -> str:
+    parts = [prefix]
+    for item in paths:
+        path = Path(item)
+        try:
+            stat = path.stat()
+            parts.append(f"{path}:{stat.st_mtime_ns}:{stat.st_size}")
+        except OSError:
+            parts.append(f"{path}:missing")
+    return "|".join(parts)
+
+
 def _runs(runs_root: Path, active_run_dir: Path) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    if not runs_root.exists():
+    def build() -> list[dict[str, object]]:
+        rows: list[dict[str, object]] = []
+        if not runs_root.exists():
+            return rows
+        for path in sorted([p for p in runs_root.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True):
+            assembly_path = path / "spectra" / "assembly_summary.json"
+            quality_path = path / "spectra" / "spectrum_quality.parquet"
+            summary = _read_json(assembly_path)
+            status = _read_json(path / "run_summary.json")
+            trial_path = path / "simp_field_trials.json"
+            rows.append(
+                {
+                    "name": path.name,
+                    "path": str(path),
+                    "mtime": path.stat().st_mtime,
+                    "mtime_iso": _format_time(path.stat().st_mtime),
+                    "has_spectra": assembly_path.exists(),
+                    "has_spectrum_quality": quality_path.exists(),
+                    "has_trials": trial_path.exists(),
+                    "target": status.get("target") if isinstance(status, dict) else None,
+                    "measurement_rows": summary.get("measurement_rows") if isinstance(summary, dict) else None,
+                    "target_count": summary.get("target_count") if isinstance(summary, dict) else None,
+                    "shard_count": summary.get("shard_count") if isinstance(summary, dict) else None,
+                }
+            )
         return rows
-    for path in sorted([p for p in runs_root.iterdir() if p.is_dir()], key=lambda p: p.stat().st_mtime, reverse=True):
-        assembly_path = path / "spectra" / "assembly_summary.json"
-        quality_path = path / "spectra" / "spectrum_quality.parquet"
-        summary = _read_json(assembly_path)
-        status = _read_json(path / "run_summary.json")
-        trial_path = path / "simp_field_trials.json"
-        rows.append(
-            {
-                "name": path.name,
-                "path": str(path),
-                "active": path.resolve() == active_run_dir.resolve(),
-                "mtime": path.stat().st_mtime,
-                "mtime_iso": _format_time(path.stat().st_mtime),
-                "has_spectra": assembly_path.exists(),
-                "has_spectrum_quality": quality_path.exists(),
-                "has_trials": trial_path.exists(),
-                "target": status.get("target") if isinstance(status, dict) else None,
-                "measurement_rows": summary.get("measurement_rows") if isinstance(summary, dict) else None,
-                "target_count": summary.get("target_count") if isinstance(summary, dict) else None,
-                "shard_count": summary.get("shard_count") if isinstance(summary, dict) else None,
-            }
-        )
+
+    rows = [dict(row) for row in _ttl_cache(f"runs:{runs_root}", 5.0, build)]
+    active = active_run_dir.resolve()
+    for row in rows:
+        try:
+            row["active"] = Path(str(row.get("path"))).resolve() == active
+        except Exception:
+            row["active"] = False
     return rows
 
 
@@ -1119,6 +1152,9 @@ def _summary(run_dir: Path) -> dict[str, object]:
 
 
 def _recovery_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    indexed = _recovery_summary_from_index(runs_root, params)
+    if indexed is not None:
+        return indexed
     campaign_filter = (params.get("campaign") or [""])[0].strip()
     q = (params.get("q") or [""])[0].strip().lower()
     limit_false = min(500, max(25, _query_int(params, "false_limit", 100)))
@@ -1177,6 +1213,73 @@ def _recovery_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[str
 
     campaigns = sorted({str(row["campaign"]) for row in run_rows if row.get("campaign")})
     return _recovery_summary_payload(run_rows, strength_rows, line_rows, false_rows[:limit_false], campaign_filter, campaigns)
+
+
+def _recovery_summary_from_index(runs_root: Path, params: dict[str, list[str]]) -> dict[str, object] | None:
+    shards_dir = runs_root.parent / "viewer_indexes" / "recovery_shards"
+    if not shards_dir.exists():
+        return None
+    shard_paths = sorted(shards_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not shard_paths:
+        return None
+    campaign_filter = (params.get("campaign") or [""])[0].strip()
+    q = (params.get("q") or [""])[0].strip().lower()
+    limit_false = min(500, max(25, _query_int(params, "false_limit", 100)))
+
+    def load() -> tuple[list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], list[dict[str, object]], list[str]]:
+        run_rows: list[dict[str, object]] = []
+        strength_rows: list[dict[str, object]] = []
+        line_rows: list[dict[str, object]] = []
+        false_rows: list[dict[str, object]] = []
+        campaigns: set[str] = set()
+        for path in shard_paths:
+            data = _read_json(path)
+            if not isinstance(data, dict):
+                continue
+            if int(data.get("index_version") or 0) > VIEWER_INDEX_VERSION:
+                continue
+            run = data.get("run")
+            if isinstance(run, dict):
+                run_rows.append(run)
+                if run.get("campaign"):
+                    campaigns.add(str(run.get("campaign")))
+            for key, dest in (("by_strength", strength_rows), ("by_line", line_rows), ("false_positives", false_rows)):
+                rows = data.get(key)
+                if isinstance(rows, list):
+                    dest.extend([row for row in rows if isinstance(row, dict)])
+        return run_rows, strength_rows, line_rows, false_rows, sorted(campaigns)
+
+    cache_key = _viewer_cache_key("recovery_shards", [str(p) for p in shard_paths])
+    run_rows, strength_rows, line_rows, false_rows, campaigns = _ttl_cache(cache_key, 5.0, load)
+    filtered_runs = []
+    for row in run_rows:
+        campaign = str(row.get("campaign") or "")
+        target = str(row.get("target") or "")
+        run_name = str(row.get("run_name") or "")
+        if campaign_filter and campaign != campaign_filter and not run_name.startswith(f"{campaign_filter}_"):
+            continue
+        if q and q not in run_name.lower() and q not in target.lower() and q not in campaign.lower():
+            continue
+        filtered_runs.append(row)
+
+    def row_ok(row: dict[str, object]) -> bool:
+        campaign = str(row.get("campaign") or "")
+        target = str(row.get("target") or "")
+        run_name = str(row.get("run_name") or "")
+        if campaign_filter and campaign != campaign_filter and not run_name.startswith(f"{campaign_filter}_"):
+            return False
+        if q and q not in run_name.lower() and q not in target.lower() and q not in campaign.lower() and q not in str(row.get("target_id") or "").lower():
+            return False
+        return True
+
+    return _recovery_summary_payload(
+        filtered_runs,
+        [row for row in strength_rows if row_ok(row)],
+        [row for row in line_rows if row_ok(row)],
+        [row for row in false_rows if row_ok(row)][:limit_false],
+        campaign_filter,
+        campaigns,
+    )
 
 
 def _grid_dispatch_campaigns(runs_root: Path) -> list[str]:
@@ -1282,6 +1385,9 @@ def _recovery_summary_payload(
 
 
 def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[str, object]:
+    indexed = _candidate_summary_from_index(runs_root, params)
+    if indexed is not None:
+        return indexed
     campaign_filter = (params.get("campaign") or [""])[0].strip()
     q = (params.get("q") or [""])[0].strip().lower()
     source = (params.get("source") or ["baseline"])[0].strip().lower()
@@ -1379,6 +1485,129 @@ def _candidate_summary(runs_root: Path, params: dict[str, list[str]]) -> dict[st
     page = rows[offset : offset + limit]
     campaign_options = sorted({*campaign_dirs, *grid_campaigns, *campaigns})
     return _candidate_summary_payload(page, campaign_options, source, campaign_filter, scanned_runs, candidate_runs, limit, offset, total, quality)
+
+
+def _candidate_summary_from_index(runs_root: Path, params: dict[str, list[str]]) -> dict[str, object] | None:
+    shards_dir = runs_root.parent / "viewer_indexes" / "candidate_shards"
+    if not shards_dir.exists():
+        return None
+    shard_paths = sorted(shards_dir.glob("*.parquet"), key=lambda p: p.stat().st_mtime, reverse=True)
+    if not shard_paths:
+        return None
+    campaign_filter = (params.get("campaign") or [""])[0].strip()
+    q = (params.get("q") or [""])[0].strip().lower()
+    source = (params.get("source") or ["baseline"])[0].strip().lower()
+    tier = (params.get("tier") or ["all"])[0].strip()
+    quality = (params.get("quality") or ["pass"])[0].strip().lower()
+    min_snr = _query_float(params, "min_snr")
+    limit = min(5000, max(25, _query_int(params, "limit", 100)))
+    offset = max(0, _query_int(params, "offset", 0))
+    source_aliases = _candidate_source_aliases(source)
+    selected_shards = _candidate_index_shards_for_query(shard_paths, campaign_filter, source)
+
+    def load() -> pd.DataFrame:
+        frames = []
+        filters = []
+        if source != "all":
+            filters.append(("source", "in", list(source_aliases)))
+        if campaign_filter:
+            filters.append(("campaign", "=", campaign_filter))
+        if quality == "pass":
+            filters.append(("quality_pass", "=", True))
+        elif quality == "reject":
+            filters.append(("quality_pass", "=", False))
+        if tier != "all":
+            filters.append(("tier", "=", tier))
+        parquet_filters = filters or None
+        for path in selected_shards:
+            try:
+                frames.append(pd.read_parquet(path, filters=parquet_filters))
+            except Exception:
+                try:
+                    frames.append(pd.read_parquet(path))
+                except Exception:
+                    continue
+        if not frames:
+            return pd.DataFrame()
+        return pd.concat(frames, ignore_index=True, sort=False)
+
+    cache_key = _viewer_cache_key(
+        f"candidate_shards:{campaign_filter}:{source}:{tier}:{quality}",
+        [str(p) for p in selected_shards],
+    )
+    df = _ttl_cache(cache_key, 5.0, load)
+    if not isinstance(df, pd.DataFrame) or df.empty:
+        return _candidate_summary_payload([], _indexed_campaign_options(runs_root, pd.DataFrame()), source, campaign_filter, 0, 0, limit, offset, 0, quality)
+
+    scanned_runs = int(df.get("run_name", pd.Series(dtype=str)).astype(str).nunique())
+    work = df.copy()
+    if source != "all" and "source" in work:
+        work = work[work["source"].astype(str).isin(source_aliases)]
+    if campaign_filter and "campaign" in work:
+        run_col = work.get("run_name", pd.Series("", index=work.index)).astype(str)
+        campaign_col = work["campaign"].astype(str)
+        work = work[(campaign_col == campaign_filter) | run_col.str.startswith(f"{campaign_filter}_")]
+    if tier != "all" and "tier" in work:
+        work = work[work["tier"].astype(str).eq(tier)]
+    if quality not in {"all", ""}:
+        if "quality_pass" in work:
+            quality_bool = work["quality_pass"].fillna(False).astype(bool)
+            if quality == "pass":
+                work = work[quality_bool]
+            elif quality == "reject":
+                work = work[~quality_bool]
+        if quality in {"high_confidence", "review"} and "quality_category" in work:
+            work = work[work["quality_category"].astype(str).eq(quality)]
+    if min_snr is not None:
+        snr_cols = [col for col in ("rank_score", "psf_peak_snr", "aperture_peak_snr") if col in work]
+        if snr_cols:
+            max_snr = pd.concat([pd.to_numeric(work[col], errors="coerce") for col in snr_cols], axis=1).max(axis=1)
+            work = work[max_snr >= float(min_snr)]
+    if q:
+        mask = pd.Series(False, index=work.index)
+        for col in ("joint_candidate_id", "target_id", "tier", "detectors", "best_frame_ids", "run_name", "campaign", "target"):
+            if col in work:
+                mask |= work[col].astype(str).str.lower().str.contains(q, regex=False)
+        work = work[mask]
+    if work.empty:
+        return _candidate_summary_payload([], _indexed_campaign_options(runs_root, df), source, campaign_filter, scanned_runs, 0, limit, offset, 0, quality)
+    candidate_runs = int(work.get("run_name", pd.Series(dtype=str)).astype(str).nunique())
+    rows = _sort_candidate_summary_rows(work.to_dict(orient="records"), (params.get("sort") or ["quality"])[0])
+    total = len(rows)
+    page = rows[offset : offset + limit]
+    return _candidate_summary_payload(page, _indexed_campaign_options(runs_root, df), source, campaign_filter, scanned_runs, candidate_runs, limit, offset, total, quality)
+
+
+def _candidate_source_aliases(source: str) -> set[str]:
+    return {
+        "baseline": {"baseline", "uninjected", "science"},
+        "uninjected": {"baseline", "uninjected", "science"},
+        "science": {"baseline", "uninjected", "science"},
+        "injected": {"injected", "injected_raw"},
+        "injected_raw": {"injected", "injected_raw"},
+        "paired": {"paired", "paired_delta"},
+        "paired_delta": {"paired", "paired_delta"},
+        "all": {"baseline", "uninjected", "science", "injected", "injected_raw", "paired", "paired_delta"},
+    }.get(source, {source})
+
+
+def _candidate_index_shards_for_query(shard_paths: list[Path], campaign_filter: str, source: str) -> list[Path]:
+    selected = shard_paths
+    if campaign_filter:
+        selected = [path for path in selected if path.name.startswith(f"{campaign_filter}_")]
+    if source in {"baseline", "uninjected", "science"}:
+        selected = [path for path in selected if path.name.endswith("_baseline.parquet")]
+    elif source in {"injected", "injected_raw", "paired", "paired_delta"}:
+        selected = [path for path in selected if path.name.endswith("_injected.parquet")]
+    return selected
+
+
+def _indexed_campaign_options(runs_root: Path, df: pd.DataFrame) -> list[str]:
+    campaigns = set(_campaign_names(runs_root.parent / "campaigns"))
+    campaigns.update(_grid_dispatch_campaigns(runs_root))
+    if not df.empty and "campaign" in df:
+        campaigns.update(str(item) for item in df["campaign"].dropna().astype(str).unique() if item)
+    return sorted(campaigns)
 
 
 def _candidate_source_for_run(run_name: str, source: str) -> tuple[str | None, str | None]:
@@ -1948,41 +2177,7 @@ def _targets(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
     offset = max(0, _query_int(params, "offset", 0))
     sort = (params.get("sort") or ["measurements"])[0]
     q = (params.get("q") or [""])[0].strip().lower()
-    df = pd.read_parquet(path)
-    spectra_path = run_dir / "spectra" / "target_spectra.parquet"
-    if spectra_path.exists():
-        spectra = pd.read_parquet(spectra_path, columns=["target_id", "fatal_flag_present"])
-        flag_summary = (
-            spectra.assign(fatal_flag_present=spectra["fatal_flag_present"].fillna(False).astype(bool))
-            .groupby("target_id", dropna=False)
-            .agg(
-                flagged_measurements=("fatal_flag_present", "sum"),
-                total_measurements_for_flags=("fatal_flag_present", "size"),
-            )
-            .reset_index()
-        )
-        flag_summary["flagged_fraction"] = (
-            flag_summary["flagged_measurements"] / flag_summary["total_measurements_for_flags"]
-        )
-        df = df.merge(flag_summary, on="target_id", how="left")
-    for col in ("flagged_measurements", "total_measurements_for_flags"):
-        if col in df:
-            df[col] = df[col].fillna(0).astype(int)
-    if "flagged_fraction" in df:
-        df["flagged_fraction"] = df["flagged_fraction"].fillna(0.0)
-    injection_summary = _injection_target_summary(run_dir)
-    if not injection_summary.empty:
-        df = df.merge(injection_summary, on="target_id", how="left")
-    for col in ("injected_signal_count", "injected_frame_count"):
-        if col in df:
-            df[col] = df[col].fillna(0).astype(int)
-    if "is_injected_target" in df:
-        df["is_injected_target"] = df["is_injected_target"].fillna(False).astype(bool)
-    else:
-        df["is_injected_target"] = False
-    for col in ("injected_line_families", "injected_lines_nm"):
-        if col in df:
-            df[col] = df[col].fillna("")
+    df = _target_table(run_dir)
     if q:
         query_mask = df["target_id"].astype(str).str.lower().str.contains(q, regex=False)
         if "target_type" in df.columns:
@@ -1994,6 +2189,56 @@ def _targets(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
     df = _sort_targets_df(df, sort)
     rows = df.iloc[offset : offset + limit].to_dict(orient="records")
     return {"rows": rows, "total": total, "limit": limit, "offset": offset, "sort": sort, "q": q}
+
+
+def _target_table(run_dir: Path) -> pd.DataFrame:
+    summary_path = run_dir / "spectra" / "target_summary.parquet"
+    spectra_path = run_dir / "spectra" / "target_spectra.parquet"
+    cache_key = _viewer_cache_key("target_table", [str(summary_path), str(spectra_path), *_injection_manifest_cache_paths(run_dir)])
+
+    def build() -> pd.DataFrame:
+        df = pd.read_parquet(summary_path)
+        if spectra_path.exists():
+            spectra = pd.read_parquet(spectra_path, columns=["target_id", "fatal_flag_present"])
+            flag_summary = (
+                spectra.assign(fatal_flag_present=spectra["fatal_flag_present"].fillna(False).astype(bool))
+                .groupby("target_id", dropna=False)
+                .agg(
+                    flagged_measurements=("fatal_flag_present", "sum"),
+                    total_measurements_for_flags=("fatal_flag_present", "size"),
+                )
+                .reset_index()
+            )
+            flag_summary["flagged_fraction"] = (
+                flag_summary["flagged_measurements"] / flag_summary["total_measurements_for_flags"]
+            )
+            df = df.merge(flag_summary, on="target_id", how="left")
+        for col in ("flagged_measurements", "total_measurements_for_flags"):
+            if col in df:
+                df[col] = df[col].fillna(0).astype(int)
+        if "flagged_fraction" in df:
+            df["flagged_fraction"] = df["flagged_fraction"].fillna(0.0)
+        injection_summary = _injection_target_summary(run_dir)
+        if not injection_summary.empty:
+            df = df.merge(injection_summary, on="target_id", how="left")
+        for col in ("injected_signal_count", "injected_frame_count"):
+            if col in df:
+                df[col] = df[col].fillna(0).astype(int)
+        if "is_injected_target" in df:
+            df["is_injected_target"] = df["is_injected_target"].fillna(False).astype(bool)
+        else:
+            df["is_injected_target"] = False
+        for col in ("injected_line_families", "injected_lines_nm"):
+            if col in df:
+                df[col] = df[col].fillna("")
+        return df
+
+    cached = _ttl_cache(cache_key, 10.0, build)
+    return cached.copy()
+
+
+def _injection_manifest_cache_paths(run_dir: Path) -> list[str]:
+    return [str(path) for path in _injection_manifest_candidates(run_dir) if path.exists()]
 
 
 def _spectrum_quality(run_dir: Path, params: dict[str, list[str]]) -> dict[str, object]:
@@ -3227,11 +3472,20 @@ def _spectrum_preview(run_dir: Path, target_id: str) -> dict[str, object]:
 
 def _read_target_spectrum_rows(path: Path, target_id: str, columns: list[str] | None = None) -> pd.DataFrame:
     read_columns = _existing_parquet_columns(path, columns) if columns else None
-    try:
-        rows = pd.read_parquet(path, columns=read_columns, filters=[("target_id", "=", str(target_id))])
-    except Exception:
-        df = pd.read_parquet(path, columns=read_columns)
-        rows = df[df["target_id"].astype(str).eq(str(target_id))]
+    column_key = ",".join(read_columns or ["*"])
+    cache_key = _viewer_cache_key(f"spectrum_rows:{target_id}:{column_key}", [str(path)])
+
+    def build() -> pd.DataFrame:
+        try:
+            rows = pd.read_parquet(path, columns=read_columns, filters=[("target_id", "=", str(target_id))])
+        except Exception:
+            df = pd.read_parquet(path, columns=read_columns)
+            rows = df[df["target_id"].astype(str).eq(str(target_id))]
+        if "cwave_um" in rows.columns:
+            rows = rows.sort_values("cwave_um", na_position="last", kind="mergesort")
+        return rows
+
+    rows = _ttl_cache(cache_key, 30.0, build).copy()
     if "cwave_um" in rows.columns:
         rows = rows.sort_values("cwave_um", na_position="last", kind="mergesort")
     return rows
@@ -4841,7 +5095,7 @@ def _recovery_summary_html() -> str:
   <div class="controls">
     <select id="campaign" onchange="refresh()"><option value="">All campaigns</option></select>
     <input id="query" placeholder="filter target/campaign" oninput="scheduleRefresh()">
-    <button type="button" onclick="refresh()">Refresh</button>
+    <button id="refreshButton" type="button" onclick="manualRefresh()">Refresh</button>
     <a href="/dashboards">Dashboards</a>
     <a href="/simple-status">Status</a>
     <a href="/spectra">Spectra</a>
@@ -4885,6 +5139,13 @@ async function refresh() {
   document.getElementById('byLine').innerHTML = table(data.by_line || [], ['line_family','injections','recovered','missed','recovery_fraction']);
   document.getElementById('runs').innerHTML = table(data.runs || [], ['campaign','target','injection_count','recovered_count','missed_count','recovery_fraction','false_positive_count','min_snr','links']);
   document.getElementById('falsePositives').innerHTML = table(data.false_positives || [], ['campaign','target','target_id','line_family','candidate_line_nm','matched_snr','matched_flux_uJy','n_supporting_points','links']);
+}
+async function manualRefresh() {
+  const button = document.getElementById('refreshButton');
+  button.disabled = true;
+  button.textContent = 'Refreshing';
+  try { await refresh(); }
+  finally { button.disabled = false; button.textContent = 'Refresh'; }
 }
 function syncCampaigns(campaigns) {
   const sel = document.getElementById('campaign');
@@ -4999,7 +5260,7 @@ def _candidate_summary_html() -> str:
       <div><label>Min SNR</label><input id="minSnr" placeholder="optional" oninput="scheduleRefresh()"></div>
       <div><label>Search</label><input id="query" placeholder="run, target, detector..." oninput="scheduleRefresh()"></div>
       <div><label>Limit</label><select id="limit" onchange="refresh(0)"><option selected>100</option><option>500</option><option>1000</option><option>5000</option></select></div>
-      <div><label>Action</label><button onclick="refresh(offset)">Refresh</button></div>
+      <div><label>Action</label><button id="refreshButton" type="button" onclick="manualRefresh()">Refresh</button></div>
     </div>
     <div class="tiles" id="tiles"></div>
     <div class="small" id="pageInfo"></div>
@@ -5039,6 +5300,13 @@ async function refresh(nextOffset){
   syncCampaigns(data.campaigns || []);
   renderTiles(data.summary || {});
   renderRows(data.rows || []);
+}
+async function manualRefresh(){
+  const button = document.getElementById('refreshButton');
+  button.disabled = true;
+  button.textContent = 'Refreshing';
+  try { await refresh(offset); }
+  finally { button.disabled = false; button.textContent = 'Refresh'; }
 }
 function syncCampaigns(campaigns){
   const sel = document.getElementById('campaign'), old = sel.value || initial.get('campaign') || '';
