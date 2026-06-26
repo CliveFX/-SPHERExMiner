@@ -148,6 +148,13 @@ narrowband_detector_raw/narrowband_detector_summary.json
 candidate. It is intentionally compact; do not write the full target x
 wavelength score cube for normal campaigns.
 
+By default, the GPU narrowband scorer requires the parent target spectrum to be
+`good` in `spectra/spectrum_quality.parquet`. This prevents tiny partial
+sub-spectra from producing high-SNR local false positives. The good gate
+requires at least 50 usable unflagged points, at least 4000 nm of usable
+wavelength span, and good aperture/PSF shape agreement. Use
+`--allow-non-good-spectra` only for diagnostic/debug scans.
+
 For injection truth recovery, add:
 
 ```text

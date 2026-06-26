@@ -18,6 +18,10 @@ import pandas as pd
 
 
 DEFAULT_RUN_ROOT = Path("/mnt/niroseti/spherex_cache/runs")
+GOOD_MIN_USABLE_POINTS = 50
+GOOD_MIN_WAVELENGTH_SPAN_NM = 4000.0
+GOOD_MIN_APERTURE_PSF_CORR = 0.75
+GOOD_MAX_APERTURE_PSF_FRAC_DELTA = 1.0
 
 
 def _finite_array(values: pd.Series) -> np.ndarray:
@@ -106,6 +110,14 @@ def score_one_target(target_id: str, rows: pd.DataFrame) -> dict[str, Any]:
     n_measurements = int(len(rows))
     n_usable = int(usable.sum())
     flag_fraction = float(flags.sum() / n_measurements) if n_measurements else 1.0
+    usable_wave = wave[usable]
+    wavelength_min_nm = float(np.nanmin(usable_wave)) if np.isfinite(usable_wave).any() else float("nan")
+    wavelength_max_nm = float(np.nanmax(usable_wave)) if np.isfinite(usable_wave).any() else float("nan")
+    wavelength_span_nm = (
+        float(wavelength_max_nm - wavelength_min_nm)
+        if math.isfinite(wavelength_min_nm) and math.isfinite(wavelength_max_nm)
+        else float("nan")
+    )
     coverage_score = _clip01(n_usable / 80.0)
     flag_score = _clip01(1.0 - 2.0 * flag_fraction)
     smooth_score, roughness = _smoothness_score(wave[usable], aperture[usable])
@@ -120,20 +132,29 @@ def score_one_target(target_id: str, rows: pd.DataFrame) -> dict[str, Any]:
         + 0.10 * snr_score
     )
     reasons: list[str] = []
-    if n_usable < 25:
+    if n_usable < GOOD_MIN_USABLE_POINTS:
         reasons.append("too_few_usable_points")
+    if not math.isfinite(wavelength_span_nm) or wavelength_span_nm < GOOD_MIN_WAVELENGTH_SPAN_NM:
+        reasons.append("insufficient_wavelength_span")
     if flag_fraction > 0.25:
         reasons.append("too_many_fatal_flags")
     if smooth_score < 0.45:
         reasons.append("jagged_or_noisy_continuum")
-    if math.isfinite(ap_psf_corr) and ap_psf_corr < 0.25:
+    if math.isfinite(ap_psf_corr) and ap_psf_corr < GOOD_MIN_APERTURE_PSF_CORR:
         reasons.append("low_aperture_psf_shape_agreement")
-    if math.isfinite(ap_psf_frac_delta) and ap_psf_frac_delta > 1.5:
+    if math.isfinite(ap_psf_frac_delta) and ap_psf_frac_delta > GOOD_MAX_APERTURE_PSF_FRAC_DELTA:
         reasons.append("large_aperture_psf_flux_disagreement")
     if math.isfinite(median_snr) and median_snr < 1.0:
         reasons.append("low_median_snr")
 
-    hard_reasons = {"too_few_usable_points", "too_many_fatal_flags", "jagged_or_noisy_continuum"} & set(reasons)
+    hard_reasons = {
+        "too_few_usable_points",
+        "insufficient_wavelength_span",
+        "too_many_fatal_flags",
+        "jagged_or_noisy_continuum",
+        "low_aperture_psf_shape_agreement",
+        "large_aperture_psf_flux_disagreement",
+    } & set(reasons)
     if total >= 70 and not hard_reasons:
         category = "good"
     elif total >= 45 and flag_fraction <= 0.35 and n_usable >= 25:
@@ -173,8 +194,13 @@ def score_one_target(target_id: str, rows: pd.DataFrame) -> dict[str, Any]:
         "aperture_psf_median_frac_delta": ap_psf_frac_delta,
         "median_abs_aperture_snr": median_snr,
         "snr_score": snr_score,
-        "wavelength_min_nm": float(np.nanmin(wave)) if np.isfinite(wave).any() else float("nan"),
-        "wavelength_max_nm": float(np.nanmax(wave)) if np.isfinite(wave).any() else float("nan"),
+        "wavelength_min_nm": wavelength_min_nm,
+        "wavelength_max_nm": wavelength_max_nm,
+        "wavelength_span_nm": wavelength_span_nm,
+        "good_min_usable_points": GOOD_MIN_USABLE_POINTS,
+        "good_min_wavelength_span_nm": GOOD_MIN_WAVELENGTH_SPAN_NM,
+        "good_min_aperture_psf_corr": GOOD_MIN_APERTURE_PSF_CORR,
+        "good_max_aperture_psf_frac_delta": GOOD_MAX_APERTURE_PSF_FRAC_DELTA,
     }
 
 
@@ -292,6 +318,7 @@ def main() -> None:
             "spectrum_quality_category",
             "n_usable_measurements",
             "flag_fraction",
+            "wavelength_span_nm",
             "smoothness_score",
             "aperture_psf_corr",
             "median_abs_aperture_snr",

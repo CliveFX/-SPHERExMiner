@@ -250,6 +250,14 @@ Never move dense score cubes to CPU; save local windows for the viewer or recomp
 
 **Inputs:** `target_id`; RA/Dec + Gaia metadata; aperture & PSF flux arrays; `VARIANCE`-derived uncertainties; **per-measurement** `cwave`/`cband`; field/image IDs; detector/camera/band/frame metadata; pixel coords + edge distance; raw **and** decoded flags; **per-measurement barycentric-correction parameters**; injection truth (validation only). Wavelength modeled per camera/detector/measurement — never a global grid.
 
+**Parent-spectrum gate:** science candidate scanning only runs on spectra that
+pass `spectra/spectrum_quality.parquet` as `good`. The minimum gate is 50
+usable unflagged points, 4000 nm usable wavelength span, and good aperture/PSF
+shape agreement. Tiny partial spectra remain valid debug/data products, but
+they are not eligible for narrowband candidate promotion because they can
+produce high-SNR local false positives with too little surrounding spectrum to
+reject them.
+
 **Candidate table:** `target_id`, `line_nm_source_frame`, `template_id`, `tier`, `q_max`, `p_local`, `p_global`, `N0_used`, `aperture_snr`, `psf_snr`, `aperture_amp_uJy`, `psf_amp_uJy`, `response_bin_chi2`, `n_visits`, `source_frame_recurrence_pass`, `support_count`, `flagged_points_sum`, `sigma_ratio_flag`, `detectors`, `frame_ids`, `response_model_version_hash`, `reject_reasons`.
 
 **Debug:** local `q(λ)` scan window per candidate; CFAR continuum used; template values over support; aperture/PSF residual vectors; per-visit source-frame wavelengths (makes Stage G auditable); injection-truth join when available.

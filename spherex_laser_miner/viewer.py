@@ -5037,7 +5037,7 @@ function renderCards(data) {
   document.getElementById('cards').innerHTML = cards.map(([k,v]) => `<div class="card"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
 }
 function renderTable(rows) {
-  const cols = ['category','score','target','G','usable','flags','smooth','ap/psf','snr','reasons','links'];
+  const cols = ['category','score','target','G','usable','span','flags','smooth','ap/psf','snr','reasons','links'];
   if (!rows.length) {
     document.getElementById('table').innerHTML = '<div class="small">No quality rows for this run. Generate them with:<br><span class="mono">.venv/bin/python tools/score_spectrum_quality.py --run-dir /mnt/niroseti/spherex_cache/runs/' + esc(activeRun) + '</span></div>';
     return;
@@ -5049,6 +5049,7 @@ function renderTable(rows) {
       <td class="mono">${esc(r.target_id)}</td>
       <td>${fmt(r.phot_g_mean_mag,2)}</td>
       <td>${esc(r.n_usable_measurements || '')}/${esc(r.n_measurements || '')}</td>
+      <td>${fmt(r.wavelength_span_nm,0)} nm</td>
       <td>${fmt(r.flag_fraction,3)}</td>
       <td>${fmt(r.smoothness_score,3)}</td>
       <td>${fmt(r.aperture_psf_corr,3)}</td>

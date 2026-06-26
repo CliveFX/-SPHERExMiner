@@ -301,6 +301,13 @@ recovery_score_mixed_lasers/false_positive_candidates.parquet
 recovery_score_mixed_lasers/recovery_summary.json
 ```
 
+The raw GPU narrowband detector is quality-gated by default. It only scores
+targets whose `spectra/spectrum_quality.parquet` row is `good` and satisfies
+the hard numeric minima used to avoid tiny false-positive-prone sub-spectra:
+at least 50 usable points, at least 4000 nm usable wavelength span, and good
+aperture/PSF agreement. Diagnostic runs can override this with
+`--allow-non-good-spectra`, but campaign science scans should not.
+
 The existing web viewer visualizes these through the injection viewer:
 
 ```text

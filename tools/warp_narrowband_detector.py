@@ -351,6 +351,61 @@ def _load_spectra(run_dir: Path, spectra_path: Path | None, allow_approx_wavelen
     return df[[col for col in keep if col in df.columns]].copy()
 
 
+def _apply_spectrum_quality_gate(df: pd.DataFrame, run_dir: Path, require_good: bool) -> tuple[pd.DataFrame, dict[str, Any]]:
+    if not require_good:
+        target_count = int(df["target_id"].dropna().astype(str).nunique())
+        return df, {
+            "require_good_spectrum": False,
+            "quality_path": None,
+            "input_target_count": target_count,
+            "kept_target_count": target_count,
+        }
+    quality_path = run_dir / "spectra" / "spectrum_quality.parquet"
+    if not quality_path.exists():
+        raise SystemExit(
+            f"Missing spectrum quality gate file: {quality_path}. Run spectrum quality scoring first, "
+            "or pass --allow-non-good-spectra for diagnostic/debug scans."
+        )
+    quality = pd.read_parquet(quality_path)
+    required = {"target_id", "spectrum_quality_category"}
+    missing = sorted(required - set(quality.columns))
+    if missing:
+        raise SystemExit(f"{quality_path} is missing required quality columns: {', '.join(missing)}")
+    q = quality.copy()
+    if "wavelength_span_nm" not in q and {"wavelength_min_nm", "wavelength_max_nm"} <= set(q.columns):
+        q["wavelength_span_nm"] = pd.to_numeric(q["wavelength_max_nm"], errors="coerce") - pd.to_numeric(
+            q["wavelength_min_nm"], errors="coerce"
+        )
+    good_mask = q["spectrum_quality_category"].astype(str).eq("good")
+    if "n_usable_measurements" in q:
+        good_mask &= pd.to_numeric(q["n_usable_measurements"], errors="coerce").fillna(0).ge(50)
+    if "wavelength_span_nm" in q:
+        good_mask &= pd.to_numeric(q["wavelength_span_nm"], errors="coerce").fillna(0).ge(4000.0)
+    if "aperture_psf_corr" in q:
+        corr = pd.to_numeric(q["aperture_psf_corr"], errors="coerce")
+        good_mask &= corr.isna() | corr.ge(0.75)
+    if "aperture_psf_median_frac_delta" in q:
+        frac_delta = pd.to_numeric(q["aperture_psf_median_frac_delta"], errors="coerce")
+        good_mask &= frac_delta.isna() | frac_delta.le(1.0)
+    input_target_set = set(df["target_id"].dropna().astype(str))
+    input_targets = len(input_target_set)
+    good_targets = set(q.loc[good_mask, "target_id"].dropna().astype(str))
+    kept_targets = good_targets & input_target_set
+    gated = df[df["target_id"].astype(str).isin(kept_targets)].copy()
+    return gated, {
+        "require_good_spectrum": True,
+        "quality_path": str(quality_path),
+        "input_target_count": input_targets,
+        "kept_target_count": int(gated["target_id"].dropna().astype(str).nunique()),
+        "rejected_target_count": int(max(0, input_targets - len(kept_targets))),
+        "min_usable_points": 50,
+        "min_wavelength_span_nm": 4000.0,
+        "min_aperture_psf_corr": 0.75,
+        "max_aperture_psf_frac_delta": 1.0,
+        "quality_category_counts": quality["spectrum_quality_category"].astype(str).value_counts().sort_index().to_dict(),
+    }
+
+
 def _target_ids(df: pd.DataFrame, args: argparse.Namespace) -> list[str]:
     target_ids = list(df["target_id"].dropna().astype(str).drop_duplicates())
     requested: set[str] = set(args.target_id or [])
@@ -368,6 +423,33 @@ def _target_ids(df: pd.DataFrame, args: argparse.Namespace) -> list[str]:
     if args.max_targets:
         target_ids = target_ids[: int(args.max_targets)]
     return target_ids
+
+
+def _write_empty_outputs(args: argparse.Namespace, run_dir: Path, quality_gate: dict[str, Any], started: float) -> None:
+    args.output_dir.mkdir(parents=True, exist_ok=True)
+    candidates_path = args.output_dir / "narrowband_candidates.parquet"
+    pd.DataFrame().to_parquet(candidates_path, index=False)
+    summary = {
+        "detector": "warp_narrowband_detector",
+        "spec": "docs/gpu_narrowband_detector_spec.md",
+        "response_model_version_hash": RESPONSE_MODEL_VERSION,
+        "run_dir": str(run_dir),
+        "manifest": str(args.manifest) if args.manifest else None,
+        "output_dir": str(args.output_dir),
+        "device": args.device,
+        "target_count": 0,
+        "measurement_rows": 0,
+        "line_count": 0,
+        "score_rows": 0,
+        "candidate_count": 0,
+        "science_pass_count": 0,
+        "quality_pass_count": 0,
+        "spectrum_quality_gate": quality_gate,
+        "total_sec": time.perf_counter() - started,
+        "candidates_path": str(candidates_path),
+        "diagnostic_line_scores_path": None,
+    }
+    (args.output_dir / "narrowband_detector_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
 
 def _pack(df: pd.DataFrame, target_ids: list[str]) -> tuple[np.ndarray, ...]:
@@ -750,6 +832,8 @@ def main() -> None:
     parser.add_argument("--device", default="cuda:0")
     parser.add_argument("--ignore-flagged", action="store_true", default=True)
     parser.add_argument("--include-flagged", dest="ignore_flagged", action="store_false")
+    parser.add_argument("--require-good-spectrum", action="store_true", default=True)
+    parser.add_argument("--allow-non-good-spectra", dest="require_good_spectrum", action="store_false")
     parser.add_argument("--allow-approx-wavelengths", action="store_true")
     args = parser.parse_args()
 
@@ -759,9 +843,12 @@ def main() -> None:
 
     t0 = time.perf_counter()
     measurements = _load_spectra(args.run_dir, args.spectra_path, args.allow_approx_wavelengths)
+    measurements, spectrum_quality_gate = _apply_spectrum_quality_gate(measurements, args.run_dir, bool(args.require_good_spectrum))
     target_ids = _target_ids(measurements, args)
     if not target_ids:
-        raise SystemExit("No targets selected")
+        _write_empty_outputs(args, args.run_dir, spectrum_quality_gate, t0)
+        print(json.dumps({"status": "no_targets_after_spectrum_quality_gate", "output_dir": str(args.output_dir)}, sort_keys=True), flush=True)
+        return
     selected = measurements[measurements["target_id"].astype(str).isin(target_ids)].copy()
     lines = _line_grid(args.min_line_nm, args.max_line_nm, args.grid_step_nm)
     offsets, lengths, wave, cband, ap_f, ap_u, psf_f, psf_u, fatal = _pack(selected, target_ids)
@@ -991,6 +1078,7 @@ def main() -> None:
         "science_pass_count": int(candidates["tier"].eq("science_pass").sum()) if not candidates.empty else 0,
         "quality_pass_count": int(candidates["quality_pass"].fillna(False).astype(bool).sum()) if not candidates.empty else 0,
         "quality_config": {
+            "require_good_spectrum": bool(args.require_good_spectrum),
             "quality_min_support": int(args.quality_min_support),
             "quality_max_flagged_points": int(args.quality_max_flagged_points),
             "quality_max_candidates_per_target": int(args.quality_max_candidates_per_target),
@@ -1005,6 +1093,7 @@ def main() -> None:
             "a_tier_min_support": int(args.a_tier_min_support),
             "a_tier_max_candidates_per_target": int(args.a_tier_max_candidates_per_target),
         },
+        "spectrum_quality_gate": spectrum_quality_gate,
         "n0_used": n0,
         "upcross_level_q": float(args.upcross_level_q),
         "alpha_global": float(args.alpha_global),
