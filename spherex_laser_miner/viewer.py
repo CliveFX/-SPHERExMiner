@@ -51,7 +51,7 @@ def _make_handler(run_dir: Path):
         def do_GET(self) -> None:
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
-            params = urllib.parse.parse_qs(parsed.query)
+            params = _parse_query_preserve_plus(parsed.query)
             active_run_dir = _requested_run_dir(params, runs_root, default_run_dir)
             try:
                 if path == "/":
@@ -213,6 +213,22 @@ def _make_handler(run_dir: Path):
             self.wfile.write(body)
 
     return ViewerHandler
+
+
+def _parse_query_preserve_plus(query: str) -> dict[str, list[str]]:
+    params: dict[str, list[str]] = {}
+    if not query:
+        return params
+    for part in query.split("&"):
+        if not part:
+            continue
+        key, sep, value = part.partition("=")
+        if not sep:
+            value = ""
+        decoded_key = urllib.parse.unquote(key)
+        decoded_value = urllib.parse.unquote(value)
+        params.setdefault(decoded_key, []).append(decoded_value)
+    return params
 
 
 def _requested_run_dir(params: dict[str, list[str]], runs_root: Path, default_run_dir: Path) -> Path:
@@ -4097,7 +4113,7 @@ $('grid').addEventListener('click', ()=>{
   if (state.dragged) return;
   if (!state.hover) return;
   state.selected = state.hover;
-  $('hpx').value = String(state.hover.hpx);
+  $('hpx').value = '';
   $('startHpx').value = String(state.hover.hpx);
   renderTileReadout();
   draw();
@@ -5308,12 +5324,23 @@ def _candidate_summary_html() -> str:
 <script>
 let offset = 0, limit = 100, total = 0, timer = null;
 const initial = new URLSearchParams(window.location.search);
+function rawSearchParam(name) {
+  const query = window.location.search.replace(/^\\?/, '');
+  if (!query) return '';
+  for (const part of query.split('&')) {
+    if (!part) continue;
+    const pieces = part.split('=');
+    const key = decodeURIComponent(pieces.shift() || '');
+    if (key === name) return decodeURIComponent(pieces.join('=') || '');
+  }
+  return '';
+}
 function init(){
   for (const id of ['source','tier','quality','sort','limit']) {
     const v = initial.get(id);
     if (v && [...document.getElementById(id).options].some(o => o.value === v)) document.getElementById(id).value = v;
   }
-  document.getElementById('query').value = initial.get('q') || '';
+  document.getElementById('query').value = rawSearchParam('q') || '';
   document.getElementById('minSnr').value = initial.get('min_snr') || '';
 }
 async function getJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); return await r.json(); }
@@ -5508,6 +5535,18 @@ let rows = [], total = 0, offset = 0, limit = 300, summary = {};
 let selectedId = null, detail = null, tableMode = 'candidates', fetchTimer = null;
 let injectionControlsInitialized = false;
 
+function rawSearchParam(name) {
+  const query = window.location.search.replace(/^\\?/, '');
+  if (!query) return '';
+  for (const part of query.split('&')) {
+    if (!part) continue;
+    const pieces = part.split('=');
+    const key = decodeURIComponent(pieces.shift() || '');
+    if (key === name) return decodeURIComponent(pieces.join('=') || '');
+  }
+  return '';
+}
+
 function runQS(extra) {
   const p = new URLSearchParams(extra || '');
   if (activeRun) p.set('run', activeRun);
@@ -5533,7 +5572,7 @@ function initInjectionControls() {
   injectionControlsInitialized = true;
   const status = initialInjectionParams.get('status');
   const sort = initialInjectionParams.get('sort');
-  const q = initialInjectionParams.get('q') || initialInjectionParams.get('target') || initialInjectionParams.get('target_id');
+  const q = rawSearchParam('q') || rawSearchParam('target') || rawSearchParam('target_id');
   if (status && [...document.getElementById('status').options].some(o => o.value === status)) document.getElementById('status').value = status;
   if (sort && [...document.getElementById('sort').options].some(o => o.value === sort)) document.getElementById('sort').value = sort;
   if (q) document.getElementById('query').value = q;
@@ -5846,7 +5885,18 @@ def _blind_candidates_html() -> str:
 let activeRun = new URLSearchParams(window.location.search).get('run') || '';
 let rows = [], offset = 0, total = 0, limit = 300, selectedId = null, detail = null, timer = null;
 const initialParams = new URLSearchParams(window.location.search);
-let activeTargetFilter = initialParams.get('target') || '';
+let activeTargetFilter = rawSearchParam('target') || '';
+function rawSearchParam(name) {
+  const query = window.location.search.replace(/^\\?/, '');
+  if (!query) return '';
+  for (const part of query.split('&')) {
+    if (!part) continue;
+    const pieces = part.split('=');
+    const key = decodeURIComponent(pieces.shift() || '');
+    if (key === name) return decodeURIComponent(pieces.join('=') || '');
+  }
+  return '';
+}
 async function getJSON(url){ const r=await fetch(url,{cache:'no-store'}); if(!r.ok) throw new Error(await r.text()); return await r.json(); }
 function runQS(extra){ const p=new URLSearchParams(extra||''); if(activeRun) p.set('run', activeRun); const s=p.toString(); return s?'?'+s:''; }
 async function refreshAll(){
@@ -5889,9 +5939,19 @@ function draw(){
   document.getElementById('tiles').innerHTML=[
     ['Tier',cand.tier],['Rank',fmt(cand.rank_score)],['Wave',fmt(cand.peak_line_nm)+' nm'],['AP SNR',fmt(cand.aperture_peak_snr)],['PSF SNR',fmt(cand.psf_peak_snr)],['Support',`${fmt(cand.aperture_support)}/${fmt(cand.psf_support)}`]
   ].map(([k,v])=>`<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join('');
-  document.getElementById('detail').innerHTML=`<p><a href="/spectra?run=${encodeURIComponent(activeRun)}&target=${encodeURIComponent(cand.target_id||'')}">open target spectra</a></p><pre>${esc(JSON.stringify(cand,null,2))}</pre>`;
+  const lineNm = firstFinite(cand.peak_line_nm, cand.candidate_line_nm, cand.recovery_fp_line_nm);
+  const fitsUrl = fitsInspectorUrl(activeRun, cand.target_id || '', lineNm);
+  document.getElementById('detail').innerHTML=`<p><a href="/spectra?run=${encodeURIComponent(activeRun)}&target=${encodeURIComponent(cand.target_id||'')}">open target spectra</a> <span class="muted">/</span> <a href="${esc(fitsUrl)}" target="_blank" rel="noopener">open FITS detail</a></p><pre>${esc(JSON.stringify(cand,null,2))}</pre>`;
   drawPlot(rows,cand);
   drawLinePlot(detail?.line_scores||{}, cand);
+}
+function firstFinite(...values){ for(const value of values){ const n=Number(value); if(Number.isFinite(n)) return n; } return null; }
+function fitsInspectorUrl(run,target,lineNm){
+  const p=new URLSearchParams();
+  p.set('run', run || '');
+  p.set('target', target || '');
+  if(Number.isFinite(Number(lineNm))) p.set('line_nm', String(Number(lineNm)));
+  return `${location.protocol}//${location.hostname}:8776/?${p.toString()}`;
 }
 function drawPlot(rows,cand){
   const svg=document.getElementById('plot'); svg.innerHTML=''; const W=1100,H=620,m={l:92,r:28,t:28,b:54};
@@ -6014,7 +6074,7 @@ function applyInitialFilters(){
     const el = document.getElementById(id);
     if(el && [...el.options].some(o=>o.value===value || o.text===value)) el.value = value;
   }
-  document.getElementById('query').value = initialParams.get('q') || activeTargetFilter || '';
+  document.getElementById('query').value = rawSearchParam('q') || activeTargetFilter || '';
 }
 applyInitialFilters();
 refreshAll();
@@ -6406,6 +6466,17 @@ let activeEmbedding = initial.get('embedding') || '';
 let activeRows = [];
 let selectedRow = null;
 
+function rawSearchParam(name) {
+  const query = location.search.replace(/^\\?/, '');
+  if (!query) return '';
+  for (const part of query.split('&')) {
+    if (!part) continue;
+    const pieces = part.split('=');
+    const key = decodeURIComponent(pieces.shift() || '');
+    if (key === name) return decodeURIComponent(pieces.join('=') || '');
+  }
+  return '';
+}
 function val(id){ return document.getElementById(id).value; }
 function setVal(id, v){ document.getElementById(id).value = v || ''; }
 function esc(v){ return String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -6533,9 +6604,9 @@ function add(svg, name, attrs){ const el=document.createElementNS('http://www.w3
 function qLabel(){ return val('target'); }
 function escAttr(v){ return String(v ?? '').replace(/['\\\\]/g, '\\\\$&').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 setVal('embedding', initial.get('embedding') || '');
-setVal('target', initial.get('target') || '');
+setVal('target', rawSearchParam('target') || '');
 setVal('sourceRun', initial.get('source_run') || '');
-setVal('q', initial.get('q') || '');
+setVal('q', rawSearchParam('q') || '');
 refresh().catch(e => { document.body.insertAdjacentHTML('beforeend','<pre style="color:#fecdd3;padding:20px">'+esc(e.stack || String(e))+'</pre>'); });
 </script>
 </body>
@@ -7167,7 +7238,7 @@ let current = null;
 let currentRows = [];
 let currentInjections = [];
 let activeRun = new URLSearchParams(window.location.search).get('run') || '';
-const requestedTarget = new URLSearchParams(window.location.search).get('target') || new URLSearchParams(window.location.search).get('target_id') || '';
+const requestedTarget = rawSearchParam('target') || rawSearchParam('target_id') || '';
 const FLAG_DEFS = {
   0: ['TRANSIENT', 'Transient, e.g. cosmic ray hit during SUR; can also mark charge spillover/bloom from bright nearby sources.'],
   1: ['OVERFLOW', 'SUR overflow threshold reached, about half full-well saturation.'],
@@ -7193,6 +7264,18 @@ const FLAG_DEFS = {
   28: ['HALO', 'Transient halo; not recommended for science analysis.'],
   29: ['SATELLITE_HALO', 'Satellite-streak halo; not recommended for science analysis.']
 };
+
+function rawSearchParam(name) {
+  const query = window.location.search.replace(/^\\?/, '');
+  if (!query) return '';
+  for (const part of query.split('&')) {
+    if (!part) continue;
+    const pieces = part.split('=');
+    const key = decodeURIComponent(pieces.shift() || '');
+    if (key === name) return decodeURIComponent(pieces.join('=') || '');
+  }
+  return '';
+}
 
 function runQS(extra) {
   const p = new URLSearchParams(extra || '');

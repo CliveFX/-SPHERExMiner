@@ -113,10 +113,10 @@ def main() -> None:
     line_families = _parse_line_families(args.line_families)
     strengths = _parse_csv_floats(args.strengths_sigma)
     rng = np.random.default_rng(args.seed)
-    used_target_line: set[tuple[str, str]] = set()
     target_line_counts: dict[str, int] = {}
     targets_by_id: dict[str, dict[str, Any]] = {}
     injections: list[dict[str, Any]] = []
+    candidates: list[dict[str, Any]] = []
 
     for family in line_families:
         line_family = str(family["line_family"])
@@ -125,23 +125,12 @@ def main() -> None:
         if support.empty:
             print(f"no support for {line_family} {nominal_line_nm:g}nm", flush=True)
             continue
-        # Prefer stable, lower-uncertainty targets but shuffle within the top support pool.
-        pool = support.head(max(args.targets_per_cell * len(strengths) * 6, args.targets_per_cell * 2)).copy()
-        order = rng.permutation(len(pool))
-        pool = pool.iloc[order].reset_index(drop=True)
-        cursor = 0
+        # Prefer stable, lower-uncertainty targets but shuffle within a bounded support pool.
+        pool = support.head(max(args.targets_per_cell * 12, args.targets_per_cell * 2, 100)).copy()
         for strength in strengths:
-            picked = 0
             skipped_cap = 0
-            while picked < args.targets_per_cell and cursor < len(pool):
-                row = pool.iloc[cursor]
-                cursor += 1
+            for _, row in pool.iterrows():
                 target_id = str(row["target_id"])
-                target_line_key = (target_id, line_family)
-                if target_line_key in used_target_line:
-                    continue
-                if args.max_lines_per_target > 0 and target_line_counts.get(target_id, 0) >= args.max_lines_per_target:
-                    continue
                 median_unc = _finite_float(row["median_unc_uJy"])
                 max_response = _finite_float(row["max_response"])
                 estimated_line_flux = None
@@ -154,18 +143,8 @@ def main() -> None:
                 ):
                     skipped_cap += 1
                     continue
-                used_target_line.add(target_line_key)
-                target_line_counts[target_id] = target_line_counts.get(target_id, 0) + 1
-                targets_by_id[target_id] = {
-                    "target_id": target_id,
-                    "n_measurements": int(row["n_measurements"]),
-                    "median_unc_uJy": median_unc,
-                    "phot_g_mean_mag": _finite_float(row.get("phot_g_mean_mag")),
-                }
-                injection_id = _safe_id(f"{target_id}_{line_family}_{nominal_line_nm:g}nm_s{strength:g}")
-                injections.append(
+                candidates.append(
                     {
-                        "injection_id": injection_id,
                         "target_id": target_id,
                         "line_family": line_family,
                         "nominal_line_nm": nominal_line_nm,
@@ -178,15 +157,43 @@ def main() -> None:
                         "max_frames": args.max_frames_per_injection,
                         "estimated_line_flux_uJy": estimated_line_flux,
                         "line_flux_cap_uJy": args.max_line_flux_uJy,
+                        "n_measurements": int(row["n_measurements"]),
+                        "median_unc_uJy": median_unc,
+                        "phot_g_mean_mag": _finite_float(row.get("phot_g_mean_mag")),
                     }
                 )
-                picked += 1
-            if picked < args.targets_per_cell:
+            if skipped_cap:
                 print(
-                    f"warning: only picked {picked}/{args.targets_per_cell} for {line_family} s={strength:g}"
-                    + (f" ({skipped_cap} skipped by flux cap)" if skipped_cap else ""),
+                    f"warning: skipped {skipped_cap} candidates for {line_family} s={strength:g} by flux cap",
                     flush=True,
                 )
+
+    if candidates:
+        order = rng.permutation(len(candidates))
+        for index in order:
+            if len(injections) >= args.targets_per_cell:
+                break
+            candidate = dict(candidates[int(index)])
+            target_id = str(candidate["target_id"])
+            if args.max_lines_per_target > 0 and target_line_counts.get(target_id, 0) >= args.max_lines_per_target:
+                continue
+            target_line_counts[target_id] = target_line_counts.get(target_id, 0) + 1
+            targets_by_id[target_id] = {
+                "target_id": target_id,
+                "n_measurements": int(candidate.pop("n_measurements")),
+                "median_unc_uJy": candidate.pop("median_unc_uJy"),
+                "phot_g_mean_mag": candidate.pop("phot_g_mean_mag"),
+            }
+            candidate["injection_id"] = _safe_id(
+                f"{target_id}_{candidate['line_family']}_{candidate['nominal_line_nm']:g}nm_s{candidate['find_me_snr']:g}"
+            )
+            injections.append(candidate)
+
+    if len(injections) < args.targets_per_cell:
+        print(
+            f"warning: only picked {len(injections)}/{args.targets_per_cell} total injection targets",
+            flush=True,
+        )
 
     campaign_root = args.output_root / args.campaign_id
     output = args.output or (campaign_root / "injection_plan.json")
@@ -202,6 +209,7 @@ def main() -> None:
             "line_families": args.line_families,
             "strengths_sigma": strengths,
             "targets_per_cell": args.targets_per_cell,
+            "targets_per_cell_semantics": "total_injection_targets",
             "max_lines_per_target": args.max_lines_per_target,
             "line_width_nm": args.line_width_nm,
             "min_response": args.min_response,
