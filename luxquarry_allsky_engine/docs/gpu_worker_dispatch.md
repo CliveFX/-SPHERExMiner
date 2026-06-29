@@ -38,6 +38,7 @@ optionally stage FITS onto local SSD/NVMe
 load/reuse resident SAPM + CWAVE + CBAND maps on GPU
 launch one Warp kernel per frame
 emit device columns through DLPack to CuPy/cuDF
+optionally assemble cuDF tables once per shard batch
 queue or write independent cuDF parquet shard
 atomically rewrite run_status.json
 ```
@@ -68,6 +69,7 @@ cd luxquarry_allsky_engine
   --shard-batch-frames 5 \
   --prefetch-frames 2 \
   --async-shard-writes \
+  --batch-table-assembly \
   --status-interval-frames 25 \
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --limit-frames 10
@@ -130,6 +132,12 @@ worker still waits for every queued shard before writing the final summary, so a
 completed run means all listed shards are durable. Status exposes
 `queued_shard_writes`, and frame timings separate `shard_submit_wall_sec` from
 actual shard `write_wall_sec`.
+
+The worker supports `--batch-table-assembly` to defer cuDF table construction
+until shard flush. In that mode, each frame keeps target metadata in pandas and
+kernel results as CuPy device columns. The shard writer performs one
+`cudf.from_pandas` plus one set of CuPy concatenations per shard batch instead
+of one cuDF table build per frame.
 
 Three-worker local dispatch over three GPUs:
 

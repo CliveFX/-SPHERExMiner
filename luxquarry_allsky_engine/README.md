@@ -122,6 +122,7 @@ Implemented stages:
   --shard-batch-frames 5 \
   --prefetch-frames 2 \
   --async-shard-writes \
+  --batch-table-assembly \
   --local-cache-dir /tmp/luxquarry_stage_smoke
 
 # Write a multi-GPU dispatch plan. The generated shell script launches one
@@ -137,6 +138,7 @@ Implemented stages:
   --shard-batch-frames 5 \
   --prefetch-frames 2 \
   --async-shard-writes \
+  --batch-table-assembly \
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --limit-frames 10
 ```
@@ -177,6 +179,10 @@ the local cache; repeated passes and long worker queues are where it should pay.
 waits for them before completion. On the same tiny smoke it is roughly tied with
 the warm staged path, but it removes inline shard write blocking from the frame
 loop and is the better shape for long queues.
+
+`--batch-table-assembly` keeps per-frame kernel outputs as CuPy device columns
+and builds the cuDF measurement table once per shard batch. On the 10-frame
+smoke this reduced wall time to about 0.88 sec with identical GPU output.
 
 ## EKS Target
 

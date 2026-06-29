@@ -458,3 +458,66 @@ Notes:
   summary emission.
 - `plan-gpu-dispatch --async-shard-writes` now passes the flag through to every
   generated persistent worker.
+
+## 2026-06-29: Batched Table Assembly Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-persistent-gpu-worker \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/persistent_gpu_worker_smoke10_stage_async_batchtable \
+  --run-id persistent_smoke10_stage_async_batchtable \
+  --limit-frames 10 \
+  --device cuda:0 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 2 \
+  --status-interval-frames 5 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --async-shard-writes \
+  --batch-table-assembly
+```
+
+Result:
+
+```text
+total_wall_sec: 0.876
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+shards: 2
+queued_shard_writes_at_completion: 0
+async_shard_write_wait_wall_sec: 0.170
+```
+
+Correctness against the previous GPU async/staged output:
+
+```text
+same_columns: true
+aperture_flux_uJy_max_delta: 0.0
+aperture_flux_unc_uJy_max_delta: 0.0
+cwave_um_max_delta: 0.0
+cband_um_max_delta: 0.0
+flags_summary_max_delta: 0.0
+aperture_status_code_max_delta: 0.0
+```
+
+Correctness against CPU aperture baseline:
+
+```text
+matched_ok_measurements: 2,766
+flux_p95_abs_delta_uJy: 0.0253
+flux_max_relative_delta_pct: 0.603
+```
+
+Notes:
+
+- Per-frame `table_wall_sec` after the first frame drops from roughly
+  `0.011 sec` to mostly `0.002 sec` because cuDF construction moves to the
+  shard writer.
+- The first async shard write was slower internally (`0.395 sec`) because it now
+  includes batched table assembly, but most of that work overlapped with later
+  frame processing.
+- `plan-gpu-dispatch --batch-table-assembly` passes this mode through to every
+  generated persistent worker.

@@ -42,6 +42,7 @@ class PersistentWorkerConfig:
     status_interval_frames: int = 1
     local_cache_dir: Path | None = None
     async_shard_writes: bool = False
+    batch_table_assembly: bool = False
 
 
 @dataclass(frozen=True)
@@ -67,6 +68,17 @@ class FramePayload:
     staged_bytes: int
 
 
+@dataclass(frozen=True)
+class FrameMeasurement:
+    metadata: pd.DataFrame
+    columns: dict[str, object]
+    status: object
+    ok_count: int
+
+    def __len__(self) -> int:
+        return len(self.metadata)
+
+
 class PersistentGpuFrameWorker:
     def __init__(self, config: PersistentWorkerConfig):
         self.config = config
@@ -85,6 +97,8 @@ class PersistentGpuFrameWorker:
         status_path: Path | None = None,
     ) -> dict[str, Any]:
         started = time.perf_counter()
+        if self.config.write_combined_output and self.config.batch_table_assembly:
+            raise ValueError("--write-combined-output is not supported with --batch-table-assembly yet")
         output_dir.mkdir(parents=True, exist_ok=True)
         shards_dir = output_dir / "measurement_shards"
         shards_dir.mkdir(exist_ok=True)
@@ -123,6 +137,7 @@ class PersistentGpuFrameWorker:
             "backend": "persistent_warp_frame_kernel_plus_cudf_shards",
             "local_cache_dir": str(self.config.local_cache_dir) if self.config.local_cache_dir else None,
             "async_shard_writes": self.config.async_shard_writes,
+            "batch_table_assembly": self.config.batch_table_assembly,
             "frame_timings": [],
             "shards": [],
         }
@@ -150,12 +165,12 @@ class PersistentGpuFrameWorker:
                     continue
                 t0 = time.perf_counter()
                 try:
-                    gdf, frame_stats = self._measure_frame(frame, frame_targets, payload)
-                    rows = int(len(gdf))
+                    measurement, frame_stats = self._measure_frame(frame, frame_targets, payload)
+                    rows = int(len(measurement))
                     ok_count = int(frame_stats["ok_count"])
                     summary["measurement_rows"] += rows
                     summary["ok_measurement_rows"] += ok_count
-                    pending_gdfs.append(gdf)
+                    pending_gdfs.append(measurement)
                     shard_group.append(
                         {
                             "frame_group_id": frame_group_id,
@@ -165,7 +180,7 @@ class PersistentGpuFrameWorker:
                         }
                     )
                     if self.config.write_combined_output:
-                        shard_frames.append(gdf)
+                        shard_frames.append(measurement)
                     write_wall = 0.0
                     shard_submit_wall = 0.0
                     async_write_queued = False
@@ -254,8 +269,6 @@ class PersistentGpuFrameWorker:
         return summary
 
     def _measure_frame(self, frame: dict[str, Any], targets: pd.DataFrame, payload: FramePayload):
-        import cudf
-
         frame_started = time.perf_counter()
         path = Path(str(frame["path"]))
         detector = int(frame["detector"])
@@ -293,41 +306,30 @@ class PersistentGpuFrameWorker:
         kernel_wall = time.perf_counter() - t_kernel
 
         t_table = time.perf_counter()
-        gdf = cudf.from_pandas(
-            selected_targets[
-                [
-                    "frame_group_id",
-                    "image_id",
-                    "catalog",
-                    "target_id",
-                    "source_id",
-                    "ra_deg",
-                    "dec_deg",
-                    "mag_primary",
-                    "mag_primary_band",
-                    "x_pix",
-                    "y_pix",
-                ]
-            ]
+        metadata = self._measurement_metadata(
+            frame=frame,
+            selected_targets=selected_targets,
+            selected_edge=selected_edge,
+            payload=payload,
+            calibration=calibration,
         )
-        gdf["fits_path"] = str(path)
-        gdf["local_fits_path"] = payload.read_path
-        gdf["edge_distance_pix"] = selected_edge
-        gdf["detector"] = detector
-        gdf["release"] = release
-        gdf["wavelength_source"] = "spectral_wcs_CWAVE_CBAND"
-        gdf["wavelength_calibration_file"] = calibration.wavelength_path
-        gdf["wavelength_calibration_collection"] = SPECTRAL_WCS_COLLECTION
-        gdf["sapm_file"] = calibration.sapm_path
-        for name, values in batch.columns.items():
-            gdf[name] = values
-        gdf["aperture_flux_unit"] = "uJy"
-        gdf["aperture_status_code"] = batch.status
-        gdf["aperture_status"] = "ok"
-        gdf.loc[gdf["aperture_status_code"] != 0, "aperture_status"] = "bad_background"
         ok_count = int((batch.status == 0).sum().get())
+        if self.config.batch_table_assembly:
+            measurement = FrameMeasurement(
+                metadata=metadata,
+                columns=batch.columns,
+                status=batch.status,
+                ok_count=ok_count,
+            )
+        else:
+            measurement = self._measurement_to_cudf(
+                metadata=metadata,
+                columns=batch.columns,
+                status=batch.status,
+                device=self.config.device,
+            )
         table_wall = time.perf_counter() - t_table
-        return gdf, {
+        return measurement, {
             "ok_count": ok_count,
             "selected_target_count": int(len(selected_targets)),
             "fits_read_wall_sec": payload.fits_read_wall_sec,
@@ -338,6 +340,64 @@ class PersistentGpuFrameWorker:
             "table_wall_sec": table_wall,
             "frame_compute_wall_sec": time.perf_counter() - frame_started,
         }
+
+    @staticmethod
+    def _measurement_metadata(
+        *,
+        frame: dict[str, Any],
+        selected_targets: pd.DataFrame,
+        selected_edge: np.ndarray,
+        payload: FramePayload,
+        calibration: ResidentCalibration,
+    ) -> pd.DataFrame:
+        detector = int(frame["detector"])
+        release = str(frame.get("release") or "qr2")
+        metadata = selected_targets[
+            [
+                "frame_group_id",
+                "image_id",
+                "catalog",
+                "target_id",
+                "source_id",
+                "ra_deg",
+                "dec_deg",
+                "mag_primary",
+                "mag_primary_band",
+                "x_pix",
+                "y_pix",
+            ]
+        ].copy()
+        metadata["fits_path"] = str(frame["path"])
+        metadata["local_fits_path"] = payload.read_path
+        metadata["edge_distance_pix"] = selected_edge.astype(np.float32, copy=False)
+        metadata["detector"] = detector
+        metadata["release"] = release
+        metadata["wavelength_source"] = "spectral_wcs_CWAVE_CBAND"
+        metadata["wavelength_calibration_file"] = calibration.wavelength_path
+        metadata["wavelength_calibration_collection"] = SPECTRAL_WCS_COLLECTION
+        metadata["sapm_file"] = calibration.sapm_path
+        return metadata
+
+    @staticmethod
+    def _measurement_to_cudf(
+        *,
+        metadata: pd.DataFrame,
+        columns: dict[str, object],
+        status: object,
+        device: str,
+    ):
+        import cudf
+        import cupy as cp
+
+        cp.cuda.Device(_device_index(device)).use()
+        gdf = cudf.from_pandas(metadata)
+        for name, values in columns.items():
+            gdf[name] = values
+        gdf["aperture_flux_unit"] = "uJy"
+        gdf["aperture_status_code"] = status
+        gdf["aperture_status"] = "ok"
+        gdf.loc[gdf["aperture_status_code"] != 0, "aperture_status"] = "bad_background"
+        return gdf
 
     def _get_calibration(self, *, release: str, detector: int) -> ResidentCalibration:
         key = (release, int(detector))
@@ -475,7 +535,7 @@ class PersistentGpuFrameWorker:
 
     @staticmethod
     def _write_shard_batch(
-        gdfs: list[Any],
+        measurements: list[Any],
         shard_group: list[dict[str, Any]],
         shards_dir: Path,
         run_id: str,
@@ -491,7 +551,7 @@ class PersistentGpuFrameWorker:
             shard_group=shard_group,
         )
         tw = time.perf_counter()
-        out = gdfs[0] if len(gdfs) == 1 else cudf.concat(gdfs, ignore_index=True)
+        out = PersistentGpuFrameWorker._assemble_shard_table(measurements, device=device)
         out.to_parquet(shard_path, index=False)
         return {
             "path": str(shard_path),
@@ -502,6 +562,31 @@ class PersistentGpuFrameWorker:
             "frame_count": len(shard_group),
             "write_wall_sec": time.perf_counter() - tw,
         }
+
+    @staticmethod
+    def _assemble_shard_table(measurements: list[Any], *, device: str):
+        import cudf
+        import cupy as cp
+
+        cp.cuda.Device(_device_index(device)).use()
+        if not measurements:
+            return cudf.DataFrame()
+        first = measurements[0]
+        if not isinstance(first, FrameMeasurement):
+            return measurements[0] if len(measurements) == 1 else cudf.concat(measurements, ignore_index=True)
+
+        metadata = pd.concat([measurement.metadata for measurement in measurements], ignore_index=True)
+        columns = {
+            name: cp.concatenate([measurement.columns[name] for measurement in measurements])
+            for name in first.columns
+        }
+        status = cp.concatenate([measurement.status for measurement in measurements])
+        return PersistentGpuFrameWorker._measurement_to_cudf(
+            metadata=metadata,
+            columns=columns,
+            status=status,
+            device=device,
+        )
 
     @staticmethod
     def _collect_shard_writes(pending_writes: list[Future[dict[str, Any]]], summary: dict[str, Any]) -> float:

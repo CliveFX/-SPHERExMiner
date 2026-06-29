@@ -129,6 +129,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Queue parquet shard writes on a background thread and wait for them before completion.",
     )
+    persistent.add_argument(
+        "--batch-table-assembly",
+        action="store_true",
+        help="Defer cuDF measurement table assembly until shard flush instead of once per frame.",
+    )
     persistent.add_argument("--shard-batch-frames", type=int, default=1)
     persistent.add_argument("--prefetch-frames", type=int, default=0)
     persistent.add_argument("--status-interval-frames", type=int, default=1)
@@ -160,6 +165,11 @@ def main(argv: list[str] | None = None) -> int:
         "--async-shard-writes",
         action="store_true",
         help="Pass --async-shard-writes to every persistent worker.",
+    )
+    dispatch.add_argument(
+        "--batch-table-assembly",
+        action="store_true",
+        help="Pass --batch-table-assembly to every persistent worker.",
     )
     dispatch.add_argument("--shard-batch-frames", type=int, default=1)
     dispatch.add_argument("--prefetch-frames", type=int, default=0)
@@ -360,6 +370,7 @@ def cmd_run_persistent_gpu_worker(args: argparse.Namespace) -> int:
             write_combined_output=args.write_combined_output,
             rmm_pool=not args.no_rmm_pool,
             async_shard_writes=args.async_shard_writes,
+            batch_table_assembly=args.batch_table_assembly,
             shard_batch_frames=args.shard_batch_frames,
             prefetch_frames=args.prefetch_frames,
             status_interval_frames=args.status_interval_frames,
@@ -386,6 +397,7 @@ def cmd_plan_gpu_dispatch(args: argparse.Namespace) -> int:
             limit_frames=args.limit_frames,
             executable=args.executable,
             async_shard_writes=args.async_shard_writes,
+            batch_table_assembly=args.batch_table_assembly,
             shard_batch_frames=args.shard_batch_frames,
             prefetch_frames=args.prefetch_frames,
             status_interval_frames=args.status_interval_frames,
