@@ -34,6 +34,7 @@ The persistent worker uses this frame-level GPU path:
 
 ```text
 read FITS IMAGE/VARIANCE/FLAGS
+optionally stage FITS onto local SSD/NVMe
 load/reuse resident SAPM + CWAVE + CBAND maps on GPU
 launch one Warp kernel per frame
 emit device columns through DLPack to CuPy/cuDF
@@ -67,6 +68,7 @@ cd luxquarry_allsky_engine
   --shard-batch-frames 5 \
   --prefetch-frames 2 \
   --status-interval-frames 25 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
   --limit-frames 10
 ```
 
@@ -116,6 +118,11 @@ flux p95 abs delta vs CPU: 0.025 uJy
 The worker also supports `--status-interval-frames N` to avoid rewriting the
 status JSON every frame on large runs. Use a small number for interactive local
 smokes and a larger value for all-sky batch jobs.
+
+The worker supports `--local-cache-dir PATH` for local FITS staging. A cache hit
+does not copy the FITS again; it validates by file size and then reads from the
+local path. Measurement rows retain both `fits_path` and `local_fits_path` so
+the original source and staged read path are explicit.
 
 Three-worker local dispatch over three GPUs:
 

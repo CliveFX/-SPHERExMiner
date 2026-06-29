@@ -120,7 +120,8 @@ Implemented stages:
   --limit-frames 10 \
   --device cuda:0 \
   --shard-batch-frames 5 \
-  --prefetch-frames 2
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke
 
 # Write a multi-GPU dispatch plan. The generated shell script launches one
 # persistent worker per device; the JSON is the same contract an EKS job
@@ -134,6 +135,7 @@ Implemented stages:
   --devices cuda:0,cuda:1,cuda:2 \
   --shard-batch-frames 5 \
   --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
   --limit-frames 10
 ```
 
@@ -162,6 +164,12 @@ frame_ordinal % worker_count == worker_index
 
 That makes local multi-GPU dispatch and future Kubernetes dispatch the same
 basic model.
+
+Workers can also stage FITS inputs onto local SSD/NVMe with
+`--local-cache-dir`. On a 10-frame smoke, a warm staged cache reduced the
+persistent worker from about 1.15 sec to about 0.94 sec while preserving the
+same CPU-baseline correctness. First-touch staging is mainly a way to populate
+the local cache; repeated passes and long worker queues are where it should pay.
 
 ## EKS Target
 

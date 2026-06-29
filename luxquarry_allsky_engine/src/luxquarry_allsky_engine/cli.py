@@ -127,6 +127,11 @@ def main(argv: list[str] | None = None) -> int:
     persistent.add_argument("--shard-batch-frames", type=int, default=1)
     persistent.add_argument("--prefetch-frames", type=int, default=0)
     persistent.add_argument("--status-interval-frames", type=int, default=1)
+    persistent.add_argument(
+        "--local-cache-dir",
+        type=Path,
+        help="Optional local SSD/NVMe directory used to stage FITS files before reading them.",
+    )
     persistent.add_argument("--aperture-radius-pix", type=float, default=2.0)
     persistent.add_argument("--annulus-inner-pix", type=float, default=4.0)
     persistent.add_argument("--annulus-outer-pix", type=float, default=6.0)
@@ -149,6 +154,11 @@ def main(argv: list[str] | None = None) -> int:
     dispatch.add_argument("--shard-batch-frames", type=int, default=1)
     dispatch.add_argument("--prefetch-frames", type=int, default=0)
     dispatch.add_argument("--status-interval-frames", type=int, default=1)
+    dispatch.add_argument(
+        "--local-cache-dir",
+        type=Path,
+        help="Optional local SSD/NVMe directory passed to every persistent worker for FITS staging.",
+    )
     dispatch.add_argument("--limit-frames", type=int)
     dispatch.add_argument("--executable", default=".venv/bin/luxquarry-allsky")
     dispatch.set_defaults(func=cmd_plan_gpu_dispatch)
@@ -342,6 +352,7 @@ def cmd_run_persistent_gpu_worker(args: argparse.Namespace) -> int:
             shard_batch_frames=args.shard_batch_frames,
             prefetch_frames=args.prefetch_frames,
             status_interval_frames=args.status_interval_frames,
+            local_cache_dir=args.local_cache_dir,
         ),
         limit_frames=args.limit_frames,
         status_path=args.status_path,
@@ -366,6 +377,7 @@ def cmd_plan_gpu_dispatch(args: argparse.Namespace) -> int:
             shard_batch_frames=args.shard_batch_frames,
             prefetch_frames=args.prefetch_frames,
             status_interval_frames=args.status_interval_frames,
+            local_cache_dir=args.local_cache_dir,
         )
     )
     write_dispatch_plan(plan, args.plan_out)

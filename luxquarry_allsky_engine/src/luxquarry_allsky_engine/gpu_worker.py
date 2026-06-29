@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import os
+import shutil
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -37,6 +40,7 @@ class PersistentWorkerConfig:
     shard_batch_frames: int = 1
     prefetch_frames: int = 0
     status_interval_frames: int = 1
+    local_cache_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -51,11 +55,15 @@ class ResidentCalibration:
 
 @dataclass(frozen=True)
 class FramePayload:
+    source_path: str
+    read_path: str
     image: np.ndarray
     variance: np.ndarray | None
     flags: np.ndarray | None
     unit_scale: float
+    staging_wall_sec: float
     fits_read_wall_sec: float
+    staged_bytes: int
 
 
 class PersistentGpuFrameWorker:
@@ -112,6 +120,7 @@ class PersistentGpuFrameWorker:
             "failed_frames": 0,
             "calibration_upload_count": 0,
             "backend": "persistent_warp_frame_kernel_plus_cudf_shards",
+            "local_cache_dir": str(self.config.local_cache_dir) if self.config.local_cache_dir else None,
             "frame_timings": [],
             "shards": [],
         }
@@ -270,6 +279,7 @@ class PersistentGpuFrameWorker:
             ]
         )
         gdf["fits_path"] = str(path)
+        gdf["local_fits_path"] = payload.read_path
         gdf["edge_distance_pix"] = selected_edge
         gdf["detector"] = detector
         gdf["release"] = release
@@ -289,6 +299,8 @@ class PersistentGpuFrameWorker:
             "ok_count": ok_count,
             "selected_target_count": int(len(selected_targets)),
             "fits_read_wall_sec": payload.fits_read_wall_sec,
+            "staging_wall_sec": payload.staging_wall_sec,
+            "staged_bytes": payload.staged_bytes,
             "selection_wall_sec": selection_wall,
             "kernel_wall_sec": kernel_wall,
             "table_wall_sec": table_wall,
@@ -335,22 +347,50 @@ class PersistentGpuFrameWorker:
                 yield frame, future.result()
 
     @staticmethod
-    def _read_frame_payload(frame: dict[str, Any]) -> FramePayload:
-        t_read = time.perf_counter()
-        path = Path(str(frame["path"]))
+    def _read_fits_arrays(path: Path) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, float]:
         with fits.open(path, memmap=True) as hdul:
             image_hdu = hdul["IMAGE"]
             image = np.asarray(image_hdu.data, dtype=np.float32)
             variance = np.asarray(hdul["VARIANCE"].data, dtype=np.float32) if "VARIANCE" in hdul else None
             flags = np.asarray(hdul["FLAGS"].data, dtype=np.uint32) if "FLAGS" in hdul else None
             unit_scale = image_to_ujy_arcsec2_scale(image_hdu.header)
+        return image, variance, flags, unit_scale
+
+    def _read_frame_payload(self, frame: dict[str, Any]) -> FramePayload:
+        source_path = Path(str(frame["path"]))
+        staging_wall = 0.0
+        staged_bytes = 0
+        read_path = source_path
+        if self.config.local_cache_dir is not None:
+            t_stage = time.perf_counter()
+            read_path, staged_bytes = self._stage_fits(source_path, self.config.local_cache_dir)
+            staging_wall = time.perf_counter() - t_stage
+        t_read = time.perf_counter()
+        image, variance, flags, unit_scale = self._read_fits_arrays(read_path)
         return FramePayload(
+            source_path=str(source_path),
+            read_path=str(read_path),
             image=image,
             variance=variance,
             flags=flags,
             unit_scale=unit_scale,
+            staging_wall_sec=staging_wall,
             fits_read_wall_sec=time.perf_counter() - t_read,
+            staged_bytes=staged_bytes,
         )
+
+    @staticmethod
+    def _stage_fits(source_path: Path, cache_dir: Path) -> tuple[Path, int]:
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        size = source_path.stat().st_size
+        digest = hashlib.sha1(str(source_path.resolve()).encode("utf-8")).hexdigest()[:16]
+        dest = cache_dir / f"{digest}_{source_path.name}"
+        if dest.exists() and dest.stat().st_size == size:
+            return dest, 0
+        tmp = cache_dir / f".{source_path.name}.{os.getpid()}.tmp"
+        shutil.copyfile(source_path, tmp)
+        tmp.replace(dest)
+        return dest, int(size)
 
     def _flush_shard_batch(
         self,

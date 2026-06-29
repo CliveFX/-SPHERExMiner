@@ -346,3 +346,65 @@ Notes:
 - For tiny runs, launching three Python/RAPIDS processes costs more than it
   saves. This mode is for long queues where setup is amortized and GPUs stay
   busy.
+
+## 2026-06-29: Local FITS Staging Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-persistent-gpu-worker \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/persistent_gpu_worker_smoke10_stage_hash_warm \
+  --run-id persistent_smoke10_stage_hash_warm \
+  --limit-frames 10 \
+  --device cuda:0 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 2 \
+  --status-interval-frames 5 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke
+```
+
+First-touch staged run:
+
+```text
+total_wall_sec: 1.289
+staged_bytes: 716.4 MB
+staging_wall_sec_sum: 1.306
+fits_read_wall_sec_sum: 0.160
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+```
+
+Warm local-cache run:
+
+```text
+total_wall_sec: 0.935
+staged_bytes: 0
+staging_wall_sec_sum: 0.033
+fits_read_wall_sec_sum: 0.145
+kernel_wall_sec_sum: 0.235
+write_wall_sec_sum: 0.064
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+```
+
+Correctness against CPU aperture baseline on the warm run:
+
+```text
+matched_ok_measurements: 2,766
+flux_median_abs_delta_uJy: 0.0022
+flux_p95_abs_delta_uJy: 0.0253
+flux_max_relative_delta_pct: 0.603
+```
+
+Notes:
+
+- `--local-cache-dir` is additive; omitting it preserves the direct-FITS read
+  path.
+- Each measurement row stores the original `fits_path` and the actual
+  `local_fits_path` used for the read.
+- The first staged pass is a cache population pass. Warm cache behavior is the
+  relevant model for repeated mining/scoring experiments and for nodes with
+  local NVMe.
