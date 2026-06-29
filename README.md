@@ -84,6 +84,11 @@ SPHEREx Level 2 image/detector product
 See [spherex_field_miner_codex_spec.md](spherex_field_miner_codex_spec.md) for
 the original field-first design target.
 
+The next-generation frame-first/EKS design is being planned separately under
+[luxquarry_allsky_engine](luxquarry_allsky_engine/). That workspace is intended
+to keep the current target-centered miner stable as the correctness reference
+while the new all-sky engine explores RAPIDS/CUDA-heavy, frame-group processing.
+
 ## What The System Does Now
 
 - Builds and queries a local Gaia DR3 lite Parquet/DuckDB index.
