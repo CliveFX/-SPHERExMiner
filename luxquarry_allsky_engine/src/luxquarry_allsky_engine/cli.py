@@ -225,6 +225,7 @@ def main(argv: list[str] | None = None) -> int:
     local_dispatch.add_argument("--allow-incomplete-finalize", action="store_true")
     local_dispatch.add_argument("--campaign-id")
     local_dispatch.add_argument("--campaign-contract-out", type=Path)
+    local_dispatch.add_argument("--resume", action="store_true", help="Skip workers with complete run_summary.json.")
     local_dispatch.set_defaults(func=cmd_run_local_dispatch)
 
     collect_dispatch = sub.add_parser(
@@ -608,6 +609,7 @@ def cmd_run_local_dispatch(args: argparse.Namespace) -> int:
             allow_incomplete_finalize=args.allow_incomplete_finalize,
             campaign_id=args.campaign_id,
             campaign_contract_out=args.campaign_contract_out,
+            resume=args.resume,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

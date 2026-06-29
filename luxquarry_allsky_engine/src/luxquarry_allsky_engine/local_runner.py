@@ -37,6 +37,7 @@ class LocalDispatchRunConfig:
     allow_incomplete_finalize: bool = False
     campaign_id: str | None = None
     campaign_contract_out: Path | None = None
+    resume: bool = False
 
 
 def run_local_dispatch(config: LocalDispatchRunConfig) -> dict[str, Any]:
@@ -71,7 +72,7 @@ def run_local_dispatch(config: LocalDispatchRunConfig) -> dict[str, Any]:
     plan_wall = time.perf_counter() - t_plan
 
     t_workers = time.perf_counter()
-    worker_results = _run_workers(plan, logs_dir)
+    worker_results = _run_workers(plan, logs_dir, resume=config.resume)
     worker_wall = time.perf_counter() - t_workers
     failed_workers = [row for row in worker_results if row["returncode"] != 0]
     if failed_workers and not config.allow_incomplete_finalize:
@@ -119,9 +120,15 @@ def run_local_dispatch(config: LocalDispatchRunConfig) -> dict[str, Any]:
     return summary
 
 
-def _run_workers(plan: dict[str, Any], logs_dir: Path) -> list[dict[str, Any]]:
+def _run_workers(plan: dict[str, Any], logs_dir: Path, *, resume: bool) -> list[dict[str, Any]]:
     running: list[tuple[dict[str, Any], subprocess.Popen[bytes], Any, Any, float]] = []
+    results: list[dict[str, Any]] = []
     for worker in plan.get("workers") or []:
+        if resume:
+            skipped = _completed_worker_result(worker, logs_dir)
+            if skipped is not None:
+                results.append(skipped)
+                continue
         worker_id = str(worker["worker_id"])
         stdout_path = logs_dir / f"{worker_id}.stdout.log"
         stderr_path = logs_dir / f"{worker_id}.stderr.log"
@@ -131,7 +138,6 @@ def _run_workers(plan: dict[str, Any], logs_dir: Path) -> list[dict[str, Any]]:
         proc = subprocess.Popen(list(worker["argv"]), stdout=stdout_file, stderr=stderr_file)
         running.append((worker, proc, stdout_file, stderr_file, started))
 
-    results: list[dict[str, Any]] = []
     for worker, proc, stdout_file, stderr_file, started in running:
         returncode = proc.wait()
         stdout_file.close()
@@ -143,6 +149,7 @@ def _run_workers(plan: dict[str, Any], logs_dir: Path) -> list[dict[str, Any]]:
                 "worker_index": worker.get("worker_index"),
                 "device": worker.get("device"),
                 "returncode": int(returncode),
+                "skipped": False,
                 "wall_sec": time.perf_counter() - started,
                 "stdout_log": str(logs_dir / f"{worker_id}.stdout.log"),
                 "stderr_log": str(logs_dir / f"{worker_id}.stderr.log"),
@@ -150,6 +157,35 @@ def _run_workers(plan: dict[str, Any], logs_dir: Path) -> list[dict[str, Any]]:
             }
         )
     return results
+
+
+def _completed_worker_result(worker: dict[str, Any], logs_dir: Path) -> dict[str, Any] | None:
+    worker_id = str(worker["worker_id"])
+    output_dir = Path(str(worker.get("output_dir") or ""))
+    summary_path = output_dir / "run_summary.json"
+    if not summary_path.exists():
+        return None
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not summary.get("completed_utc") or int(summary.get("failed_frames") or 0) != 0:
+        return None
+    return {
+        "worker_id": worker_id,
+        "worker_index": worker.get("worker_index"),
+        "device": worker.get("device"),
+        "returncode": 0,
+        "skipped": True,
+        "wall_sec": 0.0,
+        "stdout_log": str(logs_dir / f"{worker_id}.stdout.log"),
+        "stderr_log": str(logs_dir / f"{worker_id}.stderr.log"),
+        "argv": list(worker["argv"]),
+        "summary_path": str(summary_path),
+        "completed_frames": int(summary.get("completed_frames") or 0),
+        "measurement_rows": int(summary.get("measurement_rows") or 0),
+        "ok_measurement_rows": int(summary.get("ok_measurement_rows") or 0),
+    }
 
 
 def _summary(
@@ -174,7 +210,10 @@ def _summary(
         "plan_path": str(plan_path),
         "output_dir": str(config.output_dir),
         "devices": list(config.devices),
+        "resume": config.resume,
         "worker_count": int(plan.get("worker_count") or len(worker_results)),
+        "launched_worker_count": sum(1 for row in worker_results if not row.get("skipped")),
+        "skipped_worker_count": sum(1 for row in worker_results if row.get("skipped")),
         "materialize_worker_inputs": bool(plan.get("materialize_worker_inputs")),
         "plan_wall_sec": plan_wall,
         "worker_wall_sec": worker_wall,

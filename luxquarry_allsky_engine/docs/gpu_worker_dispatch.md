@@ -140,6 +140,24 @@ writes local_dispatch_summary.json
 It uses the same dispatch plan and worker argv as the shell/Kubernetes path, so
 local testing stays aligned with scale-out execution.
 
+Use `--resume` to skip workers that already have a complete `run_summary.json`:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-local-dispatch \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/local_dispatch_smoke2 \
+  --run-id local_dispatch_smoke2 \
+  --devices cuda:0 \
+  --limit-frames 2 \
+  --resume \
+  --finalize-device cuda:0
+```
+
+Resume mode still rebuilds the plan and finalizes the run, but complete workers
+are not relaunched. Missing, incomplete, or failed workers are launched normally.
+
 ## Kubernetes Job Manifest
 
 The same dispatch plan can be converted into Kubernetes Jobs:

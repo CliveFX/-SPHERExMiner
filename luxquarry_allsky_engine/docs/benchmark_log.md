@@ -974,3 +974,42 @@ Notes:
   preserving logs for failed-worker review.
 - The small smoke paid cold process and cuDF/groupby startup costs, especially
   in target-summary assembly. Longer frame queues should amortize this.
+
+Resume command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-local-dispatch \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/local_dispatch_smoke2 \
+  --run-id local_dispatch_smoke2 \
+  --devices cuda:0 \
+  --limit-frames 2 \
+  --shard-batch-frames 2 \
+  --prefetch-frames 1 \
+  --status-interval-frames 2 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --finalize-device cuda:0 \
+  --resume
+```
+
+Resume result:
+
+```text
+resume: true
+launched_worker_count: 0
+skipped_worker_count: 1
+worker_wall_sec: 0.0001
+finalize_wall_sec: 1.202
+total_wall_sec: 1.229
+measurement_rows: 573
+spectra_measurement_rows: 573
+target_count: 310
+```
+
+Resume mode skips workers only when their `run_summary.json` has
+`completed_utc` and zero failed frames. It still rebuilds the plan and reruns
+finalization so aggregate summaries, spectra, and campaign contracts are fresh.

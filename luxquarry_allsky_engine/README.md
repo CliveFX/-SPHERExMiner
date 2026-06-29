@@ -168,6 +168,18 @@ Implemented stages:
   --batch-table-assembly \
   --finalize-device cuda:0
 
+# Resume the same local run. Complete workers are skipped; missing or failed
+# workers are relaunched before finalization.
+.venv/bin/luxquarry-allsky run-local-dispatch \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/local_dispatch_smoke2 \
+  --run-id local_dispatch_smoke2 \
+  --devices cuda:0 \
+  --limit-frames 2 \
+  --resume \
+  --finalize-device cuda:0
+
 # After the generated shell finishes, collect worker summaries into one
 # aggregate summary and one measurement shard manifest.
 .venv/bin/luxquarry-allsky collect-dispatch-run \
