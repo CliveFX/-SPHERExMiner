@@ -26,6 +26,7 @@ from .manifest import build_frame_manifest
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
 from .spectra import SpectraAssemblyConfig, assemble_spectra_from_shards
+from .status import DispatchStatusConfig, write_dispatch_status_snapshot
 
 
 OPTIONAL_MODULES = [
@@ -235,6 +236,14 @@ def main(argv: list[str] | None = None) -> int:
     collect_dispatch.add_argument("--plan", type=Path, required=True)
     collect_dispatch.add_argument("--out", type=Path)
     collect_dispatch.set_defaults(func=cmd_collect_dispatch_run)
+
+    dispatch_status = sub.add_parser(
+        "dispatch-status",
+        help="Aggregate per-worker run_status.json files into one atomic status snapshot.",
+    )
+    dispatch_status.add_argument("--plan", type=Path, required=True)
+    dispatch_status.add_argument("--out", type=Path)
+    dispatch_status.set_defaults(func=cmd_dispatch_status)
 
     finalize_dispatch = sub.add_parser(
         "finalize-dispatch-run",
@@ -619,6 +628,17 @@ def cmd_run_local_dispatch(args: argparse.Namespace) -> int:
 def cmd_collect_dispatch_run(args: argparse.Namespace) -> int:
     summary = collect_dispatch_run(plan_path=args.plan, output_path=args.out)
     print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_dispatch_status(args: argparse.Namespace) -> int:
+    snapshot = write_dispatch_status_snapshot(
+        DispatchStatusConfig(
+            plan_path=args.plan,
+            output_path=args.out,
+        )
+    )
+    print(json.dumps(snapshot, indent=2, sort_keys=True))
     return 0
 
 

@@ -1013,3 +1013,51 @@ target_count: 310
 Resume mode skips workers only when their `run_summary.json` has
 `completed_utc` and zero failed frames. It still rebuilds the plan and reruns
 finalization so aggregate summaries, spectra, and campaign contracts are fresh.
+
+## 2026-06-29: Dispatch Status Snapshot Smoke
+
+Commands:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky dispatch-status \
+  --plan runs/local_dispatch_smoke2/dispatch_plan.json
+
+.venv/bin/luxquarry-allsky dispatch-status \
+  --plan runs/dispatch_smoke10_materialized2/dispatch_plan.json \
+  --out runs/dispatch_smoke10_materialized2/dispatch_status_custom.json
+```
+
+Local one-worker result:
+
+```text
+complete: true
+worker_count: 1
+complete_workers: 1
+completed_frames: 2
+frame_count: 2
+measurement_rows: 573
+ok_measurement_rows: 572
+snapshot_wall_sec: 0.0003
+```
+
+Materialized three-worker result:
+
+```text
+complete: true
+worker_count: 3
+complete_workers: 3
+completed_frames: 10
+frame_count: 10
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+snapshot_wall_sec: 0.0006
+```
+
+Notes:
+
+- The snapshot reads per-worker `run_status.json` first and falls back to
+  `run_summary.json`.
+- It writes atomically through a temporary file.
+- This is the intended low-overhead dashboard/control-plane status source. It
+  does not read measurement shards or parquet data.

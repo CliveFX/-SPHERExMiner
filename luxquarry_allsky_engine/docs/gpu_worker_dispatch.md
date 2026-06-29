@@ -158,6 +158,41 @@ cd luxquarry_allsky_engine
 Resume mode still rebuilds the plan and finalizes the run, but complete workers
 are not relaunched. Missing, incomplete, or failed workers are launched normally.
 
+## Status Snapshots
+
+Workers atomically rewrite their own `run_status.json`. To avoid dashboard code
+scanning every worker directory, write one aggregate snapshot:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky dispatch-status \
+  --plan runs/local_dispatch_smoke2/dispatch_plan.json
+```
+
+This writes `dispatch_status.json` next to the dispatch plan unless `--out` is
+provided. It reads only small JSON files and writes via
+`dispatch_status.json.tmp -> dispatch_status.json`.
+
+Snapshot fields include:
+
+```text
+worker_count
+active_workers
+complete_workers
+missing_workers
+errored_workers
+completed_frames
+frame_count
+progress_fraction
+measurement_rows
+ok_measurement_rows
+queued_shard_writes
+workers[]
+```
+
+The command is safe to run every few hundred milliseconds from a dashboard or
+control-plane loop; it does not touch measurement shards or parquet data.
+
 ## Kubernetes Job Manifest
 
 The same dispatch plan can be converted into Kubernetes Jobs:

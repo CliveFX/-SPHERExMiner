@@ -180,6 +180,11 @@ Implemented stages:
   --resume \
   --finalize-device cuda:0
 
+# Write one cheap aggregate status JSON for dashboards/control scripts. This
+# reads per-worker run_status.json files and atomically rewrites dispatch_status.json.
+.venv/bin/luxquarry-allsky dispatch-status \
+  --plan runs/local_dispatch_smoke2/dispatch_plan.json
+
 # After the generated shell finishes, collect worker summaries into one
 # aggregate summary and one measurement shard manifest.
 .venv/bin/luxquarry-allsky collect-dispatch-run \
