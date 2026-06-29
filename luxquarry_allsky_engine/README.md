@@ -151,6 +151,23 @@ Implemented stages:
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --limit-frames 10
 
+# Run the same local flow in one command: plan, launch persistent workers,
+# collect shards, assemble spectra, and write the campaign contract.
+.venv/bin/luxquarry-allsky run-local-dispatch \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/local_dispatch_smoke2 \
+  --run-id local_dispatch_smoke2 \
+  --devices cuda:0 \
+  --limit-frames 2 \
+  --shard-batch-frames 2 \
+  --prefetch-frames 1 \
+  --status-interval-frames 2 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --finalize-device cuda:0
+
 # After the generated shell finishes, collect worker summaries into one
 # aggregate summary and one measurement shard manifest.
 .venv/bin/luxquarry-allsky collect-dispatch-run \

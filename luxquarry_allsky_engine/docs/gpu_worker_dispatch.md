@@ -102,6 +102,44 @@ records the original logical worker index for aggregation. This is the preferred
 shape for large multi-node runs where repeatedly reading the full projected
 target parquet would waste startup I/O.
 
+## Local One-Command Runner
+
+For workstation runs, use `run-local-dispatch` to execute the same contract
+without manually invoking the generated shell:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-local-dispatch \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/local_dispatch_smoke2 \
+  --run-id local_dispatch_smoke2 \
+  --devices cuda:0 \
+  --limit-frames 2 \
+  --shard-batch-frames 2 \
+  --prefetch-frames 1 \
+  --status-interval-frames 2 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --finalize-device cuda:0
+```
+
+This command:
+
+```text
+builds dispatch_plan.json
+materializes worker inputs by default
+launches one persistent worker process per planned worker
+captures worker stdout/stderr under worker_logs/
+waits for all workers
+runs finalize-dispatch-run
+writes local_dispatch_summary.json
+```
+
+It uses the same dispatch plan and worker argv as the shell/Kubernetes path, so
+local testing stays aligned with scale-out execution.
+
 ## Kubernetes Job Manifest
 
 The same dispatch plan can be converted into Kubernetes Jobs:

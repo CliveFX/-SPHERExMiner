@@ -21,6 +21,7 @@ from .kubernetes import (
     write_kubernetes_jobs,
     write_kubernetes_postprocess_job,
 )
+from .local_runner import LocalDispatchRunConfig, run_local_dispatch
 from .manifest import build_frame_manifest
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
@@ -196,6 +197,35 @@ def main(argv: list[str] | None = None) -> int:
     dispatch.add_argument("--limit-frames", type=int)
     dispatch.add_argument("--executable", default=".venv/bin/luxquarry-allsky")
     dispatch.set_defaults(func=cmd_plan_gpu_dispatch)
+
+    local_dispatch = sub.add_parser(
+        "run-local-dispatch",
+        help="Plan, launch local persistent GPU workers, and finalize the dispatch.",
+    )
+    local_dispatch.add_argument("--manifest", type=Path, required=True)
+    local_dispatch.add_argument("--projected-targets", type=Path, required=True)
+    local_dispatch.add_argument("--out-dir", type=Path, required=True)
+    local_dispatch.add_argument("--run-id", required=True)
+    local_dispatch.add_argument("--cache-root", type=Path, default=Path("/mnt/niroseti/spherex_cache"))
+    local_dispatch.add_argument("--devices", default="cuda:0")
+    local_dispatch.add_argument("--workers-per-device", type=int, default=1)
+    local_dispatch.add_argument("--async-shard-writes", action="store_true")
+    local_dispatch.add_argument("--batch-table-assembly", action="store_true")
+    local_dispatch.add_argument("--no-materialize-worker-inputs", action="store_true")
+    local_dispatch.add_argument("--shard-batch-frames", type=int, default=1)
+    local_dispatch.add_argument("--prefetch-frames", type=int, default=0)
+    local_dispatch.add_argument("--status-interval-frames", type=int, default=1)
+    local_dispatch.add_argument("--local-cache-dir", type=Path)
+    local_dispatch.add_argument("--limit-frames", type=int)
+    local_dispatch.add_argument("--executable")
+    local_dispatch.add_argument("--finalize-device", default="cuda:0")
+    local_dispatch.add_argument("--spectra-out-dir", type=Path)
+    local_dispatch.add_argument("--spectra-run-id")
+    local_dispatch.add_argument("--only-ok", action="store_true")
+    local_dispatch.add_argument("--allow-incomplete-finalize", action="store_true")
+    local_dispatch.add_argument("--campaign-id")
+    local_dispatch.add_argument("--campaign-contract-out", type=Path)
+    local_dispatch.set_defaults(func=cmd_run_local_dispatch)
 
     collect_dispatch = sub.add_parser(
         "collect-dispatch-run",
@@ -547,6 +577,40 @@ def cmd_plan_gpu_dispatch(args: argparse.Namespace) -> int:
             sort_keys=True,
         )
     )
+    return 0
+
+
+def cmd_run_local_dispatch(args: argparse.Namespace) -> int:
+    devices = tuple(part.strip() for part in args.devices.split(",") if part.strip())
+    executable = args.executable or sys.argv[0]
+    summary = run_local_dispatch(
+        LocalDispatchRunConfig(
+            manifest_path=args.manifest,
+            projected_targets_path=args.projected_targets,
+            output_dir=args.out_dir,
+            run_id=args.run_id,
+            devices=devices,
+            workers_per_device=args.workers_per_device,
+            cache_root=args.cache_root,
+            limit_frames=args.limit_frames,
+            executable=executable,
+            shard_batch_frames=args.shard_batch_frames,
+            prefetch_frames=args.prefetch_frames,
+            status_interval_frames=args.status_interval_frames,
+            local_cache_dir=args.local_cache_dir,
+            async_shard_writes=args.async_shard_writes,
+            batch_table_assembly=args.batch_table_assembly,
+            materialize_worker_inputs=not args.no_materialize_worker_inputs,
+            finalize_device=args.finalize_device,
+            spectra_out_dir=args.spectra_out_dir,
+            spectra_run_id=args.spectra_run_id,
+            only_ok=args.only_ok,
+            allow_incomplete_finalize=args.allow_incomplete_finalize,
+            campaign_id=args.campaign_id,
+            campaign_contract_out=args.campaign_contract_out,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
 

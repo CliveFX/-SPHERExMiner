@@ -901,3 +901,76 @@ Notes:
 - The generated postprocess Job assumes paths are relative to the configured
   container working directory. With `/workspace/luxquarry_allsky_engine`, use
   `runs/...` paths.
+
+## 2026-06-29: Local Dispatch Runner Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-local-dispatch \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/local_dispatch_smoke2 \
+  --run-id local_dispatch_smoke2 \
+  --devices cuda:0 \
+  --limit-frames 2 \
+  --shard-batch-frames 2 \
+  --prefetch-frames 1 \
+  --status-interval-frames 2 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --finalize-device cuda:0
+```
+
+Result:
+
+```text
+backend: luxquarry_local_dispatch_runner
+status: complete
+devices: cuda:0
+worker_count: 1
+failed_worker_count: 0
+materialize_worker_inputs: true
+plan_wall_sec: 0.027
+worker_wall_sec: 2.985
+finalize_wall_sec: 7.011
+total_wall_sec: 10.023
+measurement_rows: 573
+spectra_measurement_rows: 573
+target_count: 310
+```
+
+Worker aggregate:
+
+```text
+completed_frames: 2
+worker_summary_wall_sec: 0.429
+measurement_rows: 573
+ok_measurement_rows: 572
+shard_count: 1
+missing_shards: 0
+```
+
+Outputs:
+
+```text
+runs/local_dispatch_smoke2/dispatch_plan.json
+runs/local_dispatch_smoke2/worker_inputs/w0000/*.parquet
+runs/local_dispatch_smoke2/worker_logs/*.log
+runs/local_dispatch_smoke2/aggregate_summary.json
+runs/local_dispatch_smoke2/measurement_shard_manifest.parquet
+runs/local_dispatch_smoke2/spectra/*.parquet
+runs/local_dispatch_smoke2/campaign_contract.json
+runs/local_dispatch_smoke2/local_dispatch_summary.json
+```
+
+Notes:
+
+- The local runner launches the exact worker argv stored in the dispatch plan.
+  That keeps local testing aligned with the shell and Kubernetes paths.
+- Worker stdout/stderr are redirected to files, avoiding pipe backpressure and
+  preserving logs for failed-worker review.
+- The small smoke paid cold process and cuDF/groupby startup costs, especially
+  in target-summary assembly. Longer frame queues should amortize this.
