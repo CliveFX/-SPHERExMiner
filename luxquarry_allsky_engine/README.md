@@ -66,6 +66,14 @@ cd luxquarry_allsky_engine
 .venv/bin/luxquarry-allsky --help
 ```
 
+The worker container lives in `container/`:
+
+```bash
+cd luxquarry_allsky_engine
+docker build -f container/Dockerfile -t luxquarry-allsky:local .
+docker run --rm --gpus all luxquarry-allsky:local env-probe
+```
+
 Implemented stages:
 
 ```bash
@@ -317,6 +325,9 @@ luxquarry_allsky_engine/
       catalog.py
       projection.py
       kubernetes.py
+  container/
+    Dockerfile
+    README.md
   benchmarks/
     # fixed benchmark manifests and scripts
   k8s/

@@ -25,7 +25,7 @@ GPUs:
 
 The isolated `luxquarry_allsky_engine/.venv` started intentionally blank. The
 first probe confirmed GPU visibility through `nvidia-smi`, but no science or
-RAPIDS packages were installed.
+RAPIDS packages were installed at that point.
 
 The initial implementation then installed the minimal CPU/reference stack needed
 for manifest building:
@@ -37,8 +37,9 @@ pyarrow
 astropy
 ```
 
-RAPIDS remains intentionally uninstalled until we choose a conda/container CUDA
-setup.
+The prototype has since moved to a dedicated all-sky venv with RAPIDS/cuDF,
+CuPy, Dask-cuDF, RMM, KvikIO, Warp, Astropy, DuckDB, and PyArrow installed. Do
+not move those dependencies into the original miner venv.
 
 The existing miner `.venv` has core science packages like NumPy, Pandas,
 PyArrow, Astropy, and NVIDIA Warp, but not RAPIDS/cuDF.
@@ -53,6 +54,9 @@ Prefer one of these for RAPIDS work:
    compatibility.
 
 Do not install heavy CUDA/RAPIDS packages into the current miner `.venv`.
+
+The current local development path is option 3. The cluster/EKS path should use
+the checked-in container under `luxquarry_allsky_engine/container/`.
 
 ## RAPIDS Notes
 
@@ -89,6 +93,25 @@ cd luxquarry_allsky_engine
 
 Generated run artifacts are intentionally ignored by git.
 
+## Container Path
+
+Build from the engine directory:
+
+```bash
+cd luxquarry_allsky_engine
+docker build -f container/Dockerfile -t luxquarry-allsky:local .
+```
+
+Smoke check:
+
+```bash
+docker run --rm --gpus all luxquarry-allsky:local env-probe
+```
+
+The image uses `luxquarry-allsky` as its entrypoint. Kubernetes Jobs generated
+by `write-k8s-jobs` should use the same executable and set the working
+directory to `/workspace/luxquarry_allsky_engine`.
+
 ## First Manifest Smoke
 
 Command:
@@ -123,4 +146,3 @@ The manifest correctly parsed:
 - frame-in-exposure
 - image dimensions
 - approximate WCS footprint
-

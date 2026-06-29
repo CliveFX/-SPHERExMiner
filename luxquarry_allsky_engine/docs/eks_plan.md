@@ -122,10 +122,13 @@ These numbers determine the 50-node all-sky plan.
 
 ## Current Local Handoff
 
-The local prototype can now write Kubernetes Job YAML from a dispatch plan:
+The local prototype can now build a worker image and write Kubernetes Job YAML
+from a dispatch plan:
 
 ```bash
 cd luxquarry_allsky_engine
+docker build -f container/Dockerfile -t luxquarry-allsky:local .
+
 .venv/bin/luxquarry-allsky write-k8s-jobs \
   --plan runs/dispatch_smoke10_materialized2/dispatch_plan.json \
   --out-dir runs/dispatch_smoke10_materialized2/k8s \
@@ -145,3 +148,15 @@ gpu request per job: 1
 worker args: run-persistent-gpu-worker
 materialized worker runtime args: --worker-index 0 --worker-count 1
 ```
+
+The image contract is:
+
+```text
+entrypoint: luxquarry-allsky
+working directory: /workspace/luxquarry_allsky_engine
+input/output mount: /workspace
+GPU request: one nvidia.com/gpu per Job by default
+```
+
+For EKS, push the same image to ECR and pass the ECR image URI to
+`write-k8s-jobs --image`.
