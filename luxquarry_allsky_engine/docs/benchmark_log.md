@@ -641,3 +641,65 @@ Notes:
   recorded in the dispatch plan for aggregation.
 - This is the preferred dispatch shape for large local, multi-node, or EKS
   execution.
+
+## 2026-06-29: RAPIDS Spectra Assembly Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky assemble-spectra \
+  --shard-manifest runs/dispatch_smoke10_materialized2/measurement_shard_manifest.parquet \
+  --out-dir runs/dispatch_smoke10_materialized2/spectra_fast \
+  --run-id dispatch_smoke10_materialized2_fast \
+  --device cuda:0
+```
+
+Result:
+
+```text
+backend: cudf_spectra_assembly
+shard_count: 3
+input_measurement_rows: 2,770
+spectra_measurement_rows: 2,770
+target_count: 720
+read_shards_wall_sec: 0.151
+sort_wall_sec: 0.041
+write_spectra_wall_sec: 0.039
+target_summary_wall_sec: 0.152
+total_wall_sec: 1.248
+```
+
+Validation:
+
+```text
+spectra_rows: 2,770
+target_summary_rows: 720
+ok_rows: 2,766
+spectra_sort_order: catalog,target_id,cwave_um,frame_group_id,image_id
+summary_measurement_count_sum: 2,770
+summary_ok_measurement_count_sum: 2,766
+```
+
+`--only-ok` result:
+
+```text
+spectra_measurement_rows: 2,766
+target_count: 719
+total_wall_sec: 1.242
+```
+
+Notes:
+
+- The spectra product is still ragged. It does not resample or interpolate; it
+  preserves one row per calibrated measurement.
+- A first target-summary implementation used repeated groupby/merge passes and
+  took `6.47 sec` on this tiny smoke. The current implementation uses one cuDF
+  groupby aggregation and reduced target summary time to `0.15 sec`.
+- The outputs are:
+
+```text
+<run_id>.spectra_measurements.parquet
+<run_id>.target_summary.parquet
+assemble_summary.json
+```

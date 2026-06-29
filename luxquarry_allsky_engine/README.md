@@ -147,6 +147,13 @@ Implemented stages:
 # aggregate summary and one measurement shard manifest.
 .venv/bin/luxquarry-allsky collect-dispatch-run \
   --plan runs/dispatch_smoke10/dispatch_plan.json
+
+# Assemble target-ordered ragged spectra from the collected shard manifest.
+.venv/bin/luxquarry-allsky assemble-spectra \
+  --shard-manifest runs/dispatch_smoke10/measurement_shard_manifest.parquet \
+  --out-dir runs/dispatch_smoke10/spectra \
+  --run-id dispatch_smoke10 \
+  --device cuda:0
 ```
 
 The target selection stage is still a prefilter. Photometry should consume only
@@ -186,6 +193,16 @@ measurement_shard_manifest.parquet
 The aggregate summary reports missing/incomplete workers, failed frames, missing
 shards, total rows, ok rows, and max worker wall time. The shard manifest is the
 input list downstream spectra assembly should consume.
+
+`assemble-spectra` reads the measurement shard manifest with cuDF, writes a
+target/wavelength-sorted ragged spectra table, and writes one target summary
+row per object:
+
+```text
+<run_id>.spectra_measurements.parquet
+<run_id>.target_summary.parquet
+assemble_summary.json
+```
 
 For large dispatches, add `--materialize-worker-inputs` to the plan command.
 That writes per-worker input slices before launch:

@@ -121,6 +121,23 @@ The collector does not combine measurement data. It validates worker summaries,
 checks shard file existence, sums frame/row counts, and writes a parquet shard
 manifest for downstream spectra assembly.
 
+Then assemble target-ordered spectra:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky assemble-spectra \
+  --shard-manifest runs/dispatch_smoke10/measurement_shard_manifest.parquet \
+  --out-dir runs/dispatch_smoke10/spectra \
+  --run-id dispatch_smoke10 \
+  --device cuda:0
+```
+
+This is a RAPIDS/cuDF post-processing stage. It preserves ragged spectra as one
+measurement row per wavelength sample, sorted by `catalog`, `target_id`,
+`cwave_um`, `frame_group_id`, and `image_id`. It also writes a compact
+`target_summary.parquet` with measurement counts, wavelength range, ok fraction,
+and basic flux statistics.
+
 ## Current Benchmark
 
 Smoke dataset:
@@ -210,6 +227,16 @@ ok_measurement_rows: 2,766
 worker_max_wall_sec: 0.811
 shard_count: 3
 missing_shards: 0
+```
+
+Spectra assembly over that materialized run:
+
+```text
+input_measurement_rows: 2,770
+spectra_measurement_rows: 2,770
+target_count: 720
+total_wall_sec: 1.25
+target_summary_wall_sec: 0.15
 ```
 
 For this tiny smoke test, process startup dominates. The point of the worker

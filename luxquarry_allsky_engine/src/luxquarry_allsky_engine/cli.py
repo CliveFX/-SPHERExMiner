@@ -16,6 +16,7 @@ from .gpu_worker import PersistentWorkerConfig, run_persistent_gpu_worker
 from .manifest import build_frame_manifest
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
+from .spectra import SpectraAssemblyConfig, assemble_spectra_from_shards
 
 
 OPTIONAL_MODULES = [
@@ -195,6 +196,17 @@ def main(argv: list[str] | None = None) -> int:
     collect_dispatch.add_argument("--plan", type=Path, required=True)
     collect_dispatch.add_argument("--out", type=Path)
     collect_dispatch.set_defaults(func=cmd_collect_dispatch_run)
+
+    spectra = sub.add_parser(
+        "assemble-spectra",
+        help="Build target-ordered spectra products from a measurement shard manifest using cuDF.",
+    )
+    spectra.add_argument("--shard-manifest", type=Path, required=True)
+    spectra.add_argument("--out-dir", type=Path, required=True)
+    spectra.add_argument("--run-id", required=True)
+    spectra.add_argument("--device", default="cuda:0")
+    spectra.add_argument("--only-ok", action="store_true", help="Only keep aperture_status_code == 0 measurements.")
+    spectra.set_defaults(func=cmd_assemble_spectra)
 
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)
@@ -436,6 +448,20 @@ def cmd_plan_gpu_dispatch(args: argparse.Namespace) -> int:
 
 def cmd_collect_dispatch_run(args: argparse.Namespace) -> int:
     summary = collect_dispatch_run(plan_path=args.plan, output_path=args.out)
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_assemble_spectra(args: argparse.Namespace) -> int:
+    summary = assemble_spectra_from_shards(
+        SpectraAssemblyConfig(
+            shard_manifest_path=args.shard_manifest,
+            output_dir=args.out_dir,
+            run_id=args.run_id,
+            device=args.device,
+            only_ok=args.only_ok,
+        )
+    )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
