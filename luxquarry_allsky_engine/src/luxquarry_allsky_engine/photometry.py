@@ -15,11 +15,13 @@ from astropy.io import fits
 from .calibration import (
     SPECTRAL_WCS_COLLECTION,
     bilinear_sample,
+    image_to_ujy_arcsec2_scale,
     image_to_ujy_per_pixel,
     load_sapm,
     load_spectral_wcs_maps,
     variance_to_ujy2,
 )
+from .warp_aperture import run_warp_frame_aperture_cupy
 
 
 DEFAULT_FATAL_FLAG_BITS = (0, 1, 2, 4, 6, 7, 9, 10, 11, 14, 15, 17, 19, 22, 24, 26, 27, 28, 29)
@@ -104,6 +106,90 @@ def run_cpu_aperture(
     return summary
 
 
+def run_gpu_aperture(
+    *,
+    manifest_path: Path,
+    projected_targets_path: Path,
+    output_path: Path,
+    config: ApertureConfig,
+    limit_frames: int | None = None,
+    device: str = "cuda:0",
+) -> dict[str, Any]:
+    import cudf
+
+    started = time.perf_counter()
+    manifest = pd.read_parquet(manifest_path)
+    targets = pd.read_parquet(projected_targets_path)
+    if limit_frames is not None:
+        frame_ids = set(manifest.head(limit_frames)["frame_group_id"].astype(str))
+        manifest = manifest[manifest["frame_group_id"].astype(str).isin(frame_ids)].copy()
+        targets = targets[targets["frame_group_id"].astype(str).isin(frame_ids)].copy()
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    parts: list[Path] = []
+    frame_timings: list[dict[str, Any]] = []
+    total_rows = 0
+    total_ok = 0
+    for frame_index, frame in enumerate(manifest.to_dict(orient="records")):
+        frame_group_id = str(frame.get("frame_group_id"))
+        frame_targets = targets[
+            targets["frame_group_id"].astype(str).eq(frame_group_id) & targets["in_frame"].astype(bool)
+        ].copy()
+        if frame_targets.empty:
+            continue
+        t0 = time.perf_counter()
+        gdf, ok_count = _measure_one_frame_gpu(frame, frame_targets, config, device=device)
+        part_path = output_path.parent / f"{output_path.stem}.part{frame_index:06d}.parquet"
+        tw = time.perf_counter()
+        gdf.to_parquet(part_path, index=False)
+        write_wall = time.perf_counter() - tw
+        rows = int(len(gdf))
+        total_rows += rows
+        total_ok += ok_count
+        parts.append(part_path)
+        frame_timings.append(
+            {
+                "frame_group_id": frame_group_id,
+                "image_id": frame.get("image_id"),
+                "input_target_count": int(len(frame_targets)),
+                "measurement_count": rows,
+                "ok_count": ok_count,
+                "wall_time_sec": time.perf_counter() - t0,
+                "write_wall_sec": write_wall,
+                "device": device,
+            }
+        )
+
+    if parts:
+        cudf.concat([cudf.read_parquet(part) for part in parts], ignore_index=True).to_parquet(output_path, index=False)
+    else:
+        cudf.DataFrame().to_parquet(output_path, index=False)
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "manifest_path": str(manifest_path),
+        "projected_targets_path": str(projected_targets_path),
+        "output_path": str(output_path),
+        "frame_count": int(len(manifest)),
+        "input_projected_rows": int(len(targets)),
+        "measurement_rows": total_rows,
+        "ok_measurement_rows": total_ok,
+        "total_wall_sec": time.perf_counter() - started,
+        "frame_timings": frame_timings,
+        "aperture_radius_pix": config.aperture_radius_pix,
+        "annulus_inner_pix": config.annulus_inner_pix,
+        "annulus_outer_pix": config.annulus_outer_pix,
+        "edge_margin_pix": config.edge_margin_pix,
+        "device": device,
+        "backend": "warp_frame_kernel_plus_cudf",
+    }
+    output_path.with_suffix(".summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    _write_gpu_profile(output_path.with_suffix(".profile.json"), summary)
+    return summary
+
+
 def _measure_one_frame(frame: dict[str, Any], targets: pd.DataFrame, config: ApertureConfig) -> pd.DataFrame:
     path = Path(str(frame["path"]))
     detector = int(frame["detector"])
@@ -165,6 +251,80 @@ def _measure_one_frame(frame: dict[str, Any], targets: pd.DataFrame, config: Ape
             }
         )
     return pd.DataFrame(measured_rows, columns=_measurement_columns())
+
+
+def _measure_one_frame_gpu(frame: dict[str, Any], targets: pd.DataFrame, config: ApertureConfig, *, device: str):
+    import cudf
+
+    path = Path(str(frame["path"]))
+    detector = int(frame["detector"])
+    release = str(frame.get("release") or "qr2")
+    with fits.open(path, memmap=True) as hdul:
+        image_hdu = hdul["IMAGE"]
+        image = np.asarray(image_hdu.data, dtype=float)
+        variance = np.asarray(hdul["VARIANCE"].data, dtype=float) if "VARIANCE" in hdul else None
+        flags = np.asarray(hdul["FLAGS"].data, dtype=np.uint32) if "FLAGS" in hdul else None
+        unit_scale = image_to_ujy_arcsec2_scale(image_hdu.header)
+    sapm_data, _sapm_header, sapm_path = load_sapm(str(config.cache_root), release, detector)
+    cwave_map, cband_map, wavelength_path = load_spectral_wcs_maps(str(config.cache_root), release, detector)
+
+    x_zero = targets["x_pix"].to_numpy(dtype=float) - 1.0
+    y_zero = targets["y_pix"].to_numpy(dtype=float) - 1.0
+    edge_zero = np.minimum.reduce([x_zero, y_zero, image.shape[1] - 1 - x_zero, image.shape[0] - 1 - y_zero])
+    selected = np.isfinite(edge_zero) & (edge_zero >= config.edge_margin_pix)
+    selected_targets = targets.loc[selected].reset_index(drop=True)
+    selected_edge = edge_zero[selected]
+    x_selected = x_zero[selected]
+    y_selected = y_zero[selected]
+    batch = run_warp_frame_aperture_cupy(
+        image=image,
+        variance=variance,
+        flags=flags,
+        sapm=sapm_data,
+        cwave=cwave_map,
+        cband=cband_map,
+        image_to_ujy_arcsec2=unit_scale,
+        x_zero_based=x_selected,
+        y_zero_based=y_selected,
+        aperture_radius_pix=config.aperture_radius_pix,
+        annulus_inner_pix=config.annulus_inner_pix,
+        annulus_outer_pix=config.annulus_outer_pix,
+        fatal_flag_bits=config.fatal_flag_bits,
+        device=device,
+    )
+    gdf = cudf.from_pandas(
+        selected_targets[
+            [
+                "frame_group_id",
+                "image_id",
+                "catalog",
+                "target_id",
+                "source_id",
+                "ra_deg",
+                "dec_deg",
+                "mag_primary",
+                "mag_primary_band",
+                "x_pix",
+                "y_pix",
+            ]
+        ]
+    )
+    gdf["fits_path"] = str(path)
+    gdf["edge_distance_pix"] = selected_edge
+    gdf["detector"] = detector
+    gdf["release"] = release
+    gdf["wavelength_source"] = "spectral_wcs_CWAVE_CBAND"
+    gdf["wavelength_calibration_file"] = wavelength_path
+    gdf["wavelength_calibration_collection"] = SPECTRAL_WCS_COLLECTION
+    gdf["sapm_file"] = sapm_path
+    for name, values in batch.columns.items():
+        gdf[name] = values
+    gdf["aperture_flux_unit"] = "uJy"
+    gdf["aperture_status_code"] = batch.status
+    gdf["aperture_status"] = "ok"
+    gdf.loc[gdf["aperture_status_code"] != 0, "aperture_status"] = "bad_background"
+    ok_count = int((batch.status == 0).sum().get())
+    return gdf, ok_count
 
 
 def _aperture_one(
@@ -365,6 +525,35 @@ def _write_profile(path: Path, summary: dict[str, Any]) -> None:
                 "wall_time_sec": write_wall,
                 "wall_time_pct": 100.0 * write_wall / total,
                 "backend": "pandas_pyarrow",
+                "rows_out": summary.get("measurement_rows"),
+            },
+        ],
+    }
+    path.write_text(json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _write_gpu_profile(path: Path, summary: dict[str, Any]) -> None:
+    total = max(float(summary.get("total_wall_sec") or 0.0), 1e-12)
+    frame_wall = sum(float(row["wall_time_sec"]) for row in summary.get("frame_timings", []))
+    write_wall = sum(float(row["write_wall_sec"]) for row in summary.get("frame_timings", []))
+    profile = {
+        "created_utc": summary.get("created_utc"),
+        "rows": [
+            {
+                "stage": "gpu_frame_aperture_photometry",
+                "function_or_script": "luxquarry_allsky_engine.photometry.run_gpu_aperture",
+                "wall_time_sec": frame_wall,
+                "wall_time_pct": 100.0 * frame_wall / total,
+                "backend": "warp_cuda_frame_kernel",
+                "rows_out": summary.get("measurement_rows"),
+                "device": summary.get("device"),
+            },
+            {
+                "stage": "write_measurements",
+                "function_or_script": "luxquarry_allsky_engine.photometry.run_gpu_aperture",
+                "wall_time_sec": write_wall,
+                "wall_time_pct": 100.0 * write_wall / total,
+                "backend": "cudf_parquet",
                 "rows_out": summary.get("measurement_rows"),
             },
         ],

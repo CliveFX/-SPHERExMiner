@@ -12,7 +12,7 @@ from typing import Any
 
 from .catalog import CatalogConfig, build_frame_targets
 from .manifest import build_frame_manifest
-from .photometry import ApertureConfig, run_cpu_aperture
+from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
 
 
@@ -90,6 +90,22 @@ def main(argv: list[str] | None = None) -> int:
     aperture.add_argument("--edge-margin-pix", type=float, default=6.0)
     aperture.add_argument("--limit-frames", type=int)
     aperture.set_defaults(func=cmd_run_cpu_aperture)
+
+    gpu_aperture = sub.add_parser(
+        "run-gpu-aperture",
+        help="Run calibrated frame-level GPU aperture photometry and write cuDF parquet shards.",
+    )
+    gpu_aperture.add_argument("--manifest", type=Path, required=True)
+    gpu_aperture.add_argument("--projected-targets", type=Path, required=True)
+    gpu_aperture.add_argument("--out", type=Path, required=True)
+    gpu_aperture.add_argument("--cache-root", type=Path, default=Path("/mnt/niroseti/spherex_cache"))
+    gpu_aperture.add_argument("--device", default="cuda:0")
+    gpu_aperture.add_argument("--aperture-radius-pix", type=float, default=2.0)
+    gpu_aperture.add_argument("--annulus-inner-pix", type=float, default=4.0)
+    gpu_aperture.add_argument("--annulus-outer-pix", type=float, default=6.0)
+    gpu_aperture.add_argument("--edge-margin-pix", type=float, default=6.0)
+    gpu_aperture.add_argument("--limit-frames", type=int)
+    gpu_aperture.set_defaults(func=cmd_run_gpu_aperture)
 
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)
@@ -224,6 +240,25 @@ def cmd_run_cpu_aperture(args: argparse.Namespace) -> int:
             edge_margin_pix=args.edge_margin_pix,
         ),
         limit_frames=args.limit_frames,
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_run_gpu_aperture(args: argparse.Namespace) -> int:
+    summary = run_gpu_aperture(
+        manifest_path=args.manifest,
+        projected_targets_path=args.projected_targets,
+        output_path=args.out,
+        config=ApertureConfig(
+            cache_root=args.cache_root,
+            aperture_radius_pix=args.aperture_radius_pix,
+            annulus_inner_pix=args.annulus_inner_pix,
+            annulus_outer_pix=args.annulus_outer_pix,
+            edge_margin_pix=args.edge_margin_pix,
+        ),
+        limit_frames=args.limit_frames,
+        device=args.device,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0

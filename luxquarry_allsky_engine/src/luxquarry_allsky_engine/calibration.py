@@ -57,6 +57,11 @@ def image_to_ujy_per_pixel(
     return ((np.asarray(image_data, dtype=float) * bunit).to(u.uJy / u.arcsec**2) * (sapm_data * sapm_unit)).value
 
 
+def image_to_ujy_arcsec2_scale(image_header: fits.Header) -> float:
+    bunit = Unit(image_header.get("BUNIT", "MJy/sr"))
+    return float((1.0 * bunit).to(u.uJy / u.arcsec**2).value)
+
+
 def variance_to_ujy2(
     variance_data: np.ndarray,
     image_header: fits.Header,

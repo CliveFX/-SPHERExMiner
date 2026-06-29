@@ -100,14 +100,32 @@ Implemented stages:
   --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
   --out runs/measurements_cpu_aperture_smoke10/measurements.parquet \
   --limit-frames 10
+
+# Write calibrated aperture measurement rows with a frame-level GPU kernel
+# and cuDF parquet output.
+.venv/bin/luxquarry-allsky run-gpu-aperture \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out runs/measurements_gpu_aperture_smoke10_warm/measurements.parquet \
+  --limit-frames 10 \
+  --device cuda:0
 ```
 
 The target selection stage is still a prefilter. Photometry should consume only
 rows where `in_frame` is true after `project-frame-targets`.
 
-The CPU aperture stage is a correctness/profiling baseline, not the intended
-throughput engine. The next production path should move this frame-batched
-measurement kernel to GPU while preserving the same output schema.
+The CPU aperture stage is a correctness/profiling baseline. The GPU aperture
+stage pushes the hot science loop into one frame-level Warp kernel:
+
+```text
+IMAGE + VARIANCE + FLAGS + SAPM + CWAVE + CBAND + target pixels
+  -> calibrated flux, uncertainty, wavelength, flags
+  -> cuDF parquet measurement shard
+```
+
+The next production path is a persistent monolithic worker that keeps RAPIDS,
+Warp kernels, and detector calibration maps resident across many frames instead
+of paying setup costs per CLI invocation.
 
 ## EKS Target
 

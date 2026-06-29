@@ -136,3 +136,59 @@ Notes:
   same two-frame smoke to 0.77 sec.
 - This CPU stage is a correctness/profiling baseline. The intended V2 hot path
   is the same frame-batched calculation on GPU.
+
+## 2026-06-28: GPU Frame Aperture Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-gpu-aperture \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out runs/measurements_gpu_aperture_smoke10_warm/measurements.parquet \
+  --limit-frames 10 \
+  --device cuda:0
+```
+
+Result:
+
+```text
+frame_count: 10
+input_projected_rows: 5,000
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+total_wall_sec: 2.824
+steady_frame_wall_sec: mostly 0.126-0.225
+first_frame_wall_sec: 1.307
+backend: Warp frame kernel + cuDF parquet
+```
+
+Correctness against CPU aperture baseline:
+
+```text
+matched_ok_measurements: 2,766
+flux_median_abs_delta_uJy: 0.0022
+flux_p95_abs_delta_uJy: 0.0253
+flux_median_relative_delta_pct: 0.000070
+flux_p95_relative_delta_pct: 0.000291
+flux_max_relative_delta_pct: 0.603
+cwave_p95_abs_delta_um: 2.3e-7
+cband_p95_abs_delta_um: 1.9e-8
+```
+
+Notes:
+
+- The GPU kernel receives raw `IMAGE`, `VARIANCE`, `FLAGS`, `SAPM`, `CWAVE`,
+  `CBAND`, and target pixel arrays. It performs image calibration, variance
+  scaling, wavelength sampling, aperture/background estimation, uncertainty,
+  and flag summary in one launch per frame.
+- Warp outputs are handed to CuPy/cuDF through DLPack for measurement columns.
+  cuDF writes parquet shards.
+- The current CLI still pays process/RAPIDS setup and first-touch calibration
+  load costs. The production target is a persistent monolithic worker that keeps
+  RAPIDS, kernels, and calibration maps resident across a large frame batch.
+- CPU and GPU uncertainty can diverge on a few background edge cases because the
+  CPU and Warp sigma-clipping implementations are not byte-for-byte identical.
+  Flux and wavelength agreement are already tight enough for the next
+  performance prototype.
