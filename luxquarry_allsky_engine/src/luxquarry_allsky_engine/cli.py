@@ -10,7 +10,9 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from .catalog import CatalogConfig, build_frame_targets
 from .manifest import build_frame_manifest
+from .projection import project_frame_targets
 
 
 OPTIONAL_MODULES = [
@@ -54,6 +56,27 @@ def main(argv: list[str] | None = None) -> int:
     manifest.add_argument("--limit", type=int)
     manifest.add_argument("--no-read-headers", action="store_true")
     manifest.set_defaults(func=cmd_build_manifest)
+
+    frame_targets = sub.add_parser("build-frame-targets", help="Query catalogs for targets inside frame footprints.")
+    frame_targets.add_argument("--manifest", type=Path, required=True)
+    frame_targets.add_argument("--out", type=Path, required=True)
+    frame_targets.add_argument("--cache-root", type=Path, default=Path("/mnt/niroseti/spherex_cache"))
+    frame_targets.add_argument("--catalog", choices=["gaia", "2mass", "all"], default="all")
+    frame_targets.add_argument("--gaia-g-min", type=float, default=11.0)
+    frame_targets.add_argument("--gaia-g-max", type=float, default=16.0)
+    frame_targets.add_argument("--twomass-mag-min", type=float, default=11.0)
+    frame_targets.add_argument("--twomass-mag-max", type=float, default=16.0)
+    frame_targets.add_argument("--max-sources-per-frame", type=int, default=5000)
+    frame_targets.add_argument("--bbox-pad-deg", type=float, default=0.05)
+    frame_targets.add_argument("--limit-frames", type=int)
+    frame_targets.set_defaults(func=cmd_build_frame_targets)
+
+    project_targets = sub.add_parser("project-frame-targets", help="Project frame target RA/Dec to detector pixels.")
+    project_targets.add_argument("--manifest", type=Path, required=True)
+    project_targets.add_argument("--frame-targets", type=Path, required=True)
+    project_targets.add_argument("--out", type=Path, required=True)
+    project_targets.add_argument("--limit-frames", type=int)
+    project_targets.set_defaults(func=cmd_project_frame_targets)
 
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)
@@ -138,6 +161,38 @@ def cmd_build_manifest(args: argparse.Namespace) -> int:
         limit=args.limit,
         campaign_id=args.campaign_id,
         read_headers=not args.no_read_headers,
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_build_frame_targets(args: argparse.Namespace) -> int:
+    config = CatalogConfig(
+        cache_root=args.cache_root,
+        catalog=args.catalog,
+        gaia_g_min=args.gaia_g_min,
+        gaia_g_max=args.gaia_g_max,
+        twomass_mag_min=args.twomass_mag_min,
+        twomass_mag_max=args.twomass_mag_max,
+        max_sources_per_frame=args.max_sources_per_frame,
+        bbox_pad_deg=args.bbox_pad_deg,
+    )
+    summary = build_frame_targets(
+        manifest_path=args.manifest,
+        output_path=args.out,
+        config=config,
+        limit_frames=args.limit_frames,
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_project_frame_targets(args: argparse.Namespace) -> int:
+    summary = project_frame_targets(
+        manifest_path=args.manifest,
+        frame_targets_path=args.frame_targets,
+        output_path=args.out,
+        limit_frames=args.limit_frames,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0

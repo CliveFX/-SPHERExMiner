@@ -104,11 +104,13 @@ runs/<benchmark_id>/
 
 Tasks:
 
-1. Implement `build-manifest`.
+1. Implement `build-manifest`. Done for local FITS discovery/header WCS.
 2. Implement local cache manager.
-3. Implement frame footprint extraction.
-4. Implement catalog candidate query per frame.
-5. Implement CPU-vectorized pixel projection first.
+3. Implement frame footprint extraction. Done via Astropy WCS footprint.
+4. Implement catalog candidate query per frame. Done for Gaia/2MASS parquet
+   with HPX-pruned DuckDB reads.
+5. Implement CPU-vectorized pixel projection first. Done via array Astropy WCS
+   with `in_frame` masking.
 6. Implement GPU aperture photometry for all in-frame targets.
 7. Write measurement shards.
 8. Assemble spectra from shards.

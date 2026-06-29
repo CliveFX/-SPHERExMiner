@@ -57,6 +57,47 @@ perf_summary.json
 correctness_summary.json
 ```
 
+## Current CLI
+
+The prototype CLI is installed inside the fresh local virtualenv:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky --help
+```
+
+Implemented stages:
+
+```bash
+# Probe Python/CUDA/RAPIDS availability.
+.venv/bin/luxquarry-allsky env-probe --out runs/env_probe.json
+
+# Build a FITS frame manifest with WCS footprints.
+.venv/bin/luxquarry-allsky build-manifest \
+  --input-root /mnt/niroseti/spherex_cache/raw/qr2/level2 \
+  --out runs/manifest_smoke_v2/frame_manifest.parquet \
+  --campaign-id manifest_smoke_v2 \
+  --limit 10
+
+# Query local Gaia/2MASS parquet tiles for targets near each frame footprint.
+.venv/bin/luxquarry-allsky build-frame-targets \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --out runs/frame_targets_smoke_current/frame_targets.parquet \
+  --catalog all \
+  --max-sources-per-frame 500 \
+  --limit-frames 10
+
+# Project frame target coordinates to detector pixels with vectorized Astropy WCS.
+.venv/bin/luxquarry-allsky project-frame-targets \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --frame-targets runs/frame_targets_smoke_current/frame_targets.parquet \
+  --out runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --limit-frames 10
+```
+
+The target selection stage is still a prefilter. Photometry should consume only
+rows where `in_frame` is true after `project-frame-targets`.
+
 ## EKS Target
 
 The cloud version should run one independent frame-group worker per GPU/pod.
@@ -81,7 +122,11 @@ luxquarry_allsky_engine/
     local_environment.md
     eks_plan.md
   src/
-    # future Python package / CLI
+    luxquarry_allsky_engine/
+      cli.py
+      manifest.py
+      catalog.py
+      projection.py
   benchmarks/
     # fixed benchmark manifests and scripts
   k8s/
