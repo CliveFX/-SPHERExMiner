@@ -137,6 +137,36 @@ This is still the baseline measurement dispatch layer. It must be followed by
 spectra assembly, scoring, injection/recovery jobs, and viewer index builds for
 a complete campaign.
 
+## Campaign Stage Contract
+
+After dispatch collection and spectra assembly, write a campaign contract:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-campaign-contract \
+  --campaign-id dispatch_smoke10_materialized2_contract \
+  --out runs/dispatch_smoke10_materialized2/campaign_contract.json \
+  --baseline-plan runs/dispatch_smoke10_materialized2/dispatch_plan.json \
+  --baseline-spectra-dir runs/dispatch_smoke10_materialized2/spectra_fast
+```
+
+The contract is deliberately simple JSON. It lists expected artifacts for:
+
+```text
+baseline_dispatch
+baseline_spectra_assembly
+baseline_blind_scoring
+injected_dispatch
+injected_spectra_assembly
+injected_blind_scoring
+truth_target_recovery
+viewer_indexes
+```
+
+Each stage is marked `complete`, `missing`, or `blocked`. This gives the
+next-gen runner and future dashboard one place to answer, "is this campaign
+science complete?" without accidentally ignoring injected recovery.
+
 After the workers finish, collect the run:
 
 ```bash

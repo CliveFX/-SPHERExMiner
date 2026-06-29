@@ -756,3 +756,54 @@ Notes:
   A science campaign still requires spectra assembly, blind scoring,
   injected-run scoring, truth-target recovery, and candidate/false-positive
   review products.
+
+## 2026-06-29: Campaign Contract Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-campaign-contract \
+  --campaign-id dispatch_smoke10_materialized2_contract \
+  --out runs/dispatch_smoke10_materialized2/campaign_contract.json \
+  --baseline-plan runs/dispatch_smoke10_materialized2/dispatch_plan.json \
+  --baseline-spectra-dir runs/dispatch_smoke10_materialized2/spectra_fast
+```
+
+Result:
+
+```text
+backend: luxquarry_campaign_contract
+stage_count: 8
+complete_stage_count: 2
+missing_stage_count: 6
+science_complete: false
+baseline_run_id: dispatch_smoke10_materialized2
+baseline_spectra_run_id: dispatch_smoke10_materialized2_fast
+```
+
+Complete stages:
+
+```text
+baseline_dispatch
+baseline_spectra_assembly
+```
+
+Missing or blocked stages:
+
+```text
+baseline_blind_scoring
+injected_dispatch
+injected_spectra_assembly
+injected_blind_scoring
+truth_target_recovery
+viewer_indexes
+```
+
+Notes:
+
+- The contract reads `assemble_summary.json` so spectra run IDs can differ from
+  dispatch run IDs without breaking artifact detection.
+- This is only a status/contract layer. It does not implement injection or
+  recovery yet, but it prevents the all-sky engine from treating baseline
+  photometry as a complete science campaign.

@@ -166,6 +166,14 @@ Implemented stages:
   --out-dir runs/dispatch_smoke10/spectra \
   --run-id dispatch_smoke10 \
   --device cuda:0
+
+# Write a campaign-level stage contract. This is the guardrail that keeps
+# baseline, injected, scoring, recovery, and viewer-index products tied together.
+.venv/bin/luxquarry-allsky write-campaign-contract \
+  --campaign-id dispatch_smoke10_contract \
+  --out runs/dispatch_smoke10/campaign_contract.json \
+  --baseline-plan runs/dispatch_smoke10/dispatch_plan.json \
+  --baseline-spectra-dir runs/dispatch_smoke10/spectra
 ```
 
 The target selection stage is still a prefilter. Photometry should consume only
@@ -281,6 +289,12 @@ collection, and spectra assembly pieces. Injection, recovery, and the
 narrowband candidate scorer must be promoted into this frame-first contract
 before using the engine for science-grade all-sky mining.
 
+`write-campaign-contract` records that status in a machine-readable JSON file.
+It marks stages as `complete`, `missing`, or `blocked` based on expected
+artifacts. On the current smoke run, baseline dispatch and baseline spectra are
+complete, while injected dispatch/recovery are correctly blocked because no
+injection truth table or injected plan has been supplied.
+
 ## Repository Layout
 
 ```text
@@ -298,6 +312,7 @@ luxquarry_allsky_engine/
   src/
     luxquarry_allsky_engine/
       cli.py
+      campaign.py
       manifest.py
       catalog.py
       projection.py

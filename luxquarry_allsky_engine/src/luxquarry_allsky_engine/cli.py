@@ -10,6 +10,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from .campaign import CampaignContractConfig, write_campaign_contract
 from .catalog import CatalogConfig, build_frame_targets
 from .dispatch import DispatchPlanConfig, build_dispatch_plan, collect_dispatch_run, write_dispatch_plan
 from .gpu_worker import PersistentWorkerConfig, run_persistent_gpu_worker
@@ -224,6 +225,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Environment variable to place on every worker container. Repeatable.",
     )
     k8s_jobs.set_defaults(func=cmd_write_k8s_jobs)
+
+    campaign_contract = sub.add_parser(
+        "write-campaign-contract",
+        help="Write a stage contract for baseline, injected, scoring, recovery, and viewer products.",
+    )
+    campaign_contract.add_argument("--campaign-id", required=True)
+    campaign_contract.add_argument("--out", type=Path, required=True)
+    campaign_contract.add_argument("--baseline-plan", type=Path, required=True)
+    campaign_contract.add_argument("--baseline-spectra-dir", type=Path)
+    campaign_contract.add_argument("--injected-plan", type=Path)
+    campaign_contract.add_argument("--injected-spectra-dir", type=Path)
+    campaign_contract.add_argument("--injection-truth", type=Path)
+    campaign_contract.add_argument("--candidate-dir", type=Path)
+    campaign_contract.add_argument("--viewer-index-dir", type=Path)
+    campaign_contract.set_defaults(func=cmd_write_campaign_contract)
 
     spectra = sub.add_parser(
         "assemble-spectra",
@@ -501,6 +517,24 @@ def cmd_write_k8s_jobs(args: argparse.Namespace) -> int:
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_write_campaign_contract(args: argparse.Namespace) -> int:
+    contract = write_campaign_contract(
+        CampaignContractConfig(
+            campaign_id=args.campaign_id,
+            output_path=args.out,
+            baseline_plan_path=args.baseline_plan,
+            baseline_spectra_dir=args.baseline_spectra_dir,
+            injected_plan_path=args.injected_plan,
+            injected_spectra_dir=args.injected_spectra_dir,
+            injection_truth_path=args.injection_truth,
+            candidate_dir=args.candidate_dir,
+            viewer_index_dir=args.viewer_index_dir,
+        )
+    )
+    print(json.dumps(contract, indent=2, sort_keys=True))
     return 0
 
 
