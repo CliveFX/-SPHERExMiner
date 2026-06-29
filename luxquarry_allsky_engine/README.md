@@ -167,7 +167,8 @@ Implemented stages:
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --async-shard-writes \
   --batch-table-assembly \
-  --finalize-device cuda:0
+  --finalize-device cuda:0 \
+  --score-baseline
 
 # Resume the same local run. Complete workers are skipped; missing or failed
 # workers are relaunched before finalization.
@@ -199,6 +200,16 @@ Implemented stages:
   --spectra-run-id dispatch_smoke10 \
   --campaign-id dispatch_smoke10_contract \
   --campaign-contract-out runs/dispatch_smoke10/campaign_contract.json \
+  --device cuda:0 \
+  --score-baseline
+
+# Candidate scoring can also be run directly on an assembled spectra parquet.
+# This is the first baseline scorer product in the new frame-first contract;
+# injection scoring and truth recovery are still separate required stages.
+.venv/bin/luxquarry-allsky score-spectra-candidates \
+  --spectra runs/local_dispatch_smoke2/spectra/local_dispatch_smoke2.spectra_measurements.parquet \
+  --out-dir runs/local_dispatch_smoke2/candidates \
+  --run-id local_dispatch_smoke2 \
   --device cuda:0
 
 # Or write Kubernetes Job manifests from the same dispatch plan. This is the
@@ -351,9 +362,11 @@ candidate and false-positive review indexes
 ```
 
 The current all-sky engine has the baseline GPU photometry, dispatch,
-collection, and spectra assembly pieces. Injection, recovery, and the
-narrowband candidate scorer must be promoted into this frame-first contract
-before using the engine for science-grade all-sky mining.
+collection, spectra assembly, and a simple RAPIDS target-zscore baseline
+candidate scorer. Injection, injected blind scoring, truth-target recovery, and
+the science-grade narrowband matched-filter scorer must still be promoted into
+this frame-first contract before using the engine for science-grade all-sky
+mining.
 
 `write-campaign-contract` records that status in a machine-readable JSON file.
 It marks stages as `complete`, `missing`, or `blocked` based on expected

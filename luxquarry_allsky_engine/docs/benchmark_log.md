@@ -1117,3 +1117,76 @@ Notes:
   run and writes a final snapshot after they exit.
 - `--status-snapshot-interval-sec 0` disables periodic refresh and keeps the
   final snapshot only.
+
+## 2026-06-29: Baseline Candidate Scoring Smoke
+
+Standalone scorer command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky score-spectra-candidates \
+  --spectra runs/local_dispatch_smoke2/spectra/local_dispatch_smoke2.spectra_measurements.parquet \
+  --out-dir runs/local_dispatch_smoke2/candidates_score_smoke \
+  --run-id local_dispatch_smoke2 \
+  --device cuda:0 \
+  --min-measurements 2 \
+  --min-abs-zscore 0.5 \
+  --max-candidates 20
+```
+
+Result:
+
+```text
+backend: cudf_simple_target_zscore_scorer
+input_measurement_rows: 573
+filtered_measurement_rows: 572
+target_count: 310
+candidate_count_before_cap: 524
+candidate_count: 20
+total_wall_sec: 1.328
+read_spectra_wall_sec: 0.136
+score_wall_sec: 0.266
+write_candidates_wall_sec: 0.024
+```
+
+Finalizer scorer command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky finalize-dispatch-run \
+  --plan runs/local_dispatch_smoke2/dispatch_plan.json \
+  --spectra-out-dir runs/local_dispatch_smoke2/spectra_scored_finalize \
+  --spectra-run-id local_dispatch_smoke2_scored_finalize \
+  --campaign-id local_dispatch_smoke2_scored_finalize \
+  --campaign-contract-out runs/local_dispatch_smoke2/campaign_contract_scored_finalize.json \
+  --candidate-dir runs/local_dispatch_smoke2/candidates_scored_finalize \
+  --score-baseline \
+  --candidate-min-measurements 2 \
+  --candidate-min-abs-zscore 0.5 \
+  --candidate-max-rows 20 \
+  --device cuda:0
+```
+
+Result:
+
+```text
+dispatch_complete: true
+science_complete: false
+measurement_rows: 573
+spectra_measurement_rows: 573
+target_count: 310
+baseline_candidate_count: 20
+baseline_scorer_wall_sec: 0.128
+finalize_total_wall_sec: 1.340
+complete campaign stages: 3 / 8
+```
+
+Notes:
+
+- The scoring threshold was intentionally loose because this is a two-frame
+  smoke run. Normal runs should use deeper spectra and stricter thresholds.
+- The campaign contract now marks `baseline_blind_scoring` complete when
+  `--score-baseline` is used.
+- Injected dispatch, injected scoring, and truth-target recovery remain
+  explicit missing/blocked stages. They were not silently folded into baseline
+  scoring.

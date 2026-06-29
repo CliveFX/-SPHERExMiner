@@ -25,6 +25,7 @@ from .local_runner import LocalDispatchRunConfig, run_local_dispatch
 from .manifest import build_frame_manifest
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
+from .scoring import CandidateScoringConfig, score_spectra_candidates
 from .spectra import SpectraAssemblyConfig, assemble_spectra_from_shards
 from .status import DispatchStatusConfig, write_dispatch_status_snapshot
 
@@ -226,6 +227,11 @@ def main(argv: list[str] | None = None) -> int:
     local_dispatch.add_argument("--allow-incomplete-finalize", action="store_true")
     local_dispatch.add_argument("--campaign-id")
     local_dispatch.add_argument("--campaign-contract-out", type=Path)
+    local_dispatch.add_argument("--candidate-dir", type=Path)
+    local_dispatch.add_argument("--score-baseline", action="store_true")
+    local_dispatch.add_argument("--candidate-min-abs-zscore", type=float, default=5.0)
+    local_dispatch.add_argument("--candidate-min-measurements", type=int, default=10)
+    local_dispatch.add_argument("--candidate-max-rows", type=int)
     local_dispatch.add_argument("--resume", action="store_true", help="Skip workers with complete run_summary.json.")
     local_dispatch.add_argument(
         "--status-snapshot-interval-sec",
@@ -269,7 +275,27 @@ def main(argv: list[str] | None = None) -> int:
     finalize_dispatch.add_argument("--injection-truth", type=Path)
     finalize_dispatch.add_argument("--candidate-dir", type=Path)
     finalize_dispatch.add_argument("--viewer-index-dir", type=Path)
+    finalize_dispatch.add_argument("--score-baseline", action="store_true")
+    finalize_dispatch.add_argument("--candidate-min-abs-zscore", type=float, default=5.0)
+    finalize_dispatch.add_argument("--candidate-min-measurements", type=int, default=10)
+    finalize_dispatch.add_argument("--candidate-max-rows", type=int)
     finalize_dispatch.set_defaults(func=cmd_finalize_dispatch_run)
+
+    score_candidates = sub.add_parser(
+        "score-spectra-candidates",
+        help="Run the simple RAPIDS target-zscore candidate scorer on assembled spectra.",
+    )
+    score_candidates.add_argument("--spectra", type=Path, required=True)
+    score_candidates.add_argument("--out-dir", type=Path, required=True)
+    score_candidates.add_argument("--run-id", required=True)
+    score_candidates.add_argument("--device", default="cuda:0")
+    score_candidates.add_argument("--output-prefix", default="baseline")
+    score_candidates.add_argument("--flux-column", default="aperture_flux_uJy")
+    score_candidates.add_argument("--min-abs-zscore", type=float, default=5.0)
+    score_candidates.add_argument("--min-measurements", type=int, default=10)
+    score_candidates.add_argument("--max-candidates", type=int)
+    score_candidates.add_argument("--include-flagged", action="store_true")
+    score_candidates.set_defaults(func=cmd_score_spectra_candidates)
 
     k8s_jobs = sub.add_parser(
         "write-k8s-jobs",
@@ -624,6 +650,11 @@ def cmd_run_local_dispatch(args: argparse.Namespace) -> int:
             allow_incomplete_finalize=args.allow_incomplete_finalize,
             campaign_id=args.campaign_id,
             campaign_contract_out=args.campaign_contract_out,
+            candidate_dir=args.candidate_dir,
+            score_baseline=args.score_baseline,
+            candidate_min_abs_zscore=args.candidate_min_abs_zscore,
+            candidate_min_measurements=args.candidate_min_measurements,
+            candidate_max_rows=args.candidate_max_rows,
             resume=args.resume,
             status_snapshot_interval_sec=args.status_snapshot_interval_sec,
         )
@@ -666,6 +697,29 @@ def cmd_finalize_dispatch_run(args: argparse.Namespace) -> int:
             injection_truth_path=args.injection_truth,
             candidate_dir=args.candidate_dir,
             viewer_index_dir=args.viewer_index_dir,
+            score_baseline=args.score_baseline,
+            candidate_min_abs_zscore=args.candidate_min_abs_zscore,
+            candidate_min_measurements=args.candidate_min_measurements,
+            candidate_max_rows=args.candidate_max_rows,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_score_spectra_candidates(args: argparse.Namespace) -> int:
+    summary = score_spectra_candidates(
+        CandidateScoringConfig(
+            spectra_path=args.spectra,
+            output_dir=args.out_dir,
+            run_id=args.run_id,
+            device=args.device,
+            output_prefix=args.output_prefix,
+            flux_column=args.flux_column,
+            min_abs_zscore=args.min_abs_zscore,
+            min_measurements=args.min_measurements,
+            only_ok=not args.include_flagged,
+            max_candidates=args.max_candidates,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

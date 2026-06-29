@@ -38,6 +38,11 @@ class LocalDispatchRunConfig:
     allow_incomplete_finalize: bool = False
     campaign_id: str | None = None
     campaign_contract_out: Path | None = None
+    candidate_dir: Path | None = None
+    score_baseline: bool = False
+    candidate_min_abs_zscore: float = 5.0
+    candidate_min_measurements: int = 10
+    candidate_max_rows: int | None = None
     resume: bool = False
     status_snapshot_interval_sec: float = 1.0
 
@@ -109,6 +114,11 @@ def run_local_dispatch(config: LocalDispatchRunConfig) -> dict[str, Any]:
             allow_incomplete=config.allow_incomplete_finalize,
             campaign_id=config.campaign_id or f"{config.run_id}_campaign",
             campaign_contract_out=config.campaign_contract_out or config.output_dir / "campaign_contract.json",
+            candidate_dir=config.candidate_dir or config.output_dir / "candidates",
+            score_baseline=config.score_baseline,
+            candidate_min_abs_zscore=config.candidate_min_abs_zscore,
+            candidate_min_measurements=config.candidate_min_measurements,
+            candidate_max_rows=config.candidate_max_rows,
         )
     )
     finalize_wall = time.perf_counter() - t_finalize

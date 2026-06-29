@@ -9,6 +9,7 @@ from typing import Any
 
 from .campaign import CampaignContractConfig, write_campaign_contract
 from .dispatch import collect_dispatch_run
+from .scoring import CandidateScoringConfig, score_spectra_candidates
 from .spectra import SpectraAssemblyConfig, assemble_spectra_from_shards
 
 
@@ -28,6 +29,10 @@ class FinalizeDispatchConfig:
     injection_truth_path: Path | None = None
     candidate_dir: Path | None = None
     viewer_index_dir: Path | None = None
+    score_baseline: bool = False
+    candidate_min_abs_zscore: float = 5.0
+    candidate_min_measurements: int = 10
+    candidate_max_rows: int | None = None
 
 
 def finalize_dispatch_run(config: FinalizeDispatchConfig) -> dict[str, Any]:
@@ -56,6 +61,22 @@ def finalize_dispatch_run(config: FinalizeDispatchConfig) -> dict[str, Any]:
         )
     )
 
+    candidate_dir = config.candidate_dir or run_output_dir / "candidates"
+    baseline_scoring: dict[str, Any] | None = None
+    if config.score_baseline:
+        baseline_scoring = score_spectra_candidates(
+            CandidateScoringConfig(
+                spectra_path=Path(spectra["spectra_measurements_path"]),
+                output_dir=candidate_dir,
+                run_id=spectra_run_id,
+                device=config.device,
+                output_prefix="baseline",
+                min_abs_zscore=config.candidate_min_abs_zscore,
+                min_measurements=config.candidate_min_measurements,
+                max_candidates=config.candidate_max_rows,
+            )
+        )
+
     campaign_id = config.campaign_id or f"{run_id}_campaign"
     campaign_contract_out = config.campaign_contract_out or run_output_dir / "campaign_contract.json"
     campaign = write_campaign_contract(
@@ -67,7 +88,7 @@ def finalize_dispatch_run(config: FinalizeDispatchConfig) -> dict[str, Any]:
             injected_plan_path=config.injected_plan_path,
             injected_spectra_dir=config.injected_spectra_dir,
             injection_truth_path=config.injection_truth_path,
-            candidate_dir=config.candidate_dir,
+            candidate_dir=candidate_dir,
             viewer_index_dir=config.viewer_index_dir,
         )
     )
@@ -84,6 +105,7 @@ def finalize_dispatch_run(config: FinalizeDispatchConfig) -> dict[str, Any]:
         "spectra_output_dir": str(spectra_out_dir),
         "spectra_run_id": spectra_run_id,
         "spectra_summary_path": str(spectra_out_dir / "assemble_summary.json"),
+        "candidate_dir": str(candidate_dir),
         "campaign_contract_path": str(campaign_contract_out),
         "dispatch_complete": bool(aggregate.get("complete")),
         "science_complete": bool(campaign.get("science_complete")),
@@ -93,6 +115,7 @@ def finalize_dispatch_run(config: FinalizeDispatchConfig) -> dict[str, Any]:
         "total_wall_sec": time.perf_counter() - started,
         "aggregate": aggregate,
         "spectra": spectra,
+        "baseline_scoring": baseline_scoring,
         "campaign": campaign,
     }
     summary_path = run_output_dir / "finalize_summary.json"

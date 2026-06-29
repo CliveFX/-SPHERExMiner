@@ -274,13 +274,32 @@ cd luxquarry_allsky_engine
   --spectra-run-id dispatch_smoke10_materialized2_finalize \
   --campaign-id dispatch_smoke10_materialized2_finalize \
   --campaign-contract-out runs/dispatch_smoke10_materialized2/campaign_contract_finalize.json \
-  --device cuda:0
+  --device cuda:0 \
+  --score-baseline
 ```
 
 This runs `collect-dispatch-run`, `assemble-spectra`, and
-`write-campaign-contract` in one command. It fails closed if any worker or shard
-is incomplete; use `--allow-incomplete` only for diagnostic partial-run
-products.
+`write-campaign-contract` in one command. With `--score-baseline`, it also runs
+the simple cuDF target-zscore scorer and writes `baseline_candidates.parquet`
+and `baseline_candidate_summary.json`. It fails closed if any worker or shard is
+incomplete; use `--allow-incomplete` only for diagnostic partial-run products.
+
+The baseline scorer is only the first candidate product. It is useful as a fast
+wiring test because it preserves target, wavelength, flag, detector, and FITS
+provenance through a RAPIDS postprocess stage. It is not the final narrowband
+matched filter, and it does not replace injected dispatch, injected scoring, or
+truth-target recovery.
+
+Standalone candidate scoring:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky score-spectra-candidates \
+  --spectra runs/local_dispatch_smoke2/spectra/local_dispatch_smoke2.spectra_measurements.parquet \
+  --out-dir runs/local_dispatch_smoke2/candidates \
+  --run-id local_dispatch_smoke2 \
+  --device cuda:0
+```
 
 The matching post-worker Kubernetes artifact is:
 
@@ -357,9 +376,10 @@ false-positive/candidate review indexes
 The injected run should reuse the same target/materialized-input contract as the
 baseline run. That keeps recovery comparisons honest: baseline, injected, raw
 blind scoring, quality-gated blind scoring, and truth-target recovery all refer
-to the same target IDs and frame provenance. Until these stages are wired into
-this engine, the next-gen dispatch layer is a high-throughput photometry and
-spectra assembly prototype, not a full injection/recovery campaign runner.
+to the same target IDs and frame provenance. Until the injected stages and
+recovery accounting are wired into this engine, the next-gen dispatch layer is a
+high-throughput photometry, spectra assembly, and baseline candidate-scoring
+prototype, not a full injection/recovery campaign runner.
 
 ## Current Benchmark
 
