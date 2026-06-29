@@ -85,6 +85,25 @@ dispatch_plan.sh
 The shell file launches one persistent worker per listed GPU. The JSON file is
 the portable contract for an EKS Job generator.
 
+After the workers finish, collect the run:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky collect-dispatch-run \
+  --plan runs/dispatch_smoke10/dispatch_plan.json
+```
+
+This writes:
+
+```text
+aggregate_summary.json
+measurement_shard_manifest.parquet
+```
+
+The collector does not combine measurement data. It validates worker summaries,
+checks shard file existence, sums frame/row counts, and writes a parquet shard
+manifest for downstream spectra assembly.
+
 ## Current Benchmark
 
 Smoke dataset:
@@ -148,6 +167,19 @@ shards: 10
 rows: 2,770
 ok rows: 2,766
 failed frames: 0
+```
+
+Collected three-worker run:
+
+```text
+complete: true
+complete_workers: 3
+completed_frames: 10
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+shard_count: 10
+missing_shards: 0
+collect_wall_sec: ~0.008 sec
 ```
 
 For this tiny smoke test, process startup dominates. The point of the worker

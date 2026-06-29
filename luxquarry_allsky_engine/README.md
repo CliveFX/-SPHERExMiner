@@ -141,6 +141,11 @@ Implemented stages:
   --batch-table-assembly \
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --limit-frames 10
+
+# After the generated shell finishes, collect worker summaries into one
+# aggregate summary and one measurement shard manifest.
+.venv/bin/luxquarry-allsky collect-dispatch-run \
+  --plan runs/dispatch_smoke10/dispatch_plan.json
 ```
 
 The target selection stage is still a prefilter. Photometry should consume only
@@ -168,6 +173,18 @@ frame_ordinal % worker_count == worker_index
 
 That makes local multi-GPU dispatch and future Kubernetes dispatch the same
 basic model.
+
+`collect-dispatch-run` turns independent worker outputs back into one
+run-level contract:
+
+```text
+aggregate_summary.json
+measurement_shard_manifest.parquet
+```
+
+The aggregate summary reports missing/incomplete workers, failed frames, missing
+shards, total rows, ok rows, and max worker wall time. The shard manifest is the
+input list downstream spectra assembly should consume.
 
 Workers can also stage FITS inputs onto local SSD/NVMe with
 `--local-cache-dir`. On a 10-frame smoke, a warm staged cache reduced the

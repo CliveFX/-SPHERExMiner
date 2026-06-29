@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import CatalogConfig, build_frame_targets
-from .dispatch import DispatchPlanConfig, build_dispatch_plan, write_dispatch_plan
+from .dispatch import DispatchPlanConfig, build_dispatch_plan, collect_dispatch_run, write_dispatch_plan
 from .gpu_worker import PersistentWorkerConfig, run_persistent_gpu_worker
 from .manifest import build_frame_manifest
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
@@ -182,6 +182,14 @@ def main(argv: list[str] | None = None) -> int:
     dispatch.add_argument("--limit-frames", type=int)
     dispatch.add_argument("--executable", default=".venv/bin/luxquarry-allsky")
     dispatch.set_defaults(func=cmd_plan_gpu_dispatch)
+
+    collect_dispatch = sub.add_parser(
+        "collect-dispatch-run",
+        help="Aggregate persistent worker run summaries and write a shard manifest.",
+    )
+    collect_dispatch.add_argument("--plan", type=Path, required=True)
+    collect_dispatch.add_argument("--out", type=Path)
+    collect_dispatch.set_defaults(func=cmd_collect_dispatch_run)
 
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)
@@ -417,6 +425,12 @@ def cmd_plan_gpu_dispatch(args: argparse.Namespace) -> int:
             sort_keys=True,
         )
     )
+    return 0
+
+
+def cmd_collect_dispatch_run(args: argparse.Namespace) -> int:
+    summary = collect_dispatch_run(plan_path=args.plan, output_path=args.out)
+    print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
 

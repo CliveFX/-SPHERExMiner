@@ -347,6 +347,46 @@ Notes:
   saves. This mode is for long queues where setup is amortized and GPUs stay
   busy.
 
+Collected run:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky collect-dispatch-run \
+  --plan runs/dispatch_smoke10/dispatch_plan.json
+```
+
+Result:
+
+```text
+complete: true
+complete_workers: 3
+completed_frames: 10
+frame_count: 10
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+shard_count: 10
+missing_shards: 0
+worker_max_wall_sec: 1.381
+collect_wall_sec: 0.008
+```
+
+The collector wrote:
+
+```text
+runs/dispatch_smoke10/aggregate_summary.json
+runs/dispatch_smoke10/measurement_shard_manifest.parquet
+```
+
+Shard manifest validation:
+
+```text
+manifest_rows: 10
+sum_rows: 2,770
+sum_ok_rows: 2,766
+sum_frame_count: 10
+missing_shards: 0
+```
+
 ## 2026-06-29: Local FITS Staging Smoke
 
 Command:
