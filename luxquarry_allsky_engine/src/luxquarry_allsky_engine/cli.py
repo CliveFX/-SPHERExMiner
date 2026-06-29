@@ -13,8 +13,14 @@ from typing import Any
 from .campaign import CampaignContractConfig, write_campaign_contract
 from .catalog import CatalogConfig, build_frame_targets
 from .dispatch import DispatchPlanConfig, build_dispatch_plan, collect_dispatch_run, write_dispatch_plan
+from .finalize import FinalizeDispatchConfig, finalize_dispatch_run
 from .gpu_worker import PersistentWorkerConfig, run_persistent_gpu_worker
-from .kubernetes import KubernetesJobConfig, write_kubernetes_jobs
+from .kubernetes import (
+    KubernetesJobConfig,
+    KubernetesPostprocessJobConfig,
+    write_kubernetes_jobs,
+    write_kubernetes_postprocess_job,
+)
 from .manifest import build_frame_manifest
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
@@ -199,6 +205,26 @@ def main(argv: list[str] | None = None) -> int:
     collect_dispatch.add_argument("--out", type=Path)
     collect_dispatch.set_defaults(func=cmd_collect_dispatch_run)
 
+    finalize_dispatch = sub.add_parser(
+        "finalize-dispatch-run",
+        help="Collect worker shards, assemble spectra, and write the campaign contract.",
+    )
+    finalize_dispatch.add_argument("--plan", type=Path, required=True)
+    finalize_dispatch.add_argument("--device", default="cuda:0")
+    finalize_dispatch.add_argument("--aggregate-out", type=Path)
+    finalize_dispatch.add_argument("--spectra-out-dir", type=Path)
+    finalize_dispatch.add_argument("--spectra-run-id")
+    finalize_dispatch.add_argument("--only-ok", action="store_true")
+    finalize_dispatch.add_argument("--allow-incomplete", action="store_true")
+    finalize_dispatch.add_argument("--campaign-id")
+    finalize_dispatch.add_argument("--campaign-contract-out", type=Path)
+    finalize_dispatch.add_argument("--injected-plan", type=Path)
+    finalize_dispatch.add_argument("--injected-spectra-dir", type=Path)
+    finalize_dispatch.add_argument("--injection-truth", type=Path)
+    finalize_dispatch.add_argument("--candidate-dir", type=Path)
+    finalize_dispatch.add_argument("--viewer-index-dir", type=Path)
+    finalize_dispatch.set_defaults(func=cmd_finalize_dispatch_run)
+
     k8s_jobs = sub.add_parser(
         "write-k8s-jobs",
         help="Write one Kubernetes Job manifest per GPU worker from a dispatch plan.",
@@ -225,6 +251,40 @@ def main(argv: list[str] | None = None) -> int:
         help="Environment variable to place on every worker container. Repeatable.",
     )
     k8s_jobs.set_defaults(func=cmd_write_k8s_jobs)
+
+    k8s_post = sub.add_parser(
+        "write-k8s-postprocess-job",
+        help="Write a Kubernetes Job manifest for finalize-dispatch-run.",
+    )
+    k8s_post.add_argument("--plan", type=Path, required=True)
+    k8s_post.add_argument("--out-dir", type=Path, required=True)
+    k8s_post.add_argument("--image", required=True)
+    k8s_post.add_argument("--namespace", default="default")
+    k8s_post.add_argument("--service-account")
+    k8s_post.add_argument("--container-executable", default="luxquarry-allsky")
+    k8s_post.add_argument("--working-dir")
+    k8s_post.add_argument("--device", default="cuda:0")
+    k8s_post.add_argument("--gpu-limit", type=int, default=1)
+    k8s_post.add_argument("--cpu-request", default="4")
+    k8s_post.add_argument("--memory-request", default="16Gi")
+    k8s_post.add_argument("--restart-policy", default="Never")
+    k8s_post.add_argument("--backoff-limit", type=int, default=1)
+    k8s_post.add_argument("--pvc-name")
+    k8s_post.add_argument("--mount-path")
+    k8s_post.add_argument("--campaign-id")
+    k8s_post.add_argument("--spectra-out-dir", type=Path)
+    k8s_post.add_argument("--spectra-run-id")
+    k8s_post.add_argument("--campaign-contract-out", type=Path)
+    k8s_post.add_argument("--only-ok", action="store_true")
+    k8s_post.add_argument("--allow-incomplete", action="store_true")
+    k8s_post.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Environment variable to place on the postprocess container. Repeatable.",
+    )
+    k8s_post.set_defaults(func=cmd_write_k8s_postprocess_job)
 
     campaign_contract = sub.add_parser(
         "write-campaign-contract",
@@ -496,6 +556,29 @@ def cmd_collect_dispatch_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_finalize_dispatch_run(args: argparse.Namespace) -> int:
+    summary = finalize_dispatch_run(
+        FinalizeDispatchConfig(
+            plan_path=args.plan,
+            device=args.device,
+            aggregate_out=args.aggregate_out,
+            spectra_out_dir=args.spectra_out_dir,
+            spectra_run_id=args.spectra_run_id,
+            only_ok=args.only_ok,
+            allow_incomplete=args.allow_incomplete,
+            campaign_id=args.campaign_id,
+            campaign_contract_out=args.campaign_contract_out,
+            injected_plan_path=args.injected_plan,
+            injected_spectra_dir=args.injected_spectra_dir,
+            injection_truth_path=args.injection_truth,
+            candidate_dir=args.candidate_dir,
+            viewer_index_dir=args.viewer_index_dir,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_write_k8s_jobs(args: argparse.Namespace) -> int:
     summary = write_kubernetes_jobs(
         KubernetesJobConfig(
@@ -513,6 +596,37 @@ def cmd_write_k8s_jobs(args: argparse.Namespace) -> int:
             backoff_limit=args.backoff_limit,
             pvc_name=args.pvc_name,
             mount_path=args.mount_path,
+            env=_parse_env_assignments(args.env),
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_write_k8s_postprocess_job(args: argparse.Namespace) -> int:
+    summary = write_kubernetes_postprocess_job(
+        KubernetesPostprocessJobConfig(
+            plan_path=args.plan,
+            output_dir=args.out_dir,
+            image=args.image,
+            namespace=args.namespace,
+            service_account=args.service_account,
+            container_executable=args.container_executable,
+            working_dir=args.working_dir,
+            device=args.device,
+            gpu_limit=args.gpu_limit,
+            cpu_request=args.cpu_request,
+            memory_request=args.memory_request,
+            restart_policy=args.restart_policy,
+            backoff_limit=args.backoff_limit,
+            pvc_name=args.pvc_name,
+            mount_path=args.mount_path,
+            campaign_id=args.campaign_id,
+            spectra_out_dir=args.spectra_out_dir,
+            spectra_run_id=args.spectra_run_id,
+            campaign_contract_out=args.campaign_contract_out,
+            only_ok=args.only_ok,
+            allow_incomplete=args.allow_incomplete,
             env=_parse_env_assignments(args.env),
         )
     )

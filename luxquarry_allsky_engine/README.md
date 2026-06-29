@@ -156,6 +156,16 @@ Implemented stages:
 .venv/bin/luxquarry-allsky collect-dispatch-run \
   --plan runs/dispatch_smoke10/dispatch_plan.json
 
+# Or finalize the dispatch in one post-worker step. This collects worker
+# summaries, assembles spectra with cuDF, and writes the campaign contract.
+.venv/bin/luxquarry-allsky finalize-dispatch-run \
+  --plan runs/dispatch_smoke10/dispatch_plan.json \
+  --spectra-out-dir runs/dispatch_smoke10/spectra \
+  --spectra-run-id dispatch_smoke10 \
+  --campaign-id dispatch_smoke10_contract \
+  --campaign-contract-out runs/dispatch_smoke10/campaign_contract.json \
+  --device cuda:0
+
 # Or write Kubernetes Job manifests from the same dispatch plan. This is the
 # cloud/EKS handoff artifact: one pod per materialized GPU worker.
 .venv/bin/luxquarry-allsky write-k8s-jobs \
@@ -167,6 +177,19 @@ Implemented stages:
   --working-dir /workspace/luxquarry_allsky_engine \
   --pvc-name luxquarry-data \
   --mount-path /workspace
+
+# Write the post-worker Kubernetes Job. This runs finalize-dispatch-run after
+# worker Jobs have completed.
+.venv/bin/luxquarry-allsky write-k8s-postprocess-job \
+  --plan runs/dispatch_smoke10/dispatch_plan.json \
+  --out-dir runs/dispatch_smoke10/k8s \
+  --image luxquarry-allsky:local \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --pvc-name luxquarry-data \
+  --mount-path /workspace \
+  --campaign-id dispatch_smoke10_contract
 
 # Assemble target-ordered ragged spectra from the collected shard manifest.
 .venv/bin/luxquarry-allsky assemble-spectra \

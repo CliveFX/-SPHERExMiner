@@ -138,6 +138,17 @@ docker build -f container/Dockerfile -t luxquarry-allsky:local .
   --working-dir /workspace/luxquarry_allsky_engine \
   --pvc-name luxquarry-data \
   --mount-path /workspace
+
+.venv/bin/luxquarry-allsky write-k8s-postprocess-job \
+  --plan runs/dispatch_smoke10_materialized2/dispatch_plan.json \
+  --out-dir runs/dispatch_smoke10_materialized2/k8s \
+  --image luxquarry-allsky:local \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --pvc-name luxquarry-data \
+  --mount-path /workspace \
+  --campaign-id dispatch_smoke10_materialized2_finalize
 ```
 
 Validated on the 10-frame materialized smoke plan:
@@ -147,6 +158,8 @@ jobs: 3
 gpu request per job: 1
 worker args: run-persistent-gpu-worker
 materialized worker runtime args: --worker-index 0 --worker-count 1
+postprocess jobs: 1
+postprocess args: finalize-dispatch-run
 ```
 
 The image contract is:
@@ -160,3 +173,8 @@ GPU request: one nvidia.com/gpu per Job by default
 
 For EKS, push the same image to ECR and pass the ECR image URI to
 `write-k8s-jobs --image`.
+
+The postprocess Job should run after worker Jobs complete. It executes
+`finalize-dispatch-run`, which collects worker outputs, assembles spectra with
+cuDF, and writes the campaign contract. The command refuses incomplete dispatch
+runs unless `--allow-incomplete` is passed.

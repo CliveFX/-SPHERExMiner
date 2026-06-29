@@ -807,3 +807,97 @@ Notes:
 - This is only a status/contract layer. It does not implement injection or
   recovery yet, but it prevents the all-sky engine from treating baseline
   photometry as a complete science campaign.
+
+## 2026-06-29: Dispatch Finalizer Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky finalize-dispatch-run \
+  --plan runs/dispatch_smoke10_materialized2/dispatch_plan.json \
+  --spectra-out-dir runs/dispatch_smoke10_materialized2/spectra_finalize_smoke \
+  --spectra-run-id dispatch_smoke10_materialized2_finalize \
+  --campaign-id dispatch_smoke10_materialized2_finalize \
+  --campaign-contract-out runs/dispatch_smoke10_materialized2/campaign_contract_finalize.json \
+  --device cuda:0
+```
+
+Result:
+
+```text
+backend: luxquarry_finalize_dispatch
+dispatch_complete: true
+measurement_rows: 2,770
+spectra_measurement_rows: 2,770
+target_count: 720
+science_complete: false
+total_wall_sec: 1.247
+```
+
+Sub-stage timings:
+
+```text
+collect_wall_sec: 0.0079
+read_shards_wall_sec: 0.1510
+sort_wall_sec: 0.0454
+write_spectra_wall_sec: 0.0389
+target_summary_wall_sec: 0.1465
+spectra_total_wall_sec: 1.237
+```
+
+Complete campaign-contract stages:
+
+```text
+baseline_dispatch
+baseline_spectra_assembly
+```
+
+Missing or blocked stages:
+
+```text
+baseline_blind_scoring
+injected_dispatch
+injected_spectra_assembly
+injected_blind_scoring
+truth_target_recovery
+viewer_indexes
+```
+
+Kubernetes postprocess manifest smoke:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-k8s-postprocess-job \
+  --plan runs/dispatch_smoke10_materialized2/dispatch_plan.json \
+  --out-dir runs/dispatch_smoke10_materialized2/k8s_postprocess \
+  --image luxquarry-allsky:local \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --pvc-name luxquarry-data \
+  --mount-path /workspace \
+  --campaign-id dispatch_smoke10_materialized2_finalize
+```
+
+Validation:
+
+```text
+documents: 1
+kind: Job
+command: luxquarry-allsky
+args include: finalize-dispatch-run
+gpu request/limit: nvidia.com/gpu=1
+workingDir: /workspace/luxquarry_allsky_engine
+```
+
+Notes:
+
+- `finalize-dispatch-run` is the preferred local and Kubernetes post-worker
+  handoff because it keeps collection, spectra assembly, and campaign-contract
+  writing together.
+- The command fails unless the dispatch aggregate reports complete worker and
+  shard outputs. `--allow-incomplete` is diagnostic-only.
+- The generated postprocess Job assumes paths are relative to the configured
+  container working directory. With `/workspace/luxquarry_allsky_engine`, use
+  `runs/...` paths.

@@ -167,6 +167,44 @@ Each stage is marked `complete`, `missing`, or `blocked`. This gives the
 next-gen runner and future dashboard one place to answer, "is this campaign
 science complete?" without accidentally ignoring injected recovery.
 
+For normal post-worker operation, prefer the combined finalizer:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky finalize-dispatch-run \
+  --plan runs/dispatch_smoke10_materialized2/dispatch_plan.json \
+  --spectra-out-dir runs/dispatch_smoke10_materialized2/spectra_finalize \
+  --spectra-run-id dispatch_smoke10_materialized2_finalize \
+  --campaign-id dispatch_smoke10_materialized2_finalize \
+  --campaign-contract-out runs/dispatch_smoke10_materialized2/campaign_contract_finalize.json \
+  --device cuda:0
+```
+
+This runs `collect-dispatch-run`, `assemble-spectra`, and
+`write-campaign-contract` in one command. It fails closed if any worker or shard
+is incomplete; use `--allow-incomplete` only for diagnostic partial-run
+products.
+
+The matching post-worker Kubernetes artifact is:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-k8s-postprocess-job \
+  --plan runs/dispatch_smoke10_materialized2/dispatch_plan.json \
+  --out-dir runs/dispatch_smoke10_materialized2/k8s \
+  --image luxquarry-allsky:local \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --pvc-name luxquarry-data \
+  --mount-path /workspace \
+  --campaign-id dispatch_smoke10_materialized2_finalize
+```
+
+When using `--working-dir /workspace/luxquarry_allsky_engine`, pass paths
+relative to that directory (`runs/...`). Repo-root-prefixed paths will be wrong
+inside the container.
+
 After the workers finish, collect the run:
 
 ```bash

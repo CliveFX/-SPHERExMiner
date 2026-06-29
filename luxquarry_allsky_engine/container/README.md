@@ -78,6 +78,24 @@ docker run --rm --gpus '"device=0"' \
 - one GPU requested per worker pod by default
 - worker args copied directly from the dispatch plan
 
+After worker Jobs complete, generate the postprocess Job:
+
+```bash
+luxquarry-allsky write-k8s-postprocess-job \
+  --plan runs/<run_id>/dispatch_plan.json \
+  --out-dir runs/<run_id>/k8s \
+  --image luxquarry-allsky:local \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --pvc-name luxquarry-data \
+  --mount-path /workspace \
+  --campaign-id <run_id>_finalize
+```
+
+That Job runs `finalize-dispatch-run`, which collects worker summaries,
+assembles spectra with cuDF, and writes the campaign contract.
+
 For EKS, replace the local image tag with the registry image, for example:
 
 ```bash

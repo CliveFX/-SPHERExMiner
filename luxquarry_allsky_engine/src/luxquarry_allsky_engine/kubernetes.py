@@ -27,6 +27,32 @@ class KubernetesJobConfig:
     env: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class KubernetesPostprocessJobConfig:
+    plan_path: Path
+    output_dir: Path
+    image: str
+    namespace: str = "default"
+    service_account: str | None = None
+    container_executable: str = "luxquarry-allsky"
+    working_dir: str | None = None
+    device: str = "cuda:0"
+    gpu_limit: int = 1
+    cpu_request: str = "4"
+    memory_request: str = "16Gi"
+    restart_policy: str = "Never"
+    backoff_limit: int = 1
+    pvc_name: str | None = None
+    mount_path: str | None = None
+    campaign_id: str | None = None
+    spectra_out_dir: Path | None = None
+    spectra_run_id: str | None = None
+    campaign_contract_out: Path | None = None
+    only_ok: bool = False
+    allow_incomplete: bool = False
+    env: dict[str, str] = field(default_factory=dict)
+
+
 def write_kubernetes_jobs(config: KubernetesJobConfig) -> dict[str, Any]:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     plan = json.loads(config.plan_path.read_text(encoding="utf-8"))
@@ -46,6 +72,29 @@ def write_kubernetes_jobs(config: KubernetesJobConfig) -> dict[str, Any]:
         "worker_names": [job["metadata"]["name"] for job in jobs],
     }
     summary_path = config.output_dir / "k8s_jobs_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return summary
+
+
+def write_kubernetes_postprocess_job(config: KubernetesPostprocessJobConfig) -> dict[str, Any]:
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    plan = json.loads(config.plan_path.read_text(encoding="utf-8"))
+    run_id = str(plan.get("run_id") or "luxquarry")
+    job = _postprocess_job(plan, config)
+    manifest_path = config.output_dir / f"{run_id}.postprocess-job.yaml"
+    manifest_path.write_text(_as_yaml_documents([job]), encoding="utf-8")
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "backend": "kubernetes_postprocess_job_manifest_generator",
+        "plan_path": str(config.plan_path),
+        "run_id": run_id,
+        "namespace": config.namespace,
+        "image": config.image,
+        "job_count": 1,
+        "manifest_path": str(manifest_path),
+        "job_name": job["metadata"]["name"],
+    }
+    summary_path = config.output_dir / "k8s_postprocess_job_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
 
@@ -105,6 +154,127 @@ def _worker_job(plan: dict[str, Any], worker: dict[str, Any], config: Kubernetes
             },
         },
     }
+
+
+def _postprocess_job(plan: dict[str, Any], config: KubernetesPostprocessJobConfig) -> dict[str, Any]:
+    run_id = str(plan.get("run_id") or "luxquarry")
+    args = [
+        "finalize-dispatch-run",
+        "--plan",
+        str(config.plan_path),
+        "--device",
+        config.device,
+    ]
+    if config.campaign_id:
+        args.extend(["--campaign-id", config.campaign_id])
+    if config.spectra_out_dir:
+        args.extend(["--spectra-out-dir", str(config.spectra_out_dir)])
+    if config.spectra_run_id:
+        args.extend(["--spectra-run-id", config.spectra_run_id])
+    if config.campaign_contract_out:
+        args.extend(["--campaign-contract-out", str(config.campaign_contract_out)])
+    if config.only_ok:
+        args.append("--only-ok")
+    if config.allow_incomplete:
+        args.append("--allow-incomplete")
+
+    labels = {
+        "app.kubernetes.io/name": "luxquarry-allsky",
+        "luxquarry/run-id": _label_value(run_id),
+        "luxquarry/job-role": "postprocess",
+    }
+    container = _container(
+        name="luxquarry-postprocess",
+        image=config.image,
+        command=[config.container_executable],
+        args=args,
+        env=config.env,
+        working_dir=config.working_dir,
+        gpu_limit=config.gpu_limit,
+        cpu_request=config.cpu_request,
+        memory_request=config.memory_request,
+        pvc_name=config.pvc_name,
+        mount_path=config.mount_path,
+    )
+    pod_spec = _pod_spec(
+        container=container,
+        restart_policy=config.restart_policy,
+        service_account=config.service_account,
+        pvc_name=config.pvc_name,
+        mount_path=config.mount_path,
+    )
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": _job_name(f"{run_id}.postprocess"),
+            "namespace": config.namespace,
+            "labels": labels,
+        },
+        "spec": {
+            "backoffLimit": config.backoff_limit,
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": pod_spec,
+            },
+        },
+    }
+
+
+def _container(
+    *,
+    name: str,
+    image: str,
+    command: list[str],
+    args: list[str],
+    env: dict[str, str],
+    working_dir: str | None,
+    gpu_limit: int,
+    cpu_request: str,
+    memory_request: str,
+    pvc_name: str | None,
+    mount_path: str | None,
+) -> dict[str, Any]:
+    container: dict[str, Any] = {
+        "name": name,
+        "image": image,
+        "imagePullPolicy": "IfNotPresent",
+        "command": command,
+        "args": args,
+        "env": [{"name": key, "value": value} for key, value in sorted(env.items())],
+        "resources": {
+            "limits": {"nvidia.com/gpu": gpu_limit},
+            "requests": {
+                "cpu": cpu_request,
+                "memory": memory_request,
+                "nvidia.com/gpu": gpu_limit,
+            },
+        },
+    }
+    if working_dir:
+        container["workingDir"] = working_dir
+    if pvc_name and mount_path:
+        container["volumeMounts"] = [{"name": "luxquarry-data", "mountPath": mount_path}]
+    return container
+
+
+def _pod_spec(
+    *,
+    container: dict[str, Any],
+    restart_policy: str,
+    service_account: str | None,
+    pvc_name: str | None,
+    mount_path: str | None,
+) -> dict[str, Any]:
+    pod_spec: dict[str, Any] = {
+        "restartPolicy": restart_policy,
+        "containers": [container],
+    }
+    if service_account:
+        pod_spec["serviceAccountName"] = service_account
+    if pvc_name and mount_path:
+        pod_spec["volumes"] = [{"name": "luxquarry-data", "persistentVolumeClaim": {"claimName": pvc_name}}]
+    return pod_spec
 
 
 def _as_yaml_documents(objects: list[dict[str, Any]]) -> str:
