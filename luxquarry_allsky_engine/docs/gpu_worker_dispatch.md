@@ -66,6 +66,7 @@ cd luxquarry_allsky_engine
   --devices cuda:0,cuda:1,cuda:2 \
   --shard-batch-frames 5 \
   --prefetch-frames 2 \
+  --status-interval-frames 25 \
   --limit-frames 10
 ```
 
@@ -112,6 +113,10 @@ matched CPU ok rows: 2,766
 flux p95 abs delta vs CPU: 0.025 uJy
 ```
 
+The worker also supports `--status-interval-frames N` to avoid rewriting the
+status JSON every frame on large runs. Use a small number for interactive local
+smokes and a larger value for all-sky batch jobs.
+
 Three-worker local dispatch over three GPUs:
 
 ```text
@@ -142,3 +147,14 @@ focus on:
 
 RAPIDS should remain the table/shard engine, while Warp/CUDA owns the aperture
 kernel.
+
+## Precision
+
+The current hot path uses FP32 image/variance payloads and FP32 Warp kernels.
+RTX 6000 Ada cards support FP64 functionally, but their FP64 throughput is far
+below FP32. On the smoke benchmark, FP32 GPU photometry matches the CPU baseline
+for 2,766 ok measurements with p95 aperture flux delta of about 0.025 uJy.
+
+If we need numerical audits, add a small FP64 audit mode for selected frames and
+targets. Do not make FP64 the default mining path unless it changes a science
+decision.

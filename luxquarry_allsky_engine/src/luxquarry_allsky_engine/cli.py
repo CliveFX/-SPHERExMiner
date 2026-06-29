@@ -126,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     persistent.add_argument("--no-rmm-pool", action="store_true")
     persistent.add_argument("--shard-batch-frames", type=int, default=1)
     persistent.add_argument("--prefetch-frames", type=int, default=0)
+    persistent.add_argument("--status-interval-frames", type=int, default=1)
     persistent.add_argument("--aperture-radius-pix", type=float, default=2.0)
     persistent.add_argument("--annulus-inner-pix", type=float, default=4.0)
     persistent.add_argument("--annulus-outer-pix", type=float, default=6.0)
@@ -147,6 +148,7 @@ def main(argv: list[str] | None = None) -> int:
     dispatch.add_argument("--workers-per-device", type=int, default=1)
     dispatch.add_argument("--shard-batch-frames", type=int, default=1)
     dispatch.add_argument("--prefetch-frames", type=int, default=0)
+    dispatch.add_argument("--status-interval-frames", type=int, default=1)
     dispatch.add_argument("--limit-frames", type=int)
     dispatch.add_argument("--executable", default=".venv/bin/luxquarry-allsky")
     dispatch.set_defaults(func=cmd_plan_gpu_dispatch)
@@ -317,6 +319,8 @@ def cmd_run_persistent_gpu_worker(args: argparse.Namespace) -> int:
         raise ValueError("--shard-batch-frames must be positive")
     if args.prefetch_frames < 0:
         raise ValueError("--prefetch-frames must be non-negative")
+    if args.status_interval_frames <= 0:
+        raise ValueError("--status-interval-frames must be positive")
     summary = run_persistent_gpu_worker(
         manifest_path=args.manifest,
         projected_targets_path=args.projected_targets,
@@ -337,6 +341,7 @@ def cmd_run_persistent_gpu_worker(args: argparse.Namespace) -> int:
             rmm_pool=not args.no_rmm_pool,
             shard_batch_frames=args.shard_batch_frames,
             prefetch_frames=args.prefetch_frames,
+            status_interval_frames=args.status_interval_frames,
         ),
         limit_frames=args.limit_frames,
         status_path=args.status_path,
@@ -360,6 +365,7 @@ def cmd_plan_gpu_dispatch(args: argparse.Namespace) -> int:
             executable=args.executable,
             shard_batch_frames=args.shard_batch_frames,
             prefetch_frames=args.prefetch_frames,
+            status_interval_frames=args.status_interval_frames,
         )
     )
     write_dispatch_plan(plan, args.plan_out)

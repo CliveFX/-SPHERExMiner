@@ -264,7 +264,8 @@ cd luxquarry_allsky_engine
   --limit-frames 10 \
   --device cuda:0 \
   --shard-batch-frames 5 \
-  --prefetch-frames 2
+  --prefetch-frames 2 \
+  --status-interval-frames 5
 ```
 
 Result:
@@ -277,6 +278,16 @@ ok_measurement_rows: 2,766
 failed_frames: 0
 shards: 2
 total_wall_sec: 1.156
+```
+
+After target grouping, FP32 FITS payloads, and status throttling:
+
+```text
+total_wall_sec: 1.151
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+matched_ok_measurements_vs_cpu: 2,766
+flux_p95_abs_delta_uJy_vs_cpu: 0.0253
 ```
 
 Correctness:
@@ -293,6 +304,9 @@ Notes:
 - `--prefetch-frames 2` overlaps FITS reads with GPU/table work. The reported
   per-frame `fits_read_wall_sec` remains useful as I/O accounting, but much of
   it no longer blocks the hot loop.
+- `--status-interval-frames` reduces status JSON churn on large runs.
+- The worker groups targets by frame once and reads FITS image/variance payloads
+  as FP32 to avoid repeated target scans and float64 payload churn.
 - This is the current recommended local worker mode for longer frame queues.
 
 ## 2026-06-29: Three-GPU Dispatch Smoke

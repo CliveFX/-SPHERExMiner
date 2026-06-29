@@ -36,6 +36,7 @@ class PersistentWorkerConfig:
     rmm_pool: bool = True
     shard_batch_frames: int = 1
     prefetch_frames: int = 0
+    status_interval_frames: int = 1
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,10 @@ class PersistentGpuFrameWorker:
         targets = pd.read_parquet(projected_targets_path)
         frame_ids = set(manifest["frame_group_id"].astype(str))
         targets = targets[targets["frame_group_id"].astype(str).isin(frame_ids)].copy()
+        targets_by_frame = {
+            str(frame_group_id): frame_targets
+            for frame_group_id, frame_targets in targets.groupby("frame_group_id", sort=False)
+        }
 
         summary: dict[str, Any] = {
             "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -119,9 +124,10 @@ class PersistentGpuFrameWorker:
         frame_payloads = self._iter_frame_payloads(frames)
         for frame_ordinal, (frame, payload) in enumerate(frame_payloads):
             frame_group_id = str(frame.get("frame_group_id"))
-            frame_targets = targets[
-                targets["frame_group_id"].astype(str).eq(frame_group_id) & targets["in_frame"].astype(bool)
-            ].copy()
+            frame_targets_all = targets_by_frame.get(frame_group_id)
+            if frame_targets_all is None or frame_targets_all.empty:
+                continue
+            frame_targets = frame_targets_all[frame_targets_all["in_frame"].astype(bool)]
             if frame_targets.empty:
                 continue
             t0 = time.perf_counter()
@@ -180,7 +186,8 @@ class PersistentGpuFrameWorker:
             summary["calibration_upload_count"] = len(self._calibration)
             summary["completed_frames"] = len(summary["frame_timings"])
             summary["total_wall_sec"] = time.perf_counter() - started
-            self._write_status(status_path, summary, started, state="running")
+            if self._should_write_status(len(summary["frame_timings"])):
+                self._write_status(status_path, summary, started, state="running")
 
         if pending_gdfs:
             self._flush_shard_batch(
@@ -215,8 +222,8 @@ class PersistentGpuFrameWorker:
         calibration = self._get_calibration(release=release, detector=detector)
 
         t_select = time.perf_counter()
-        x_zero = targets["x_pix"].to_numpy(dtype=float) - 1.0
-        y_zero = targets["y_pix"].to_numpy(dtype=float) - 1.0
+        x_zero = targets["x_pix"].to_numpy(dtype=np.float32) - np.float32(1.0)
+        y_zero = targets["y_pix"].to_numpy(dtype=np.float32) - np.float32(1.0)
         edge_zero = np.minimum.reduce(
             [x_zero, y_zero, payload.image.shape[1] - 1 - x_zero, payload.image.shape[0] - 1 - y_zero]
         )
@@ -333,8 +340,8 @@ class PersistentGpuFrameWorker:
         path = Path(str(frame["path"]))
         with fits.open(path, memmap=True) as hdul:
             image_hdu = hdul["IMAGE"]
-            image = np.asarray(image_hdu.data, dtype=float)
-            variance = np.asarray(hdul["VARIANCE"].data, dtype=float) if "VARIANCE" in hdul else None
+            image = np.asarray(image_hdu.data, dtype=np.float32)
+            variance = np.asarray(hdul["VARIANCE"].data, dtype=np.float32) if "VARIANCE" in hdul else None
             flags = np.asarray(hdul["FLAGS"].data, dtype=np.uint32) if "FLAGS" in hdul else None
             unit_scale = image_to_ujy_arcsec2_scale(image_hdu.header)
         return FramePayload(
@@ -377,6 +384,10 @@ class PersistentGpuFrameWorker:
         pending_gdfs.clear()
         shard_group.clear()
         return shard_path, write_wall
+
+    def _should_write_status(self, completed_frames: int) -> bool:
+        interval = max(1, int(self.config.status_interval_frames))
+        return completed_frames <= 1 or completed_frames % interval == 0
 
     def _init_gpu_runtime(self) -> None:
         device_index = _device_index(self.config.device)

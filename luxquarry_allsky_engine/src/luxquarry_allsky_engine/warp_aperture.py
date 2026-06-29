@@ -454,13 +454,13 @@ def run_warp_aperture_batch(
 
     bad_mask_value = sum(1 << int(bit) for bit in fatal_flag_bits)
     height, width = flux_ujy.shape
-    flux_dev = wp.array(np.ascontiguousarray(flux_ujy.astype(np.float32).ravel()), dtype=wp.float32, device=device)
+    flux_dev = wp.array(_flat_float32(flux_ujy), dtype=wp.float32, device=device)
     var_dev = wp.array(
-        np.ascontiguousarray(np.nan_to_num(var_ujy2, nan=0.0).astype(np.float32).ravel()),
+        _flat_float32(np.nan_to_num(var_ujy2, nan=0.0)),
         dtype=wp.float32,
         device=device,
     )
-    flags_dev = wp.array(np.ascontiguousarray(np.asarray(flags, dtype=np.uint32).ravel()), dtype=wp.uint32, device=device)
+    flags_dev = wp.array(_flat_uint32(flags), dtype=wp.uint32, device=device)
     x_dev = wp.array(x, dtype=wp.float32, device=device)
     y_dev = wp.array(y, dtype=wp.float32, device=device)
     out_flux = wp.empty(n, dtype=wp.float32, device=device)
@@ -563,9 +563,9 @@ def upload_frame_calibration(
     if cwave.shape != sapm.shape or cband.shape != sapm.shape:
         raise ValueError(f"Calibration map shapes do not match: sapm={sapm.shape} cwave={cwave.shape} cband={cband.shape}")
     return WarpFrameCalibrationDevice(
-        sapm=wp.array(np.ascontiguousarray(sapm.astype(np.float32).ravel()), dtype=wp.float32, device=device),
-        cwave=wp.array(np.ascontiguousarray(cwave.astype(np.float32).ravel()), dtype=wp.float32, device=device),
-        cband=wp.array(np.ascontiguousarray(cband.astype(np.float32).ravel()), dtype=wp.float32, device=device),
+        sapm=wp.array(_flat_float32(sapm), dtype=wp.float32, device=device),
+        cwave=wp.array(_flat_float32(cwave), dtype=wp.float32, device=device),
+        cband=wp.array(_flat_float32(cband), dtype=wp.float32, device=device),
         width=int(width),
         height=int(height),
         device=device,
@@ -606,13 +606,13 @@ def run_warp_frame_aperture_resident_cupy(
         raise ValueError(f"Frame shape {(height, width)} does not match calibration {(calibration.height, calibration.width)}")
     bad_mask_value = sum(1 << int(bit) for bit in fatal_flag_bits)
 
-    image_dev = wp.array(np.ascontiguousarray(image.astype(np.float32).ravel()), dtype=wp.float32, device=device)
+    image_dev = wp.array(_flat_float32(image), dtype=wp.float32, device=device)
     variance_dev = wp.array(
-        np.ascontiguousarray(np.nan_to_num(variance, nan=0.0).astype(np.float32).ravel()),
+        _flat_float32(np.nan_to_num(variance, nan=0.0)),
         dtype=wp.float32,
         device=device,
     )
-    flags_dev = wp.array(np.ascontiguousarray(np.asarray(flags, dtype=np.uint32).ravel()), dtype=wp.uint32, device=device)
+    flags_dev = wp.array(_flat_uint32(flags), dtype=wp.uint32, device=device)
     x_dev = wp.array(x, dtype=wp.float32, device=device)
     y_dev = wp.array(y, dtype=wp.float32, device=device)
     out_flux = wp.empty(n, dtype=wp.float32, device=device)
@@ -670,3 +670,11 @@ def run_warp_frame_aperture_resident_cupy(
         "cband_um": cp.from_dlpack(out_cband),
     }
     return WarpFrameApertureDeviceBatch(columns=columns, status=cp.from_dlpack(out_status), device=device)
+
+
+def _flat_float32(values: np.ndarray) -> np.ndarray:
+    return np.ascontiguousarray(np.asarray(values, dtype=np.float32).ravel())
+
+
+def _flat_uint32(values: np.ndarray) -> np.ndarray:
+    return np.ascontiguousarray(np.asarray(values, dtype=np.uint32).ravel())
