@@ -192,3 +192,98 @@ Notes:
   CPU and Warp sigma-clipping implementations are not byte-for-byte identical.
   Flux and wavelength agreement are already tight enough for the next
   performance prototype.
+
+## 2026-06-29: Persistent GPU Worker Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-persistent-gpu-worker \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/persistent_gpu_worker_smoke10 \
+  --run-id persistent_smoke10 \
+  --limit-frames 10 \
+  --device cuda:0
+```
+
+Result:
+
+```text
+frame_count: 10
+input_projected_rows: 5,000
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+failed_frames: 0
+calibration_upload_count: 3
+total_wall_sec: 2.387
+backend: persistent Warp frame kernel + cuDF shards
+```
+
+Stage profile from frame timings:
+
+```text
+kernel_wall_sec: ~0.030-0.035 sec/frame
+fits_read_wall_sec: ~0.105-0.133 sec/frame
+table_wall_sec: ~0.011 sec/frame after first frame
+write_wall_sec: ~0.010 sec/frame after first frame
+```
+
+Correctness against CPU aperture baseline:
+
+```text
+matched_ok_measurements: 2,766
+flux_median_abs_delta_uJy: 0.0022
+flux_p95_abs_delta_uJy: 0.0253
+flux_p95_relative_delta_pct: 0.000291
+cwave_p95_abs_delta_um: 2.3e-7
+cband_p95_abs_delta_um: 1.9e-8
+```
+
+Notes:
+
+- Detector calibration maps are uploaded once per `(release, detector)` and
+  kept resident for the worker lifetime.
+- The worker writes one independent parquet shard per frame plus
+  `run_summary.json` and atomic `run_status.json`.
+- The measured bottleneck has shifted to FITS reading and table/shard overhead;
+  the aperture kernel is no longer the dominant cost on this smoke set.
+
+## 2026-06-29: Three-GPU Dispatch Smoke
+
+Commands:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky plan-gpu-dispatch \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_smoke10 \
+  --run-id dispatch_smoke10 \
+  --plan-out runs/dispatch_smoke10/dispatch_plan.json \
+  --devices cuda:0,cuda:1,cuda:2 \
+  --limit-frames 10
+
+runs/dispatch_smoke10/dispatch_plan.sh
+```
+
+Result:
+
+```text
+workers: 3
+devices: cuda:0,cuda:1,cuda:2
+frame split: 4 / 3 / 3
+shards: 10
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+failed_frames: 0
+```
+
+Notes:
+
+- The dispatch contract is `frame_ordinal % worker_count == worker_index`.
+- Each worker has its own output directory and status JSON.
+- For tiny runs, launching three Python/RAPIDS processes costs more than it
+  saves. This mode is for long queues where setup is amortized and GPUs stay
+  busy.

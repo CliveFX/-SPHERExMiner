@@ -55,6 +55,16 @@ class WarpFrameApertureDeviceBatch:
     device: str
 
 
+@dataclass(frozen=True)
+class WarpFrameCalibrationDevice:
+    sapm: object
+    cwave: object
+    cband: object
+    width: int
+    height: int
+    device: str
+
+
 if wp is not None:
 
     @wp.kernel
@@ -520,9 +530,70 @@ def run_warp_frame_aperture_cupy(
 ) -> WarpFrameApertureDeviceBatch:
     if wp is None:
         raise RuntimeError(f"Warp is not available: {_WARP_IMPORT_ERROR}")
+
+    wp.init()
+    calibration = upload_frame_calibration(sapm=sapm, cwave=cwave, cband=cband, device=device)
+    return run_warp_frame_aperture_resident_cupy(
+        image=image,
+        variance=variance,
+        flags=flags,
+        calibration=calibration,
+        image_to_ujy_arcsec2=image_to_ujy_arcsec2,
+        x_zero_based=x_zero_based,
+        y_zero_based=y_zero_based,
+        aperture_radius_pix=aperture_radius_pix,
+        annulus_inner_pix=annulus_inner_pix,
+        annulus_outer_pix=annulus_outer_pix,
+        fatal_flag_bits=fatal_flag_bits,
+        device=device,
+    )
+
+
+def upload_frame_calibration(
+    *,
+    sapm: np.ndarray,
+    cwave: np.ndarray,
+    cband: np.ndarray,
+    device: str = "cuda:0",
+) -> WarpFrameCalibrationDevice:
+    if wp is None:
+        raise RuntimeError(f"Warp is not available: {_WARP_IMPORT_ERROR}")
+    wp.init()
+    height, width = sapm.shape
+    if cwave.shape != sapm.shape or cband.shape != sapm.shape:
+        raise ValueError(f"Calibration map shapes do not match: sapm={sapm.shape} cwave={cwave.shape} cband={cband.shape}")
+    return WarpFrameCalibrationDevice(
+        sapm=wp.array(np.ascontiguousarray(sapm.astype(np.float32).ravel()), dtype=wp.float32, device=device),
+        cwave=wp.array(np.ascontiguousarray(cwave.astype(np.float32).ravel()), dtype=wp.float32, device=device),
+        cband=wp.array(np.ascontiguousarray(cband.astype(np.float32).ravel()), dtype=wp.float32, device=device),
+        width=int(width),
+        height=int(height),
+        device=device,
+    )
+
+
+def run_warp_frame_aperture_resident_cupy(
+    *,
+    image: np.ndarray,
+    variance: np.ndarray | None,
+    flags: np.ndarray | None,
+    calibration: WarpFrameCalibrationDevice,
+    image_to_ujy_arcsec2: float,
+    x_zero_based: np.ndarray,
+    y_zero_based: np.ndarray,
+    aperture_radius_pix: float,
+    annulus_inner_pix: float,
+    annulus_outer_pix: float,
+    fatal_flag_bits: Iterable[int],
+    device: str = "cuda:0",
+) -> WarpFrameApertureDeviceBatch:
+    if wp is None:
+        raise RuntimeError(f"Warp is not available: {_WARP_IMPORT_ERROR}")
     import cupy as cp
 
     wp.init()
+    if calibration.device != device:
+        raise ValueError(f"Calibration lives on {calibration.device}, requested {device}")
     x = np.asarray(x_zero_based, dtype=np.float32)
     y = np.asarray(y_zero_based, dtype=np.float32)
     n = len(x)
@@ -531,6 +602,8 @@ def run_warp_frame_aperture_cupy(
     if flags is None:
         flags = np.zeros_like(image, dtype=np.uint32)
     height, width = image.shape
+    if width != calibration.width or height != calibration.height:
+        raise ValueError(f"Frame shape {(height, width)} does not match calibration {(calibration.height, calibration.width)}")
     bad_mask_value = sum(1 << int(bit) for bit in fatal_flag_bits)
 
     image_dev = wp.array(np.ascontiguousarray(image.astype(np.float32).ravel()), dtype=wp.float32, device=device)
@@ -540,9 +613,6 @@ def run_warp_frame_aperture_cupy(
         device=device,
     )
     flags_dev = wp.array(np.ascontiguousarray(np.asarray(flags, dtype=np.uint32).ravel()), dtype=wp.uint32, device=device)
-    sapm_dev = wp.array(np.ascontiguousarray(sapm.astype(np.float32).ravel()), dtype=wp.float32, device=device)
-    cwave_dev = wp.array(np.ascontiguousarray(cwave.astype(np.float32).ravel()), dtype=wp.float32, device=device)
-    cband_dev = wp.array(np.ascontiguousarray(cband.astype(np.float32).ravel()), dtype=wp.float32, device=device)
     x_dev = wp.array(x, dtype=wp.float32, device=device)
     y_dev = wp.array(y, dtype=wp.float32, device=device)
     out_flux = wp.empty(n, dtype=wp.float32, device=device)
@@ -562,9 +632,9 @@ def run_warp_frame_aperture_cupy(
             image_dev,
             variance_dev,
             flags_dev,
-            sapm_dev,
-            cwave_dev,
-            cband_dev,
+            calibration.sapm,
+            calibration.cwave,
+            calibration.cband,
             int(width),
             int(height),
             float(image_to_ujy_arcsec2),

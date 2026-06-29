@@ -109,6 +109,28 @@ Implemented stages:
   --out runs/measurements_gpu_aperture_smoke10_warm/measurements.parquet \
   --limit-frames 10 \
   --device cuda:0
+
+# Run a persistent GPU worker. This keeps RAPIDS/Warp initialized and caches
+# detector calibration maps on the GPU for the lifetime of the process.
+.venv/bin/luxquarry-allsky run-persistent-gpu-worker \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/persistent_gpu_worker_smoke10 \
+  --run-id persistent_smoke10 \
+  --limit-frames 10 \
+  --device cuda:0
+
+# Write a multi-GPU dispatch plan. The generated shell script launches one
+# persistent worker per device; the JSON is the same contract an EKS job
+# generator should use.
+.venv/bin/luxquarry-allsky plan-gpu-dispatch \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_smoke10 \
+  --run-id dispatch_smoke10 \
+  --plan-out runs/dispatch_smoke10/dispatch_plan.json \
+  --devices cuda:0,cuda:1,cuda:2 \
+  --limit-frames 10
 ```
 
 The target selection stage is still a prefilter. Photometry should consume only
@@ -126,6 +148,16 @@ IMAGE + VARIANCE + FLAGS + SAPM + CWAVE + CBAND + target pixels
 The next production path is a persistent monolithic worker that keeps RAPIDS,
 Warp kernels, and detector calibration maps resident across many frames instead
 of paying setup costs per CLI invocation.
+
+The first persistent worker exists now. It writes independent frame shards and
+uses modulo frame partitioning:
+
+```text
+frame_ordinal % worker_count == worker_index
+```
+
+That makes local multi-GPU dispatch and future Kubernetes dispatch the same
+basic model.
 
 ## EKS Target
 
@@ -148,6 +180,7 @@ luxquarry_allsky_engine/
     benchmark_plan.md
     benchmark_log.md
     cuda_and_rapids_strategy.md
+    gpu_worker_dispatch.md
     local_environment.md
     eks_plan.md
   src/

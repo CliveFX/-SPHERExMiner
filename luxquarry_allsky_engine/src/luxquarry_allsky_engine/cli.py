@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import CatalogConfig, build_frame_targets
+from .dispatch import DispatchPlanConfig, build_dispatch_plan, write_dispatch_plan
+from .gpu_worker import PersistentWorkerConfig, run_persistent_gpu_worker
 from .manifest import build_frame_manifest
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
@@ -106,6 +108,44 @@ def main(argv: list[str] | None = None) -> int:
     gpu_aperture.add_argument("--edge-margin-pix", type=float, default=6.0)
     gpu_aperture.add_argument("--limit-frames", type=int)
     gpu_aperture.set_defaults(func=cmd_run_gpu_aperture)
+
+    persistent = sub.add_parser(
+        "run-persistent-gpu-worker",
+        help="Run a persistent GPU frame worker with resident calibration maps and shard outputs.",
+    )
+    persistent.add_argument("--manifest", type=Path, required=True)
+    persistent.add_argument("--projected-targets", type=Path, required=True)
+    persistent.add_argument("--out-dir", type=Path, required=True)
+    persistent.add_argument("--run-id", required=True)
+    persistent.add_argument("--cache-root", type=Path, default=Path("/mnt/niroseti/spherex_cache"))
+    persistent.add_argument("--device", default="cuda:0")
+    persistent.add_argument("--worker-index", type=int, default=0)
+    persistent.add_argument("--worker-count", type=int, default=1)
+    persistent.add_argument("--status-path", type=Path)
+    persistent.add_argument("--write-combined-output", action="store_true")
+    persistent.add_argument("--no-rmm-pool", action="store_true")
+    persistent.add_argument("--aperture-radius-pix", type=float, default=2.0)
+    persistent.add_argument("--annulus-inner-pix", type=float, default=4.0)
+    persistent.add_argument("--annulus-outer-pix", type=float, default=6.0)
+    persistent.add_argument("--edge-margin-pix", type=float, default=6.0)
+    persistent.add_argument("--limit-frames", type=int)
+    persistent.set_defaults(func=cmd_run_persistent_gpu_worker)
+
+    dispatch = sub.add_parser(
+        "plan-gpu-dispatch",
+        help="Write JSON and shell plans for horizontally partitioned persistent GPU workers.",
+    )
+    dispatch.add_argument("--manifest", type=Path, required=True)
+    dispatch.add_argument("--projected-targets", type=Path, required=True)
+    dispatch.add_argument("--out-dir", type=Path, required=True)
+    dispatch.add_argument("--run-id", required=True)
+    dispatch.add_argument("--plan-out", type=Path, required=True)
+    dispatch.add_argument("--cache-root", type=Path, default=Path("/mnt/niroseti/spherex_cache"))
+    dispatch.add_argument("--devices", default="cuda:0", help="Comma-separated GPU devices, e.g. cuda:0,cuda:1,cuda:2")
+    dispatch.add_argument("--workers-per-device", type=int, default=1)
+    dispatch.add_argument("--limit-frames", type=int)
+    dispatch.add_argument("--executable", default=".venv/bin/luxquarry-allsky")
+    dispatch.set_defaults(func=cmd_plan_gpu_dispatch)
 
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)
@@ -261,6 +301,68 @@ def cmd_run_gpu_aperture(args: argparse.Namespace) -> int:
         device=args.device,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_run_persistent_gpu_worker(args: argparse.Namespace) -> int:
+    if args.worker_count <= 0:
+        raise ValueError("--worker-count must be positive")
+    if args.worker_index < 0 or args.worker_index >= args.worker_count:
+        raise ValueError("--worker-index must be in [0, worker-count)")
+    summary = run_persistent_gpu_worker(
+        manifest_path=args.manifest,
+        projected_targets_path=args.projected_targets,
+        output_dir=args.out_dir,
+        run_id=args.run_id,
+        config=PersistentWorkerConfig(
+            aperture=ApertureConfig(
+                cache_root=args.cache_root,
+                aperture_radius_pix=args.aperture_radius_pix,
+                annulus_inner_pix=args.annulus_inner_pix,
+                annulus_outer_pix=args.annulus_outer_pix,
+                edge_margin_pix=args.edge_margin_pix,
+            ),
+            device=args.device,
+            worker_index=args.worker_index,
+            worker_count=args.worker_count,
+            write_combined_output=args.write_combined_output,
+            rmm_pool=not args.no_rmm_pool,
+        ),
+        limit_frames=args.limit_frames,
+        status_path=args.status_path,
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_plan_gpu_dispatch(args: argparse.Namespace) -> int:
+    devices = tuple(part.strip() for part in args.devices.split(",") if part.strip())
+    plan = build_dispatch_plan(
+        DispatchPlanConfig(
+            manifest_path=args.manifest,
+            projected_targets_path=args.projected_targets,
+            output_dir=args.out_dir,
+            run_id=args.run_id,
+            devices=devices,
+            workers_per_device=args.workers_per_device,
+            cache_root=args.cache_root,
+            limit_frames=args.limit_frames,
+            executable=args.executable,
+        )
+    )
+    write_dispatch_plan(plan, args.plan_out)
+    print(
+        json.dumps(
+            {
+                "plan_out": str(args.plan_out),
+                "shell_out": str(args.plan_out.with_suffix(".sh")),
+                "worker_count": plan["worker_count"],
+                "devices": plan["devices"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
