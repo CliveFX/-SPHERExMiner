@@ -102,6 +102,41 @@ records the original logical worker index for aggregation. This is the preferred
 shape for large multi-node runs where repeatedly reading the full projected
 target parquet would waste startup I/O.
 
+## Kubernetes Job Manifest
+
+The same dispatch plan can be converted into Kubernetes Jobs:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-k8s-jobs \
+  --plan runs/dispatch_smoke10_materialized2/dispatch_plan.json \
+  --out-dir runs/dispatch_smoke10_materialized2/k8s \
+  --image luxquarry-allsky:local \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --pvc-name luxquarry-data \
+  --mount-path /workspace \
+  --env LUXQUARRY_MODE=smoke
+```
+
+This writes:
+
+```text
+<run_id>.worker-jobs.yaml
+k8s_jobs_summary.json
+```
+
+The YAML intentionally uses JSON-shaped YAML documents so validation does not
+require another dependency. Each Job preserves the worker argument vector from
+the dispatch plan, requests `nvidia.com/gpu`, and optionally mounts a PVC. In
+materialized mode each Job points at a per-worker manifest/target parquet and
+runs as `--worker-index 0 --worker-count 1`.
+
+This is still the baseline measurement dispatch layer. It must be followed by
+spectra assembly, scoring, injection/recovery jobs, and viewer index builds for
+a complete campaign.
+
 After the workers finish, collect the run:
 
 ```bash
@@ -137,6 +172,29 @@ measurement row per wavelength sample, sorted by `catalog`, `target_id`,
 `cwave_um`, `frame_group_id`, and `image_id`. It also writes a compact
 `target_summary.parquet` with measurement counts, wavelength range, ok fraction,
 and basic flux statistics.
+
+## Injection and Recovery Contract
+
+Frame-first survey mode still needs the same science gates as the current
+campaign miner. A complete run should emit these data products:
+
+```text
+baseline measurement_shard_manifest.parquet
+baseline spectra_measurements.parquet
+baseline candidate tables
+injected measurement_shard_manifest.parquet
+injected spectra_measurements.parquet
+injected candidate tables
+truth recovery summary for injected targets
+false-positive/candidate review indexes
+```
+
+The injected run should reuse the same target/materialized-input contract as the
+baseline run. That keeps recovery comparisons honest: baseline, injected, raw
+blind scoring, quality-gated blind scoring, and truth-target recovery all refer
+to the same target IDs and frame provenance. Until these stages are wired into
+this engine, the next-gen dispatch layer is a high-throughput photometry and
+spectra assembly prototype, not a full injection/recovery campaign runner.
 
 ## Current Benchmark
 

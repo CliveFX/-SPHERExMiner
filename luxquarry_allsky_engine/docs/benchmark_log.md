@@ -703,3 +703,56 @@ Notes:
 <run_id>.target_summary.parquet
 assemble_summary.json
 ```
+
+## 2026-06-29: Kubernetes Job Manifest Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-k8s-jobs \
+  --plan runs/dispatch_smoke10_materialized2/dispatch_plan.json \
+  --out-dir runs/dispatch_smoke10_materialized2/k8s \
+  --image luxquarry-allsky:local \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --pvc-name luxquarry-data \
+  --mount-path /workspace \
+  --env LUXQUARRY_MODE=smoke
+```
+
+Result:
+
+```text
+backend: kubernetes_job_manifest_generator
+run_id: dispatch_smoke10_materialized2
+job_count: 3
+namespace: luxquarry
+image: luxquarry-allsky:local
+materialize_worker_inputs: true
+manifest: runs/dispatch_smoke10_materialized2/k8s/dispatch_smoke10_materialized2.worker-jobs.yaml
+```
+
+Structural validation:
+
+```text
+documents: 3
+kind: Job
+command: luxquarry-allsky
+args include: run-persistent-gpu-worker
+gpu request/limit: nvidia.com/gpu=1
+workingDir: /workspace/luxquarry_allsky_engine
+volume mount: /workspace
+runtime worker args: --worker-index 0 --worker-count 1
+```
+
+Notes:
+
+- The manifest generator is dependency-free. It writes JSON-shaped YAML
+  documents, which Kubernetes accepts as YAML and local tests can parse with the
+  Python standard library.
+- The generated Jobs are a dispatch artifact for baseline measurement workers.
+  A science campaign still requires spectra assembly, blind scoring,
+  injected-run scoring, truth-target recovery, and candidate/false-positive
+  review products.

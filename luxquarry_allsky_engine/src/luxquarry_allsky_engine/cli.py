@@ -13,6 +13,7 @@ from typing import Any
 from .catalog import CatalogConfig, build_frame_targets
 from .dispatch import DispatchPlanConfig, build_dispatch_plan, collect_dispatch_run, write_dispatch_plan
 from .gpu_worker import PersistentWorkerConfig, run_persistent_gpu_worker
+from .kubernetes import KubernetesJobConfig, write_kubernetes_jobs
 from .manifest import build_frame_manifest
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
@@ -196,6 +197,33 @@ def main(argv: list[str] | None = None) -> int:
     collect_dispatch.add_argument("--plan", type=Path, required=True)
     collect_dispatch.add_argument("--out", type=Path)
     collect_dispatch.set_defaults(func=cmd_collect_dispatch_run)
+
+    k8s_jobs = sub.add_parser(
+        "write-k8s-jobs",
+        help="Write one Kubernetes Job manifest per GPU worker from a dispatch plan.",
+    )
+    k8s_jobs.add_argument("--plan", type=Path, required=True)
+    k8s_jobs.add_argument("--out-dir", type=Path, required=True)
+    k8s_jobs.add_argument("--image", required=True)
+    k8s_jobs.add_argument("--namespace", default="default")
+    k8s_jobs.add_argument("--service-account")
+    k8s_jobs.add_argument("--container-executable", default="luxquarry-allsky")
+    k8s_jobs.add_argument("--working-dir")
+    k8s_jobs.add_argument("--gpu-limit", type=int, default=1)
+    k8s_jobs.add_argument("--cpu-request", default="4")
+    k8s_jobs.add_argument("--memory-request", default="16Gi")
+    k8s_jobs.add_argument("--restart-policy", default="Never")
+    k8s_jobs.add_argument("--backoff-limit", type=int, default=1)
+    k8s_jobs.add_argument("--pvc-name")
+    k8s_jobs.add_argument("--mount-path")
+    k8s_jobs.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Environment variable to place on every worker container. Repeatable.",
+    )
+    k8s_jobs.set_defaults(func=cmd_write_k8s_jobs)
 
     spectra = sub.add_parser(
         "assemble-spectra",
@@ -452,6 +480,30 @@ def cmd_collect_dispatch_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_write_k8s_jobs(args: argparse.Namespace) -> int:
+    summary = write_kubernetes_jobs(
+        KubernetesJobConfig(
+            plan_path=args.plan,
+            output_dir=args.out_dir,
+            image=args.image,
+            namespace=args.namespace,
+            service_account=args.service_account,
+            container_executable=args.container_executable,
+            working_dir=args.working_dir,
+            gpu_limit=args.gpu_limit,
+            cpu_request=args.cpu_request,
+            memory_request=args.memory_request,
+            restart_policy=args.restart_policy,
+            backoff_limit=args.backoff_limit,
+            pvc_name=args.pvc_name,
+            mount_path=args.mount_path,
+            env=_parse_env_assignments(args.env),
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_assemble_spectra(args: argparse.Namespace) -> int:
     summary = assemble_spectra_from_shards(
         SpectraAssemblyConfig(
@@ -562,6 +614,19 @@ def _parse_nvidia_smi(stdout: str) -> list[dict[str, Any]]:
 
 def _write_json(path: Path, data: dict[str, Any]) -> None:
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _parse_env_assignments(assignments: list[str]) -> dict[str, str]:
+    env: dict[str, str] = {}
+    for item in assignments:
+        if "=" not in item:
+            raise ValueError(f"--env must be KEY=VALUE, got {item!r}")
+        key, value = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError(f"--env key must not be empty, got {item!r}")
+        env[key] = value
+    return env
 
 
 def _rate(count: int, elapsed_sec: float) -> float:

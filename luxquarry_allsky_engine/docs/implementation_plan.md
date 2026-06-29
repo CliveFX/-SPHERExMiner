@@ -161,9 +161,21 @@ Goal: generate injection/recovery training data without copying FITS files.
 Tasks:
 
 1. Define injection truth table keyed by target/frame/wavelength.
-2. Apply synthetic source inside frame worker.
-3. Emit injection metadata in measurement rows.
-4. Verify against physical FITS injection on a small case.
+2. Run the same materialized target/frame plan in baseline and injected modes.
+3. Apply synthetic source inside frame worker.
+4. Emit injection metadata in measurement rows.
+5. Assemble injected spectra with the same target IDs and frame provenance as
+   baseline spectra.
+6. Verify against physical FITS injection on a small case.
+
+Exit criteria:
+
+- Baseline and injected products share target IDs, frame IDs, detector IDs, and
+  wavelength provenance.
+- The injected truth table can be joined directly to spectra measurements and
+  candidate rows.
+- A smoke run produces raw blind recovery, quality-gated recovery, and paired
+  delta diagnostics without hand-built side files.
 
 ## Phase 5: Campaign Products
 
@@ -172,10 +184,15 @@ Goal: produce viewer-compatible products at scale.
 Tasks:
 
 1. Build spectra shards.
-2. Build candidate indexes.
-3. Build detector/wavelength systematics summaries.
-4. Build injection recovery summaries.
-5. Build ML training datasets.
+2. Build baseline blind candidate indexes.
+3. Build injected blind candidate indexes.
+4. Build truth-target injection recovery summaries.
+5. Build detector/wavelength systematics summaries.
+6. Build false-positive review indexes.
+7. Build ML training datasets.
+
+Campaign completion requires all of these products. Baseline photometry alone
+is an incomplete run.
 
 ## Phase 6: EKS Deployment
 

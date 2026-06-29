@@ -148,6 +148,18 @@ Implemented stages:
 .venv/bin/luxquarry-allsky collect-dispatch-run \
   --plan runs/dispatch_smoke10/dispatch_plan.json
 
+# Or write Kubernetes Job manifests from the same dispatch plan. This is the
+# cloud/EKS handoff artifact: one pod per materialized GPU worker.
+.venv/bin/luxquarry-allsky write-k8s-jobs \
+  --plan runs/dispatch_smoke10/dispatch_plan.json \
+  --out-dir runs/dispatch_smoke10/k8s \
+  --image luxquarry-allsky:local \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --pvc-name luxquarry-data \
+  --mount-path /workspace
+
 # Assemble target-ordered ragged spectra from the collected shard manifest.
 .venv/bin/luxquarry-allsky assemble-spectra \
   --shard-manifest runs/dispatch_smoke10/measurement_shard_manifest.parquet \
@@ -193,6 +205,12 @@ measurement_shard_manifest.parquet
 The aggregate summary reports missing/incomplete workers, failed frames, missing
 shards, total rows, ok rows, and max worker wall time. The shard manifest is the
 input list downstream spectra assembly should consume.
+
+`write-k8s-jobs` converts that same dispatch plan into dependency-free
+Kubernetes Job YAML. The current generator is intentionally simple: it emits one
+Job per worker, requests `nvidia.com/gpu`, preserves the worker argument vector,
+and optionally attaches a PVC plus environment variables. It is a deployment
+artifact generator, not a different scheduler.
 
 `assemble-spectra` reads the measurement shard manifest with cuDF, writes a
 target/wavelength-sorted ragged spectra table, and writes one target summary
@@ -242,6 +260,27 @@ The cloud version should run one independent frame-group worker per GPU/pod.
 - Kubernetes Jobs or queue-fed workers for frame groups.
 - Post-processing Dask/RAPIDS jobs for spectra assembly and candidate scoring.
 
+## Campaign Completion Contract
+
+A survey run is not complete when baseline aperture shards exist. The complete
+campaign contract is:
+
+```text
+baseline measurement shards
+baseline spectra assembly
+baseline blind scoring and quality-gated scoring
+injected-frame or injected-measurement variant using the same target set
+injected spectra assembly
+injected blind scoring and quality-gated scoring
+truth-target recovery summary
+candidate and false-positive review indexes
+```
+
+The current all-sky engine has the baseline GPU photometry, dispatch,
+collection, and spectra assembly pieces. Injection, recovery, and the
+narrowband candidate scorer must be promoted into this frame-first contract
+before using the engine for science-grade all-sky mining.
+
 ## Repository Layout
 
 ```text
@@ -262,6 +301,7 @@ luxquarry_allsky_engine/
       manifest.py
       catalog.py
       projection.py
+      kubernetes.py
   benchmarks/
     # fixed benchmark manifests and scripts
   k8s/
