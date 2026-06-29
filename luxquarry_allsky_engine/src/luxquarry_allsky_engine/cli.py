@@ -12,6 +12,7 @@ from typing import Any
 
 from .catalog import CatalogConfig, build_frame_targets
 from .manifest import build_frame_manifest
+from .photometry import ApertureConfig, run_cpu_aperture
 from .projection import project_frame_targets
 
 
@@ -77,6 +78,18 @@ def main(argv: list[str] | None = None) -> int:
     project_targets.add_argument("--out", type=Path, required=True)
     project_targets.add_argument("--limit-frames", type=int)
     project_targets.set_defaults(func=cmd_project_frame_targets)
+
+    aperture = sub.add_parser("run-cpu-aperture", help="Run calibrated CPU aperture photometry for projected targets.")
+    aperture.add_argument("--manifest", type=Path, required=True)
+    aperture.add_argument("--projected-targets", type=Path, required=True)
+    aperture.add_argument("--out", type=Path, required=True)
+    aperture.add_argument("--cache-root", type=Path, default=Path("/mnt/niroseti/spherex_cache"))
+    aperture.add_argument("--aperture-radius-pix", type=float, default=2.0)
+    aperture.add_argument("--annulus-inner-pix", type=float, default=4.0)
+    aperture.add_argument("--annulus-outer-pix", type=float, default=6.0)
+    aperture.add_argument("--edge-margin-pix", type=float, default=6.0)
+    aperture.add_argument("--limit-frames", type=int)
+    aperture.set_defaults(func=cmd_run_cpu_aperture)
 
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)
@@ -192,6 +205,24 @@ def cmd_project_frame_targets(args: argparse.Namespace) -> int:
         manifest_path=args.manifest,
         frame_targets_path=args.frame_targets,
         output_path=args.out,
+        limit_frames=args.limit_frames,
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_run_cpu_aperture(args: argparse.Namespace) -> int:
+    summary = run_cpu_aperture(
+        manifest_path=args.manifest,
+        projected_targets_path=args.projected_targets,
+        output_path=args.out,
+        config=ApertureConfig(
+            cache_root=args.cache_root,
+            aperture_radius_pix=args.aperture_radius_pix,
+            annulus_inner_pix=args.annulus_inner_pix,
+            annulus_outer_pix=args.annulus_outer_pix,
+            edge_margin_pix=args.edge_margin_pix,
+        ),
         limit_frames=args.limit_frames,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

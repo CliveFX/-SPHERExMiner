@@ -99,3 +99,40 @@ Notes:
   coordinates, not one target at a time.
 - The RA/Dec catalog footprint query is intentionally a broad prefilter.
   The `in_frame` column is the photometry-ready mask.
+
+## 2026-06-28: CPU Calibrated Aperture Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-cpu-aperture \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out runs/measurements_cpu_aperture_smoke10/measurements.parquet \
+  --limit-frames 10
+```
+
+Result:
+
+```text
+frame_count: 10
+input_projected_rows: 5,000
+measurement_rows: 2,802
+ok_measurement_rows: 2,766
+total_wall_sec: 3.597
+per_frame_wall_sec: 0.294-0.447
+write_measurements: 0.006 sec
+```
+
+Notes:
+
+- This is calibrated aperture photometry in uJy using cached SAPM files and
+  `VARIANCE` propagation.
+- It samples `CWAVE`/`CBAND` from the per-detector spectral WCS maps and stores
+  calibration file provenance in every measurement row.
+- A first implementation accidentally allocated full-frame masks per target and
+  took 39.1 sec for two frames. Switching to local aperture cutouts reduced the
+  same two-frame smoke to 0.77 sec.
+- This CPU stage is a correctness/profiling baseline. The intended V2 hot path
+  is the same frame-batched calculation on GPU.

@@ -93,10 +93,21 @@ Implemented stages:
   --frame-targets runs/frame_targets_smoke_current/frame_targets.parquet \
   --out runs/projected_targets_smoke_current/frame_targets_projected.parquet \
   --limit-frames 10
+
+# Write calibrated uJy aperture measurement rows for in-frame targets.
+.venv/bin/luxquarry-allsky run-cpu-aperture \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out runs/measurements_cpu_aperture_smoke10/measurements.parquet \
+  --limit-frames 10
 ```
 
 The target selection stage is still a prefilter. Photometry should consume only
 rows where `in_frame` is true after `project-frame-targets`.
+
+The CPU aperture stage is a correctness/profiling baseline, not the intended
+throughput engine. The next production path should move this frame-batched
+measurement kernel to GPU while preserving the same output schema.
 
 ## EKS Target
 
