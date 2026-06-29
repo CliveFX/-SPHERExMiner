@@ -41,6 +41,7 @@ class PersistentWorkerConfig:
     prefetch_frames: int = 0
     status_interval_frames: int = 1
     local_cache_dir: Path | None = None
+    async_shard_writes: bool = False
 
 
 @dataclass(frozen=True)
@@ -121,6 +122,7 @@ class PersistentGpuFrameWorker:
             "calibration_upload_count": 0,
             "backend": "persistent_warp_frame_kernel_plus_cudf_shards",
             "local_cache_dir": str(self.config.local_cache_dir) if self.config.local_cache_dir else None,
+            "async_shard_writes": self.config.async_shard_writes,
             "frame_timings": [],
             "shards": [],
         }
@@ -129,83 +131,113 @@ class PersistentGpuFrameWorker:
         shard_frames = []
         shard_group: list[dict[str, Any]] = []
         pending_gdfs = []
+        pending_shard_writes: list[Future[dict[str, Any]]] = []
+        writer_pool = (
+            ThreadPoolExecutor(max_workers=1, thread_name_prefix="shard-writer")
+            if self.config.async_shard_writes
+            else None
+        )
         frames = manifest.to_dict(orient="records")
-        frame_payloads = self._iter_frame_payloads(frames)
-        for frame_ordinal, (frame, payload) in enumerate(frame_payloads):
-            frame_group_id = str(frame.get("frame_group_id"))
-            frame_targets_all = targets_by_frame.get(frame_group_id)
-            if frame_targets_all is None or frame_targets_all.empty:
-                continue
-            frame_targets = frame_targets_all[frame_targets_all["in_frame"].astype(bool)]
-            if frame_targets.empty:
-                continue
-            t0 = time.perf_counter()
-            try:
-                gdf, frame_stats = self._measure_frame(frame, frame_targets, payload)
-                rows = int(len(gdf))
-                ok_count = int(frame_stats["ok_count"])
-                summary["measurement_rows"] += rows
-                summary["ok_measurement_rows"] += ok_count
-                pending_gdfs.append(gdf)
-                shard_group.append(
-                    {
-                        "frame_group_id": frame_group_id,
-                        "image_id": frame.get("image_id"),
-                        "rows": rows,
-                        "ok_rows": ok_count,
-                    }
-                )
-                if self.config.write_combined_output:
-                    shard_frames.append(gdf)
-                write_wall = 0.0
-                shard_path = None
-                if len(pending_gdfs) >= self.config.shard_batch_frames:
-                    shard_path, write_wall = self._flush_shard_batch(
-                        pending_gdfs=pending_gdfs,
-                        shard_group=shard_group,
-                        shards_dir=shards_dir,
-                        run_id=run_id,
-                        summary=summary,
+        try:
+            frame_payloads = self._iter_frame_payloads(frames)
+            for frame_ordinal, (frame, payload) in enumerate(frame_payloads):
+                frame_group_id = str(frame.get("frame_group_id"))
+                frame_targets_all = targets_by_frame.get(frame_group_id)
+                if frame_targets_all is None or frame_targets_all.empty:
+                    continue
+                frame_targets = frame_targets_all[frame_targets_all["in_frame"].astype(bool)]
+                if frame_targets.empty:
+                    continue
+                t0 = time.perf_counter()
+                try:
+                    gdf, frame_stats = self._measure_frame(frame, frame_targets, payload)
+                    rows = int(len(gdf))
+                    ok_count = int(frame_stats["ok_count"])
+                    summary["measurement_rows"] += rows
+                    summary["ok_measurement_rows"] += ok_count
+                    pending_gdfs.append(gdf)
+                    shard_group.append(
+                        {
+                            "frame_group_id": frame_group_id,
+                            "image_id": frame.get("image_id"),
+                            "rows": rows,
+                            "ok_rows": ok_count,
+                        }
                     )
-                timing = {
-                    "frame_group_id": frame_group_id,
-                    "image_id": frame.get("image_id"),
-                    "input_target_count": int(len(frame_targets)),
-                    "measurement_count": rows,
-                    "ok_count": ok_count,
-                    "wall_time_sec": time.perf_counter() - t0,
-                    "write_wall_sec": write_wall,
-                    "deferred_write": shard_path is None,
-                    **frame_stats,
-                }
-                summary["frame_timings"].append(timing)
-            except Exception as exc:
-                summary["failed_frames"] += 1
-                summary["frame_timings"].append(
-                    {
+                    if self.config.write_combined_output:
+                        shard_frames.append(gdf)
+                    write_wall = 0.0
+                    shard_submit_wall = 0.0
+                    async_write_queued = False
+                    shard_path = None
+                    if len(pending_gdfs) >= self.config.shard_batch_frames:
+                        shard_path, flush_wall, async_write_queued = self._flush_shard_batch(
+                            pending_gdfs=pending_gdfs,
+                            shard_group=shard_group,
+                            shards_dir=shards_dir,
+                            run_id=run_id,
+                            summary=summary,
+                            writer_pool=writer_pool,
+                            pending_writes=pending_shard_writes,
+                        )
+                        if async_write_queued:
+                            shard_submit_wall = flush_wall
+                        else:
+                            write_wall = flush_wall
+                    timing = {
                         "frame_group_id": frame_group_id,
                         "image_id": frame.get("image_id"),
                         "input_target_count": int(len(frame_targets)),
-                        "measurement_count": 0,
-                        "ok_count": 0,
+                        "measurement_count": rows,
+                        "ok_count": ok_count,
                         "wall_time_sec": time.perf_counter() - t0,
-                        "error": f"{type(exc).__name__}: {exc}",
+                        "write_wall_sec": write_wall,
+                        "shard_submit_wall_sec": shard_submit_wall,
+                        "async_write_queued": async_write_queued,
+                        "deferred_write": shard_path is None,
+                        **frame_stats,
                     }
-                )
-            summary["calibration_upload_count"] = len(self._calibration)
-            summary["completed_frames"] = len(summary["frame_timings"])
-            summary["total_wall_sec"] = time.perf_counter() - started
-            if self._should_write_status(len(summary["frame_timings"])):
-                self._write_status(status_path, summary, started, state="running")
+                    summary["frame_timings"].append(timing)
+                except Exception as exc:
+                    summary["failed_frames"] += 1
+                    summary["frame_timings"].append(
+                        {
+                            "frame_group_id": frame_group_id,
+                            "image_id": frame.get("image_id"),
+                            "input_target_count": int(len(frame_targets)),
+                            "measurement_count": 0,
+                            "ok_count": 0,
+                            "wall_time_sec": time.perf_counter() - t0,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+                summary["calibration_upload_count"] = len(self._calibration)
+                summary["completed_frames"] = len(summary["frame_timings"])
+                summary["queued_shard_writes"] = len(pending_shard_writes)
+                summary["total_wall_sec"] = time.perf_counter() - started
+                if self._should_write_status(len(summary["frame_timings"])):
+                    self._write_status(status_path, summary, started, state="running")
 
-        if pending_gdfs:
-            self._flush_shard_batch(
-                pending_gdfs=pending_gdfs,
-                shard_group=shard_group,
-                shards_dir=shards_dir,
-                run_id=run_id,
-                summary=summary,
-            )
+            if pending_gdfs:
+                self._flush_shard_batch(
+                    pending_gdfs=pending_gdfs,
+                    shard_group=shard_group,
+                    shards_dir=shards_dir,
+                    run_id=run_id,
+                    summary=summary,
+                    writer_pool=writer_pool,
+                    pending_writes=pending_shard_writes,
+                )
+
+            if pending_shard_writes:
+                summary["async_shard_write_wait_wall_sec"] = self._collect_shard_writes(
+                    pending_shard_writes,
+                    summary,
+                )
+                summary["queued_shard_writes"] = 0
+        finally:
+            if writer_pool is not None:
+                writer_pool.shutdown(wait=True)
 
         if self.config.write_combined_output and shard_frames:
             combined_path = output_dir / f"{run_id}.measurements.parquet"
@@ -400,30 +432,84 @@ class PersistentGpuFrameWorker:
         shards_dir: Path,
         run_id: str,
         summary: dict[str, Any],
-    ) -> tuple[Path, float]:
+        writer_pool: ThreadPoolExecutor | None = None,
+        pending_writes: list[Future[dict[str, Any]]] | None = None,
+    ) -> tuple[Path, float, bool]:
         if not pending_gdfs:
-            return shards_dir / f"{run_id}.empty.parquet", 0.0
-        first = shard_group[0]["frame_group_id"]
-        last = shard_group[-1]["frame_group_id"]
-        shard_path = shards_dir / f"{run_id}.{first}_to_{last}.parquet"
+            return shards_dir / f"{run_id}.empty.parquet", 0.0, False
         tw = time.perf_counter()
-        out = pending_gdfs[0] if len(pending_gdfs) == 1 else self._cudf.concat(pending_gdfs, ignore_index=True)
-        out.to_parquet(shard_path, index=False)
-        write_wall = time.perf_counter() - tw
-        summary["shards"].append(
-            {
-                "path": str(shard_path),
-                "frame_group_ids": [row["frame_group_id"] for row in shard_group],
-                "image_ids": [row["image_id"] for row in shard_group],
-                "rows": int(sum(row["rows"] for row in shard_group)),
-                "ok_rows": int(sum(row["ok_rows"] for row in shard_group)),
-                "frame_count": len(shard_group),
-                "write_wall_sec": write_wall,
-            }
-        )
+        gdfs = list(pending_gdfs)
+        group = list(shard_group)
+        shard_path = self._shard_path(shards_dir=shards_dir, run_id=run_id, shard_group=group)
         pending_gdfs.clear()
         shard_group.clear()
-        return shard_path, write_wall
+        if writer_pool is not None:
+            if pending_writes is None:
+                raise ValueError("pending_writes is required when writer_pool is provided")
+            future = writer_pool.submit(
+                self._write_shard_batch,
+                gdfs,
+                group,
+                shards_dir,
+                run_id,
+                self.config.device,
+            )
+            pending_writes.append(future)
+            return shard_path, time.perf_counter() - tw, True
+
+        result = self._write_shard_batch(
+            gdfs,
+            group,
+            shards_dir,
+            run_id,
+            self.config.device,
+        )
+        summary["shards"].append(result)
+        return Path(result["path"]), float(result["write_wall_sec"]), False
+
+    @staticmethod
+    def _shard_path(*, shards_dir: Path, run_id: str, shard_group: list[dict[str, Any]]) -> Path:
+        first = shard_group[0]["frame_group_id"]
+        last = shard_group[-1]["frame_group_id"]
+        return shards_dir / f"{run_id}.{first}_to_{last}.parquet"
+
+    @staticmethod
+    def _write_shard_batch(
+        gdfs: list[Any],
+        shard_group: list[dict[str, Any]],
+        shards_dir: Path,
+        run_id: str,
+        device: str,
+    ) -> dict[str, Any]:
+        import cudf
+        import cupy as cp
+
+        cp.cuda.Device(_device_index(device)).use()
+        shard_path = PersistentGpuFrameWorker._shard_path(
+            shards_dir=shards_dir,
+            run_id=run_id,
+            shard_group=shard_group,
+        )
+        tw = time.perf_counter()
+        out = gdfs[0] if len(gdfs) == 1 else cudf.concat(gdfs, ignore_index=True)
+        out.to_parquet(shard_path, index=False)
+        return {
+            "path": str(shard_path),
+            "frame_group_ids": [row["frame_group_id"] for row in shard_group],
+            "image_ids": [row["image_id"] for row in shard_group],
+            "rows": int(sum(row["rows"] for row in shard_group)),
+            "ok_rows": int(sum(row["ok_rows"] for row in shard_group)),
+            "frame_count": len(shard_group),
+            "write_wall_sec": time.perf_counter() - tw,
+        }
+
+    @staticmethod
+    def _collect_shard_writes(pending_writes: list[Future[dict[str, Any]]], summary: dict[str, Any]) -> float:
+        tw = time.perf_counter()
+        for future in pending_writes:
+            summary["shards"].append(future.result())
+        pending_writes.clear()
+        return time.perf_counter() - tw
 
     def _should_write_status(self, completed_frames: int) -> bool:
         interval = max(1, int(self.config.status_interval_frames))

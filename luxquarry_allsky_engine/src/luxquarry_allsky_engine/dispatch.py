@@ -23,6 +23,7 @@ class DispatchPlanConfig:
     prefetch_frames: int = 0
     status_interval_frames: int = 1
     local_cache_dir: Path | None = None
+    async_shard_writes: bool = False
 
 
 def build_dispatch_plan(config: DispatchPlanConfig) -> dict[str, Any]:
@@ -70,6 +71,8 @@ def build_dispatch_plan(config: DispatchPlanConfig) -> dict[str, Any]:
                 argv.extend(["--limit-frames", str(config.limit_frames)])
             if config.local_cache_dir is not None:
                 argv.extend(["--local-cache-dir", str(config.local_cache_dir)])
+            if config.async_shard_writes:
+                argv.append("--async-shard-writes")
             workers.append(
                 {
                     "worker_id": worker_id,
@@ -96,6 +99,7 @@ def build_dispatch_plan(config: DispatchPlanConfig) -> dict[str, Any]:
         "worker_count": total_workers,
         "limit_frames": config.limit_frames,
         "local_cache_dir": str(config.local_cache_dir) if config.local_cache_dir else None,
+        "async_shard_writes": config.async_shard_writes,
         "contract": {
             "partitioning": "frame ordinal modulo worker_count equals worker_index",
             "output": "each worker writes independent measurement_shards and run_summary.json",

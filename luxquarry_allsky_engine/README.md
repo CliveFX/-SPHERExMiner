@@ -121,6 +121,7 @@ Implemented stages:
   --device cuda:0 \
   --shard-batch-frames 5 \
   --prefetch-frames 2 \
+  --async-shard-writes \
   --local-cache-dir /tmp/luxquarry_stage_smoke
 
 # Write a multi-GPU dispatch plan. The generated shell script launches one
@@ -135,6 +136,7 @@ Implemented stages:
   --devices cuda:0,cuda:1,cuda:2 \
   --shard-batch-frames 5 \
   --prefetch-frames 2 \
+  --async-shard-writes \
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --limit-frames 10
 ```
@@ -170,6 +172,11 @@ Workers can also stage FITS inputs onto local SSD/NVMe with
 persistent worker from about 1.15 sec to about 0.94 sec while preserving the
 same CPU-baseline correctness. First-touch staging is mainly a way to populate
 the local cache; repeated passes and long worker queues are where it should pay.
+
+`--async-shard-writes` queues cuDF parquet writes on a background thread and
+waits for them before completion. On the same tiny smoke it is roughly tied with
+the warm staged path, but it removes inline shard write blocking from the frame
+loop and is the better shape for long queues.
 
 ## EKS Target
 

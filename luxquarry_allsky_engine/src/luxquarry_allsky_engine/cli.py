@@ -124,6 +124,11 @@ def main(argv: list[str] | None = None) -> int:
     persistent.add_argument("--status-path", type=Path)
     persistent.add_argument("--write-combined-output", action="store_true")
     persistent.add_argument("--no-rmm-pool", action="store_true")
+    persistent.add_argument(
+        "--async-shard-writes",
+        action="store_true",
+        help="Queue parquet shard writes on a background thread and wait for them before completion.",
+    )
     persistent.add_argument("--shard-batch-frames", type=int, default=1)
     persistent.add_argument("--prefetch-frames", type=int, default=0)
     persistent.add_argument("--status-interval-frames", type=int, default=1)
@@ -151,6 +156,11 @@ def main(argv: list[str] | None = None) -> int:
     dispatch.add_argument("--cache-root", type=Path, default=Path("/mnt/niroseti/spherex_cache"))
     dispatch.add_argument("--devices", default="cuda:0", help="Comma-separated GPU devices, e.g. cuda:0,cuda:1,cuda:2")
     dispatch.add_argument("--workers-per-device", type=int, default=1)
+    dispatch.add_argument(
+        "--async-shard-writes",
+        action="store_true",
+        help="Pass --async-shard-writes to every persistent worker.",
+    )
     dispatch.add_argument("--shard-batch-frames", type=int, default=1)
     dispatch.add_argument("--prefetch-frames", type=int, default=0)
     dispatch.add_argument("--status-interval-frames", type=int, default=1)
@@ -349,6 +359,7 @@ def cmd_run_persistent_gpu_worker(args: argparse.Namespace) -> int:
             worker_count=args.worker_count,
             write_combined_output=args.write_combined_output,
             rmm_pool=not args.no_rmm_pool,
+            async_shard_writes=args.async_shard_writes,
             shard_batch_frames=args.shard_batch_frames,
             prefetch_frames=args.prefetch_frames,
             status_interval_frames=args.status_interval_frames,
@@ -374,6 +385,7 @@ def cmd_plan_gpu_dispatch(args: argparse.Namespace) -> int:
             cache_root=args.cache_root,
             limit_frames=args.limit_frames,
             executable=args.executable,
+            async_shard_writes=args.async_shard_writes,
             shard_batch_frames=args.shard_batch_frames,
             prefetch_frames=args.prefetch_frames,
             status_interval_frames=args.status_interval_frames,

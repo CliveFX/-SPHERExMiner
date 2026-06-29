@@ -408,3 +408,53 @@ Notes:
 - The first staged pass is a cache population pass. Warm cache behavior is the
   relevant model for repeated mining/scoring experiments and for nodes with
   local NVMe.
+
+## 2026-06-29: Async Shard Write Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-persistent-gpu-worker \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/persistent_gpu_worker_smoke10_stage_async_final \
+  --run-id persistent_smoke10_stage_async_final \
+  --limit-frames 10 \
+  --device cuda:0 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 2 \
+  --status-interval-frames 5 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --async-shard-writes
+```
+
+Result:
+
+```text
+total_wall_sec: 0.938
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+queued_shard_writes_at_completion: 0
+async_shard_write_wait_wall_sec: 0.013
+shards: 2
+```
+
+Correctness against CPU aperture baseline:
+
+```text
+matched_ok_measurements: 2,766
+flux_median_abs_delta_uJy: 0.0022
+flux_p95_abs_delta_uJy: 0.0253
+flux_max_relative_delta_pct: 0.603
+```
+
+Notes:
+
+- On this tiny smoke, async writes are effectively tied with warm local staging
+  alone (`0.938 sec` vs `0.935 sec`).
+- The architectural win is that shard writes are no longer inline in the frame
+  loop. The worker queues writes, continues processing, then waits before final
+  summary emission.
+- `plan-gpu-dispatch --async-shard-writes` now passes the flag through to every
+  generated persistent worker.

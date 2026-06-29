@@ -38,7 +38,7 @@ optionally stage FITS onto local SSD/NVMe
 load/reuse resident SAPM + CWAVE + CBAND maps on GPU
 launch one Warp kernel per frame
 emit device columns through DLPack to CuPy/cuDF
-write independent cuDF parquet shard
+queue or write independent cuDF parquet shard
 atomically rewrite run_status.json
 ```
 
@@ -67,6 +67,7 @@ cd luxquarry_allsky_engine
   --devices cuda:0,cuda:1,cuda:2 \
   --shard-batch-frames 5 \
   --prefetch-frames 2 \
+  --async-shard-writes \
   --status-interval-frames 25 \
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --limit-frames 10
@@ -124,6 +125,12 @@ does not copy the FITS again; it validates by file size and then reads from the
 local path. Measurement rows retain both `fits_path` and `local_fits_path` so
 the original source and staged read path are explicit.
 
+The worker supports `--async-shard-writes` for queued cuDF parquet writes. The
+worker still waits for every queued shard before writing the final summary, so a
+completed run means all listed shards are durable. Status exposes
+`queued_shard_writes`, and frame timings separate `shard_submit_wall_sec` from
+actual shard `write_wall_sec`.
+
 Three-worker local dispatch over three GPUs:
 
 ```text
@@ -149,8 +156,8 @@ focus on:
 2. reducing FITS extension read overhead
 3. avoiding per-frame metadata table construction where possible
 4. writing larger shard batches tuned to downstream spectra assembly
-5. true async write queue so parquet flushes never block the frame loop
-6. evaluating KvikIO/local NVMe paths for staged FITS and output shards
+5. evaluating KvikIO/local NVMe paths for staged FITS and output shards
+6. larger benchmarks where async write overlap matters more than the tiny smoke
 
 RAPIDS should remain the table/shard engine, while Warp/CUDA owns the aperture
 kernel.
