@@ -10,6 +10,7 @@ from typing import Any
 
 from .dispatch import DispatchPlanConfig, build_dispatch_plan, write_dispatch_plan
 from .finalize import FinalizeDispatchConfig, finalize_dispatch_run
+from .status import DispatchStatusConfig, write_dispatch_status_snapshot
 
 
 @dataclass(frozen=True)
@@ -38,6 +39,7 @@ class LocalDispatchRunConfig:
     campaign_id: str | None = None
     campaign_contract_out: Path | None = None
     resume: bool = False
+    status_snapshot_interval_sec: float = 1.0
 
 
 def run_local_dispatch(config: LocalDispatchRunConfig) -> dict[str, Any]:
@@ -72,7 +74,13 @@ def run_local_dispatch(config: LocalDispatchRunConfig) -> dict[str, Any]:
     plan_wall = time.perf_counter() - t_plan
 
     t_workers = time.perf_counter()
-    worker_results = _run_workers(plan, logs_dir, resume=config.resume)
+    worker_results = _run_workers(
+        plan,
+        logs_dir,
+        plan_path=plan_path,
+        resume=config.resume,
+        status_snapshot_interval_sec=config.status_snapshot_interval_sec,
+    )
     worker_wall = time.perf_counter() - t_workers
     failed_workers = [row for row in worker_results if row["returncode"] != 0]
     if failed_workers and not config.allow_incomplete_finalize:
@@ -120,7 +128,14 @@ def run_local_dispatch(config: LocalDispatchRunConfig) -> dict[str, Any]:
     return summary
 
 
-def _run_workers(plan: dict[str, Any], logs_dir: Path, *, resume: bool) -> list[dict[str, Any]]:
+def _run_workers(
+    plan: dict[str, Any],
+    logs_dir: Path,
+    *,
+    plan_path: Path,
+    resume: bool,
+    status_snapshot_interval_sec: float,
+) -> list[dict[str, Any]]:
     running: list[tuple[dict[str, Any], subprocess.Popen[bytes], Any, Any, float]] = []
     results: list[dict[str, Any]] = []
     for worker in plan.get("workers") or []:
@@ -138,25 +153,49 @@ def _run_workers(plan: dict[str, Any], logs_dir: Path, *, resume: bool) -> list[
         proc = subprocess.Popen(list(worker["argv"]), stdout=stdout_file, stderr=stderr_file)
         running.append((worker, proc, stdout_file, stderr_file, started))
 
-    for worker, proc, stdout_file, stderr_file, started in running:
-        returncode = proc.wait()
-        stdout_file.close()
-        stderr_file.close()
-        worker_id = str(worker["worker_id"])
-        results.append(
-            {
-                "worker_id": worker_id,
-                "worker_index": worker.get("worker_index"),
-                "device": worker.get("device"),
-                "returncode": int(returncode),
-                "skipped": False,
-                "wall_sec": time.perf_counter() - started,
-                "stdout_log": str(logs_dir / f"{worker_id}.stdout.log"),
-                "stderr_log": str(logs_dir / f"{worker_id}.stderr.log"),
-                "argv": list(worker["argv"]),
-            }
-        )
+    next_snapshot = 0.0
+    while running:
+        now = time.perf_counter()
+        if status_snapshot_interval_sec > 0 and now >= next_snapshot:
+            write_dispatch_status_snapshot(DispatchStatusConfig(plan_path=plan_path))
+            next_snapshot = now + status_snapshot_interval_sec
+
+        still_running: list[tuple[dict[str, Any], subprocess.Popen[bytes], Any, Any, float]] = []
+        for worker, proc, stdout_file, stderr_file, started in running:
+            returncode = proc.poll()
+            if returncode is None:
+                still_running.append((worker, proc, stdout_file, stderr_file, started))
+                continue
+            results.append(_worker_process_result(worker, logs_dir, int(returncode), started))
+            stdout_file.close()
+            stderr_file.close()
+        running = still_running
+        if running:
+            time.sleep(_poll_sleep(status_snapshot_interval_sec))
+
+    write_dispatch_status_snapshot(DispatchStatusConfig(plan_path=plan_path))
     return results
+
+
+def _worker_process_result(worker: dict[str, Any], logs_dir: Path, returncode: int, started: float) -> dict[str, Any]:
+    worker_id = str(worker["worker_id"])
+    return {
+        "worker_id": worker_id,
+        "worker_index": worker.get("worker_index"),
+        "device": worker.get("device"),
+        "returncode": returncode,
+        "skipped": False,
+        "wall_sec": time.perf_counter() - started,
+        "stdout_log": str(logs_dir / f"{worker_id}.stdout.log"),
+        "stderr_log": str(logs_dir / f"{worker_id}.stderr.log"),
+        "argv": list(worker["argv"]),
+    }
+
+
+def _poll_sleep(status_snapshot_interval_sec: float) -> float:
+    if status_snapshot_interval_sec <= 0:
+        return 0.25
+    return min(0.25, max(0.05, status_snapshot_interval_sec / 4.0))
 
 
 def _completed_worker_result(worker: dict[str, Any], logs_dir: Path) -> dict[str, Any] | None:
@@ -211,6 +250,7 @@ def _summary(
         "output_dir": str(config.output_dir),
         "devices": list(config.devices),
         "resume": config.resume,
+        "status_snapshot_interval_sec": config.status_snapshot_interval_sec,
         "worker_count": int(plan.get("worker_count") or len(worker_results)),
         "launched_worker_count": sum(1 for row in worker_results if not row.get("skipped")),
         "skipped_worker_count": sum(1 for row in worker_results if row.get("skipped")),

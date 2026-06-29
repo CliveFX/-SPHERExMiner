@@ -227,6 +227,12 @@ def main(argv: list[str] | None = None) -> int:
     local_dispatch.add_argument("--campaign-id")
     local_dispatch.add_argument("--campaign-contract-out", type=Path)
     local_dispatch.add_argument("--resume", action="store_true", help="Skip workers with complete run_summary.json.")
+    local_dispatch.add_argument(
+        "--status-snapshot-interval-sec",
+        type=float,
+        default=1.0,
+        help="Refresh dispatch_status.json while workers run. Use 0 for final snapshot only.",
+    )
     local_dispatch.set_defaults(func=cmd_run_local_dispatch)
 
     collect_dispatch = sub.add_parser(
@@ -619,6 +625,7 @@ def cmd_run_local_dispatch(args: argparse.Namespace) -> int:
             campaign_id=args.campaign_id,
             campaign_contract_out=args.campaign_contract_out,
             resume=args.resume,
+            status_snapshot_interval_sec=args.status_snapshot_interval_sec,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

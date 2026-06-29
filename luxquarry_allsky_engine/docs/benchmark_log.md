@@ -1061,3 +1061,59 @@ Notes:
 - It writes atomically through a temporary file.
 - This is the intended low-overhead dashboard/control-plane status source. It
   does not read measurement shards or parquet data.
+
+## 2026-06-29: Local Runner Integrated Status Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-local-dispatch \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/local_dispatch_status_smoke2 \
+  --run-id local_dispatch_status_smoke2 \
+  --devices cuda:0 \
+  --limit-frames 2 \
+  --shard-batch-frames 2 \
+  --prefetch-frames 1 \
+  --status-interval-frames 1 \
+  --status-snapshot-interval-sec 0.1 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --finalize-device cuda:0
+```
+
+Result:
+
+```text
+status: complete
+worker_count: 1
+launched_worker_count: 1
+status_snapshot_interval_sec: 0.1
+worker_wall_sec: 3.064
+finalize_wall_sec: 1.158
+total_wall_sec: 4.249
+measurement_rows: 573
+target_count: 310
+```
+
+Automatically written snapshot:
+
+```text
+path: runs/local_dispatch_status_smoke2/dispatch_status.json
+complete: true
+worker_count: 1
+completed_frames: 2
+frame_count: 2
+measurement_rows: 573
+snapshot_wall_sec: 0.0002
+```
+
+Notes:
+
+- The local runner now refreshes `dispatch_status.json` while worker processes
+  run and writes a final snapshot after they exit.
+- `--status-snapshot-interval-sec 0` disables periodic refresh and keeps the
+  final snapshot only.

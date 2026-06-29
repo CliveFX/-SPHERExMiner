@@ -119,6 +119,7 @@ cd luxquarry_allsky_engine
   --shard-batch-frames 2 \
   --prefetch-frames 1 \
   --status-interval-frames 2 \
+  --status-snapshot-interval-sec 1.0 \
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --async-shard-writes \
   --batch-table-assembly \
@@ -139,6 +140,11 @@ writes local_dispatch_summary.json
 
 It uses the same dispatch plan and worker argv as the shell/Kubernetes path, so
 local testing stays aligned with scale-out execution.
+
+While workers are active, the local runner also refreshes
+`dispatch_status.json` from per-worker `run_status.json` files. Tune this with
+`--status-snapshot-interval-sec`; use `0` to write only the final snapshot after
+workers exit.
 
 Use `--resume` to skip workers that already have a complete `run_summary.json`:
 

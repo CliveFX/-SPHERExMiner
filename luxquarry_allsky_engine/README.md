@@ -163,6 +163,7 @@ Implemented stages:
   --shard-batch-frames 2 \
   --prefetch-frames 1 \
   --status-interval-frames 2 \
+  --status-snapshot-interval-sec 1.0 \
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --async-shard-writes \
   --batch-table-assembly \
@@ -180,8 +181,8 @@ Implemented stages:
   --resume \
   --finalize-device cuda:0
 
-# Write one cheap aggregate status JSON for dashboards/control scripts. This
-# reads per-worker run_status.json files and atomically rewrites dispatch_status.json.
+# Write one cheap aggregate status JSON for dashboards/control scripts. The
+# local runner also refreshes this file while workers are active.
 .venv/bin/luxquarry-allsky dispatch-status \
   --plan runs/local_dispatch_smoke2/dispatch_plan.json
 
