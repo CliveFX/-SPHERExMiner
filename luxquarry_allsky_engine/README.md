@@ -203,6 +203,24 @@ Implemented stages:
   --device cuda:0 \
   --score-baseline
 
+# If an injected dispatch has already been assembled, the same finalizer can
+# score injected spectra and write truth recovery artifacts. This keeps
+# baseline, injected, and recovery products in one campaign contract.
+.venv/bin/luxquarry-allsky finalize-dispatch-run \
+  --plan runs/baseline_dispatch/dispatch_plan.json \
+  --spectra-out-dir runs/baseline_dispatch/spectra \
+  --spectra-run-id baseline_dispatch \
+  --campaign-id injection_recovery_contract \
+  --campaign-contract-out runs/baseline_dispatch/campaign_contract.json \
+  --injected-plan runs/injected_dispatch/dispatch_plan.json \
+  --injected-spectra-dir runs/injected_dispatch/spectra \
+  --injection-truth /mnt/niroseti/spherex_cache/injection_campaigns/<campaign>/injection_manifest.json \
+  --candidate-dir runs/baseline_dispatch/candidates \
+  --score-baseline \
+  --score-injected \
+  --recover-injections \
+  --device cuda:0
+
 # Candidate scoring can also be run directly on an assembled spectra parquet.
 # This is the first baseline scorer product in the new frame-first contract;
 # injection scoring and truth recovery are still separate required stages.
@@ -211,6 +229,11 @@ Implemented stages:
   --out-dir runs/local_dispatch_smoke2/candidates \
   --run-id local_dispatch_smoke2 \
   --device cuda:0
+
+.venv/bin/luxquarry-allsky score-injection-recovery \
+  --manifest /mnt/niroseti/spherex_cache/injection_campaigns/<campaign>/injection_manifest.json \
+  --candidates runs/injected_dispatch/candidates/injected_candidates.parquet \
+  --out-dir runs/injected_dispatch/candidates
 
 # Or write Kubernetes Job manifests from the same dispatch plan. This is the
 # cloud/EKS handoff artifact: one pod per materialized GPU worker.
@@ -362,11 +385,11 @@ candidate and false-positive review indexes
 ```
 
 The current all-sky engine has the baseline GPU photometry, dispatch,
-collection, spectra assembly, and a simple RAPIDS target-zscore baseline
-candidate scorer. Injection, injected blind scoring, truth-target recovery, and
-the science-grade narrowband matched-filter scorer must still be promoted into
-this frame-first contract before using the engine for science-grade all-sky
-mining.
+collection, spectra assembly, a simple RAPIDS target-zscore candidate scorer for
+baseline/injected spectra, and manifest-based injection truth recovery. The
+injected FITS dispatch itself and the science-grade narrowband matched-filter
+scorer still need to be promoted into this frame-first contract before using
+the engine for science-grade all-sky mining.
 
 `write-campaign-contract` records that status in a machine-readable JSON file.
 It marks stages as `complete`, `missing`, or `blocked` based on expected

@@ -25,6 +25,7 @@ from .local_runner import LocalDispatchRunConfig, run_local_dispatch
 from .manifest import build_frame_manifest
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
+from .recovery import InjectionRecoveryConfig, score_injection_recovery
 from .scoring import CandidateScoringConfig, score_spectra_candidates
 from .spectra import SpectraAssemblyConfig, assemble_spectra_from_shards
 from .status import DispatchStatusConfig, write_dispatch_status_snapshot
@@ -232,6 +233,13 @@ def main(argv: list[str] | None = None) -> int:
     local_dispatch.add_argument("--candidate-min-abs-zscore", type=float, default=5.0)
     local_dispatch.add_argument("--candidate-min-measurements", type=int, default=10)
     local_dispatch.add_argument("--candidate-max-rows", type=int)
+    local_dispatch.add_argument("--score-injected", action="store_true")
+    local_dispatch.add_argument("--injected-spectra-dir", type=Path)
+    local_dispatch.add_argument("--injection-truth", type=Path)
+    local_dispatch.add_argument("--recover-injections", action="store_true")
+    local_dispatch.add_argument("--recovery-min-score", type=float, default=5.0)
+    local_dispatch.add_argument("--recovery-wavelength-tolerance-nm", type=float, default=10.0)
+    local_dispatch.add_argument("--recovery-require-line-family", action="store_true")
     local_dispatch.add_argument("--resume", action="store_true", help="Skip workers with complete run_summary.json.")
     local_dispatch.add_argument(
         "--status-snapshot-interval-sec",
@@ -279,6 +287,11 @@ def main(argv: list[str] | None = None) -> int:
     finalize_dispatch.add_argument("--candidate-min-abs-zscore", type=float, default=5.0)
     finalize_dispatch.add_argument("--candidate-min-measurements", type=int, default=10)
     finalize_dispatch.add_argument("--candidate-max-rows", type=int)
+    finalize_dispatch.add_argument("--score-injected", action="store_true")
+    finalize_dispatch.add_argument("--recover-injections", action="store_true")
+    finalize_dispatch.add_argument("--recovery-min-score", type=float, default=5.0)
+    finalize_dispatch.add_argument("--recovery-wavelength-tolerance-nm", type=float, default=10.0)
+    finalize_dispatch.add_argument("--recovery-require-line-family", action="store_true")
     finalize_dispatch.set_defaults(func=cmd_finalize_dispatch_run)
 
     score_candidates = sub.add_parser(
@@ -296,6 +309,18 @@ def main(argv: list[str] | None = None) -> int:
     score_candidates.add_argument("--max-candidates", type=int)
     score_candidates.add_argument("--include-flagged", action="store_true")
     score_candidates.set_defaults(func=cmd_score_spectra_candidates)
+
+    recovery = sub.add_parser(
+        "score-injection-recovery",
+        help="Join injected candidate tables against an injection manifest.",
+    )
+    recovery.add_argument("--manifest", type=Path, required=True)
+    recovery.add_argument("--candidates", type=Path, required=True)
+    recovery.add_argument("--out-dir", type=Path, required=True)
+    recovery.add_argument("--min-score", type=float, default=5.0)
+    recovery.add_argument("--wavelength-tolerance-nm", type=float, default=10.0)
+    recovery.add_argument("--require-line-family", action="store_true")
+    recovery.set_defaults(func=cmd_score_injection_recovery)
 
     k8s_jobs = sub.add_parser(
         "write-k8s-jobs",
@@ -347,6 +372,20 @@ def main(argv: list[str] | None = None) -> int:
     k8s_post.add_argument("--spectra-out-dir", type=Path)
     k8s_post.add_argument("--spectra-run-id")
     k8s_post.add_argument("--campaign-contract-out", type=Path)
+    k8s_post.add_argument("--injected-plan", type=Path)
+    k8s_post.add_argument("--injected-spectra-dir", type=Path)
+    k8s_post.add_argument("--injection-truth", type=Path)
+    k8s_post.add_argument("--candidate-dir", type=Path)
+    k8s_post.add_argument("--viewer-index-dir", type=Path)
+    k8s_post.add_argument("--score-baseline", action="store_true")
+    k8s_post.add_argument("--candidate-min-abs-zscore", type=float, default=5.0)
+    k8s_post.add_argument("--candidate-min-measurements", type=int, default=10)
+    k8s_post.add_argument("--candidate-max-rows", type=int)
+    k8s_post.add_argument("--score-injected", action="store_true")
+    k8s_post.add_argument("--recover-injections", action="store_true")
+    k8s_post.add_argument("--recovery-min-score", type=float, default=5.0)
+    k8s_post.add_argument("--recovery-wavelength-tolerance-nm", type=float, default=10.0)
+    k8s_post.add_argument("--recovery-require-line-family", action="store_true")
     k8s_post.add_argument("--only-ok", action="store_true")
     k8s_post.add_argument("--allow-incomplete", action="store_true")
     k8s_post.add_argument(
@@ -655,6 +694,13 @@ def cmd_run_local_dispatch(args: argparse.Namespace) -> int:
             candidate_min_abs_zscore=args.candidate_min_abs_zscore,
             candidate_min_measurements=args.candidate_min_measurements,
             candidate_max_rows=args.candidate_max_rows,
+            score_injected=args.score_injected,
+            injected_spectra_dir=args.injected_spectra_dir,
+            injection_truth_path=args.injection_truth,
+            recover_injections=args.recover_injections,
+            recovery_min_score=args.recovery_min_score,
+            recovery_wavelength_tolerance_nm=args.recovery_wavelength_tolerance_nm,
+            recovery_require_line_family=args.recovery_require_line_family,
             resume=args.resume,
             status_snapshot_interval_sec=args.status_snapshot_interval_sec,
         )
@@ -701,6 +747,11 @@ def cmd_finalize_dispatch_run(args: argparse.Namespace) -> int:
             candidate_min_abs_zscore=args.candidate_min_abs_zscore,
             candidate_min_measurements=args.candidate_min_measurements,
             candidate_max_rows=args.candidate_max_rows,
+            score_injected=args.score_injected,
+            recover_injections=args.recover_injections,
+            recovery_min_score=args.recovery_min_score,
+            recovery_wavelength_tolerance_nm=args.recovery_wavelength_tolerance_nm,
+            recovery_require_line_family=args.recovery_require_line_family,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
@@ -720,6 +771,21 @@ def cmd_score_spectra_candidates(args: argparse.Namespace) -> int:
             min_measurements=args.min_measurements,
             only_ok=not args.include_flagged,
             max_candidates=args.max_candidates,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_score_injection_recovery(args: argparse.Namespace) -> int:
+    summary = score_injection_recovery(
+        InjectionRecoveryConfig(
+            manifest_path=args.manifest,
+            candidates_path=args.candidates,
+            output_dir=args.out_dir,
+            min_score=args.min_score,
+            wavelength_tolerance_nm=args.wavelength_tolerance_nm,
+            require_line_family=args.require_line_family,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
@@ -772,6 +838,20 @@ def cmd_write_k8s_postprocess_job(args: argparse.Namespace) -> int:
             spectra_out_dir=args.spectra_out_dir,
             spectra_run_id=args.spectra_run_id,
             campaign_contract_out=args.campaign_contract_out,
+            injected_plan_path=args.injected_plan,
+            injected_spectra_dir=args.injected_spectra_dir,
+            injection_truth_path=args.injection_truth,
+            candidate_dir=args.candidate_dir,
+            viewer_index_dir=args.viewer_index_dir,
+            score_baseline=args.score_baseline,
+            candidate_min_abs_zscore=args.candidate_min_abs_zscore,
+            candidate_min_measurements=args.candidate_min_measurements,
+            candidate_max_rows=args.candidate_max_rows,
+            score_injected=args.score_injected,
+            recover_injections=args.recover_injections,
+            recovery_min_score=args.recovery_min_score,
+            recovery_wavelength_tolerance_nm=args.recovery_wavelength_tolerance_nm,
+            recovery_require_line_family=args.recovery_require_line_family,
             only_ok=args.only_ok,
             allow_incomplete=args.allow_incomplete,
             env=_parse_env_assignments(args.env),

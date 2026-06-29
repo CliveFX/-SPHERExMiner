@@ -48,6 +48,20 @@ class KubernetesPostprocessJobConfig:
     spectra_out_dir: Path | None = None
     spectra_run_id: str | None = None
     campaign_contract_out: Path | None = None
+    injected_plan_path: Path | None = None
+    injected_spectra_dir: Path | None = None
+    injection_truth_path: Path | None = None
+    candidate_dir: Path | None = None
+    viewer_index_dir: Path | None = None
+    score_baseline: bool = False
+    candidate_min_abs_zscore: float = 5.0
+    candidate_min_measurements: int = 10
+    candidate_max_rows: int | None = None
+    score_injected: bool = False
+    recover_injections: bool = False
+    recovery_min_score: float = 5.0
+    recovery_wavelength_tolerance_nm: float = 10.0
+    recovery_require_line_family: bool = False
     only_ok: bool = False
     allow_incomplete: bool = False
     env: dict[str, str] = field(default_factory=dict)
@@ -173,6 +187,34 @@ def _postprocess_job(plan: dict[str, Any], config: KubernetesPostprocessJobConfi
         args.extend(["--spectra-run-id", config.spectra_run_id])
     if config.campaign_contract_out:
         args.extend(["--campaign-contract-out", str(config.campaign_contract_out)])
+    if config.injected_plan_path:
+        args.extend(["--injected-plan", str(config.injected_plan_path)])
+    if config.injected_spectra_dir:
+        args.extend(["--injected-spectra-dir", str(config.injected_spectra_dir)])
+    if config.injection_truth_path:
+        args.extend(["--injection-truth", str(config.injection_truth_path)])
+    if config.candidate_dir:
+        args.extend(["--candidate-dir", str(config.candidate_dir)])
+    if config.viewer_index_dir:
+        args.extend(["--viewer-index-dir", str(config.viewer_index_dir)])
+    if config.score_baseline:
+        args.append("--score-baseline")
+    if config.candidate_min_abs_zscore != 5.0:
+        args.extend(["--candidate-min-abs-zscore", str(config.candidate_min_abs_zscore)])
+    if config.candidate_min_measurements != 10:
+        args.extend(["--candidate-min-measurements", str(config.candidate_min_measurements)])
+    if config.candidate_max_rows is not None:
+        args.extend(["--candidate-max-rows", str(config.candidate_max_rows)])
+    if config.score_injected:
+        args.append("--score-injected")
+    if config.recover_injections:
+        args.append("--recover-injections")
+    if config.recovery_min_score != 5.0:
+        args.extend(["--recovery-min-score", str(config.recovery_min_score)])
+    if config.recovery_wavelength_tolerance_nm != 10.0:
+        args.extend(["--recovery-wavelength-tolerance-nm", str(config.recovery_wavelength_tolerance_nm)])
+    if config.recovery_require_line_family:
+        args.append("--recovery-require-line-family")
     if config.only_ok:
         args.append("--only-ok")
     if config.allow_incomplete:

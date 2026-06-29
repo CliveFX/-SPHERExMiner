@@ -301,6 +301,42 @@ cd luxquarry_allsky_engine
   --device cuda:0
 ```
 
+If an injected run has already produced spectra, the finalizer can score both
+baseline and injected spectra and write manifest-based recovery products:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky finalize-dispatch-run \
+  --plan runs/baseline_dispatch/dispatch_plan.json \
+  --spectra-out-dir runs/baseline_dispatch/spectra \
+  --spectra-run-id baseline_dispatch \
+  --campaign-id injection_recovery_contract \
+  --campaign-contract-out runs/baseline_dispatch/campaign_contract.json \
+  --injected-plan runs/injected_dispatch/dispatch_plan.json \
+  --injected-spectra-dir runs/injected_dispatch/spectra \
+  --injection-truth /mnt/niroseti/spherex_cache/injection_campaigns/<campaign>/injection_manifest.json \
+  --candidate-dir runs/baseline_dispatch/candidates \
+  --score-baseline \
+  --score-injected \
+  --recover-injections \
+  --device cuda:0
+```
+
+That writes:
+
+```text
+baseline_candidates.parquet
+baseline_candidate_summary.json
+injected_candidates.parquet
+injected_candidate_summary.json
+injection_recovery.parquet
+false_positive_candidates.parquet
+recovery_by_strength.parquet
+recovery_by_line.parquet
+truth_recovery_summary.json
+false_positive_summary.json
+```
+
 The matching post-worker Kubernetes artifact is:
 
 ```bash
@@ -314,8 +350,16 @@ cd luxquarry_allsky_engine
   --working-dir /workspace/luxquarry_allsky_engine \
   --pvc-name luxquarry-data \
   --mount-path /workspace \
-  --campaign-id dispatch_smoke10_materialized2_finalize
+  --campaign-id dispatch_smoke10_materialized2_finalize \
+  --score-baseline
 ```
+
+For injected/recovery campaigns, pass the same finalizer flags to
+`write-k8s-postprocess-job`: `--injected-plan`, `--injected-spectra-dir`,
+`--injection-truth`, `--candidate-dir`, `--score-injected`, and
+`--recover-injections`. The generated Kubernetes job remains a single
+post-worker `finalize-dispatch-run`, so local and EKS postprocess behavior stay
+aligned.
 
 When using `--working-dir /workspace/luxquarry_allsky_engine`, pass paths
 relative to that directory (`runs/...`). Repo-root-prefixed paths will be wrong
@@ -376,10 +420,11 @@ false-positive/candidate review indexes
 The injected run should reuse the same target/materialized-input contract as the
 baseline run. That keeps recovery comparisons honest: baseline, injected, raw
 blind scoring, quality-gated blind scoring, and truth-target recovery all refer
-to the same target IDs and frame provenance. Until the injected stages and
-recovery accounting are wired into this engine, the next-gen dispatch layer is a
-high-throughput photometry, spectra assembly, and baseline candidate-scoring
-prototype, not a full injection/recovery campaign runner.
+to the same target IDs and frame provenance. The current next-gen layer can
+score already-assembled injected spectra and join those candidates to an
+existing injection manifest. It still does not generate or dispatch injected
+FITS products itself, and the simple z-score scorer is not the final narrowband
+matched filter.
 
 ## Current Benchmark
 

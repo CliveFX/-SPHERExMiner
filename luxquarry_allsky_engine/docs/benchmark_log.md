@@ -1190,3 +1190,81 @@ Notes:
 - Injected dispatch, injected scoring, and truth-target recovery remain
   explicit missing/blocked stages. They were not silently folded into baseline
   scoring.
+
+## 2026-06-29: Injected Scoring and Recovery Smoke
+
+Standalone recovery smoke used a tiny synthetic injection manifest derived from
+one emitted candidate. This only verifies the manifest/candidate join and output
+contract; it is not a science recovery benchmark.
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky score-injection-recovery \
+  --manifest runs/local_dispatch_smoke2/recovery_smoke_manifest.json \
+  --candidates runs/local_dispatch_smoke2/candidates_scored_finalize/baseline_candidates.parquet \
+  --out-dir runs/local_dispatch_smoke2/recovery_smoke \
+  --min-score 0.5 \
+  --wavelength-tolerance-nm 1.0
+```
+
+Result:
+
+```text
+injection_count: 1
+recovered_count: 1
+missed_count: 0
+candidate_count_above_threshold: 20
+false_positive_count: 19
+total_wall_sec: 0.036
+```
+
+Full finalizer smoke reused the existing smoke spectra as a stand-in injected
+spectra directory:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky finalize-dispatch-run \
+  --plan runs/local_dispatch_smoke2/dispatch_plan.json \
+  --spectra-out-dir runs/local_dispatch_smoke2/spectra_recovery_finalize \
+  --spectra-run-id local_dispatch_smoke2_recovery_finalize \
+  --campaign-id local_dispatch_smoke2_recovery_finalize \
+  --campaign-contract-out runs/local_dispatch_smoke2/campaign_contract_recovery_finalize.json \
+  --candidate-dir runs/local_dispatch_smoke2/candidates_recovery_finalize \
+  --score-baseline \
+  --score-injected \
+  --injected-spectra-dir runs/local_dispatch_smoke2/spectra_scored_finalize \
+  --injection-truth runs/local_dispatch_smoke2/recovery_smoke_manifest.json \
+  --recover-injections \
+  --candidate-min-measurements 2 \
+  --candidate-min-abs-zscore 0.5 \
+  --candidate-max-rows 20 \
+  --recovery-min-score 0.5 \
+  --recovery-wavelength-tolerance-nm 1.0 \
+  --device cuda:0
+```
+
+Result:
+
+```text
+dispatch_complete: true
+science_complete: false
+complete campaign stages: 6 / 8
+baseline_candidate_count: 20
+injected_candidate_count: 20
+injection_count: 1
+recovered_count: 1
+false_positive_count: 19
+baseline_scorer_wall_sec: 0.124
+injected_scorer_wall_sec: 0.045
+recovery_wall_sec: 0.022
+finalize_total_wall_sec: 1.424
+```
+
+Notes:
+
+- The finalizer now writes baseline candidates, injected candidates, truth
+  recovery, and false-positive summaries when the relevant flags and inputs are
+  supplied.
+- The campaign contract still marks the run incomplete unless injected dispatch
+  and viewer indexes exist. In this smoke, injected spectra were supplied but
+  no injected dispatch plan was supplied.

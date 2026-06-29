@@ -43,6 +43,13 @@ class LocalDispatchRunConfig:
     candidate_min_abs_zscore: float = 5.0
     candidate_min_measurements: int = 10
     candidate_max_rows: int | None = None
+    score_injected: bool = False
+    injected_spectra_dir: Path | None = None
+    injection_truth_path: Path | None = None
+    recover_injections: bool = False
+    recovery_min_score: float = 5.0
+    recovery_wavelength_tolerance_nm: float = 10.0
+    recovery_require_line_family: bool = False
     resume: bool = False
     status_snapshot_interval_sec: float = 1.0
 
@@ -119,6 +126,13 @@ def run_local_dispatch(config: LocalDispatchRunConfig) -> dict[str, Any]:
             candidate_min_abs_zscore=config.candidate_min_abs_zscore,
             candidate_min_measurements=config.candidate_min_measurements,
             candidate_max_rows=config.candidate_max_rows,
+            score_injected=config.score_injected,
+            injected_spectra_dir=config.injected_spectra_dir,
+            injection_truth_path=config.injection_truth_path,
+            recover_injections=config.recover_injections,
+            recovery_min_score=config.recovery_min_score,
+            recovery_wavelength_tolerance_nm=config.recovery_wavelength_tolerance_nm,
+            recovery_require_line_family=config.recovery_require_line_family,
         )
     )
     finalize_wall = time.perf_counter() - t_finalize

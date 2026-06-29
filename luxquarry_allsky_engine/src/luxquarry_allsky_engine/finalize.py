@@ -9,6 +9,7 @@ from typing import Any
 
 from .campaign import CampaignContractConfig, write_campaign_contract
 from .dispatch import collect_dispatch_run
+from .recovery import InjectionRecoveryConfig, score_injection_recovery
 from .scoring import CandidateScoringConfig, score_spectra_candidates
 from .spectra import SpectraAssemblyConfig, assemble_spectra_from_shards
 
@@ -33,6 +34,11 @@ class FinalizeDispatchConfig:
     candidate_min_abs_zscore: float = 5.0
     candidate_min_measurements: int = 10
     candidate_max_rows: int | None = None
+    score_injected: bool = False
+    recover_injections: bool = False
+    recovery_min_score: float = 5.0
+    recovery_wavelength_tolerance_nm: float = 10.0
+    recovery_require_line_family: bool = False
 
 
 def finalize_dispatch_run(config: FinalizeDispatchConfig) -> dict[str, Any]:
@@ -77,6 +83,40 @@ def finalize_dispatch_run(config: FinalizeDispatchConfig) -> dict[str, Any]:
             )
         )
 
+    injected_scoring: dict[str, Any] | None = None
+    if config.score_injected:
+        if config.injected_spectra_dir is None:
+            raise ValueError("--score-injected requires --injected-spectra-dir")
+        injected_spectra_path = _find_spectra_measurements_path(config.injected_spectra_dir)
+        injected_scoring = score_spectra_candidates(
+            CandidateScoringConfig(
+                spectra_path=injected_spectra_path,
+                output_dir=candidate_dir,
+                run_id=injected_spectra_path.stem.removesuffix(".spectra_measurements"),
+                device=config.device,
+                output_prefix="injected",
+                min_abs_zscore=config.candidate_min_abs_zscore,
+                min_measurements=config.candidate_min_measurements,
+                max_candidates=config.candidate_max_rows,
+            )
+        )
+
+    recovery: dict[str, Any] | None = None
+    if config.recover_injections:
+        if config.injection_truth_path is None:
+            raise ValueError("--recover-injections requires --injection-truth")
+        injected_candidates_path = candidate_dir / "injected_candidates.parquet"
+        recovery = score_injection_recovery(
+            InjectionRecoveryConfig(
+                manifest_path=config.injection_truth_path,
+                candidates_path=_require_existing_path(injected_candidates_path),
+                output_dir=candidate_dir,
+                min_score=config.recovery_min_score,
+                wavelength_tolerance_nm=config.recovery_wavelength_tolerance_nm,
+                require_line_family=config.recovery_require_line_family,
+            )
+        )
+
     campaign_id = config.campaign_id or f"{run_id}_campaign"
     campaign_contract_out = config.campaign_contract_out or run_output_dir / "campaign_contract.json"
     campaign = write_campaign_contract(
@@ -116,6 +156,8 @@ def finalize_dispatch_run(config: FinalizeDispatchConfig) -> dict[str, Any]:
         "aggregate": aggregate,
         "spectra": spectra,
         "baseline_scoring": baseline_scoring,
+        "injected_scoring": injected_scoring,
+        "recovery": recovery,
         "campaign": campaign,
     }
     summary_path = run_output_dir / "finalize_summary.json"
@@ -145,3 +187,29 @@ def _resolve_existing(reference_path: Path, value: object) -> Path:
         if candidate.exists():
             return candidate
     return path
+
+
+def _find_spectra_measurements_path(spectra_dir: Path) -> Path:
+    summary_path = spectra_dir / "assemble_summary.json"
+    if summary_path.exists():
+        summary = _read_json(summary_path)
+        value = summary.get("spectra_measurements_path")
+        if value:
+            path = Path(str(value))
+            if path.exists():
+                return path
+            candidate = spectra_dir / path.name
+            if candidate.exists():
+                return candidate
+    matches = sorted(spectra_dir.glob("*.spectra_measurements.parquet"))
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise FileNotFoundError(f"No *.spectra_measurements.parquet found in {spectra_dir}")
+    raise ValueError(f"Multiple spectra measurement files found in {spectra_dir}; pass a directory with one run")
+
+
+def _require_existing_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    raise FileNotFoundError(path)
