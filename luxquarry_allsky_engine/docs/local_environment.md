@@ -23,9 +23,22 @@ GPUs:
   - RTX 6000 Ada, 46068 MiB
 ```
 
-The isolated `luxquarry_allsky_engine/.venv` starts intentionally blank. It
-contains only the local package. The first probe confirms GPU visibility through
-`nvidia-smi`, but not RAPIDS availability.
+The isolated `luxquarry_allsky_engine/.venv` started intentionally blank. The
+first probe confirmed GPU visibility through `nvidia-smi`, but no science or
+RAPIDS packages were installed.
+
+The initial implementation then installed the minimal CPU/reference stack needed
+for manifest building:
+
+```text
+numpy
+pandas
+pyarrow
+astropy
+```
+
+RAPIDS remains intentionally uninstalled until we choose a conda/container CUDA
+setup.
 
 The existing miner `.venv` has core science packages like NumPy, Pandas,
 PyArrow, Astropy, and NVIDIA Warp, but not RAPIDS/cuDF.
@@ -75,4 +88,39 @@ cd luxquarry_allsky_engine
 ```
 
 Generated run artifacts are intentionally ignored by git.
+
+## First Manifest Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky build-manifest \
+  --input-root /mnt/niroseti/spherex_cache/raw/qr2/level2 \
+  --out runs/manifest_smoke_v2/frame_manifest.parquet \
+  --campaign-id manifest_smoke_v2 \
+  --limit 10
+```
+
+Result:
+
+```text
+frame_count: 10
+fits_total_bytes: 716,368,320
+total_wall_sec: 0.260
+discover_fits: 0.074 sec
+read_headers: 0.176 sec
+write_manifest: 0.007 sec
+```
+
+The manifest correctly parsed:
+
+- planning period
+- processing version
+- detector directory
+- detector
+- exposure id
+- frame-in-exposure
+- image dimensions
+- approximate WCS footprint
 

@@ -76,6 +76,7 @@ luxquarry_allsky_engine/
     architecture.md
     implementation_plan.md
     benchmark_plan.md
+    benchmark_log.md
     cuda_and_rapids_strategy.md
     local_environment.md
     eks_plan.md

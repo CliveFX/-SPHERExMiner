@@ -10,6 +10,8 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from .manifest import build_frame_manifest
+
 
 OPTIONAL_MODULES = [
     "numpy",
@@ -44,6 +46,14 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--target-count", type=int, default=0)
     bench.add_argument("--measurement-count", type=int, default=0)
     bench.set_defaults(func=cmd_benchmark_smoke)
+
+    manifest = sub.add_parser("build-manifest", help="Scan FITS frames and write a frame manifest parquet.")
+    manifest.add_argument("--input-root", type=Path, action="append", required=True)
+    manifest.add_argument("--out", type=Path, required=True)
+    manifest.add_argument("--campaign-id", default="local_manifest")
+    manifest.add_argument("--limit", type=int)
+    manifest.add_argument("--no-read-headers", action="store_true")
+    manifest.set_defaults(func=cmd_build_manifest)
 
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)
@@ -118,6 +128,18 @@ def cmd_benchmark_smoke(args: argparse.Namespace) -> int:
     _write_json(out_dir / "correctness_summary.json", correctness)
     _write_json(out_dir / "profile_summary.json", profile)
     print(json.dumps({"out_dir": str(out_dir), "perf_summary": str(out_dir / "perf_summary.json")}, indent=2))
+    return 0
+
+
+def cmd_build_manifest(args: argparse.Namespace) -> int:
+    summary = build_frame_manifest(
+        input_roots=list(args.input_root),
+        output_path=args.out,
+        limit=args.limit,
+        campaign_id=args.campaign_id,
+        read_headers=not args.no_read_headers,
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
 
@@ -225,4 +247,3 @@ def _rate(count: int, elapsed_sec: float) -> float:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
