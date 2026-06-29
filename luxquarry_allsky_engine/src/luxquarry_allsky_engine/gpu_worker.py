@@ -4,6 +4,7 @@ import json
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +34,8 @@ class PersistentWorkerConfig:
     worker_count: int = 1
     write_combined_output: bool = False
     rmm_pool: bool = True
+    shard_batch_frames: int = 1
+    prefetch_frames: int = 0
 
 
 @dataclass(frozen=True)
@@ -43,6 +46,15 @@ class ResidentCalibration:
     wavelength_path: str
     device_arrays: WarpFrameCalibrationDevice
     upload_wall_sec: float
+
+
+@dataclass(frozen=True)
+class FramePayload:
+    image: np.ndarray
+    variance: np.ndarray | None
+    flags: np.ndarray | None
+    unit_scale: float
+    fits_read_wall_sec: float
 
 
 class PersistentGpuFrameWorker:
@@ -101,7 +113,11 @@ class PersistentGpuFrameWorker:
         self._write_status(status_path, summary, started, state="running")
 
         shard_frames = []
-        for frame_ordinal, frame in enumerate(manifest.to_dict(orient="records")):
+        shard_group: list[dict[str, Any]] = []
+        pending_gdfs = []
+        frames = manifest.to_dict(orient="records")
+        frame_payloads = self._iter_frame_payloads(frames)
+        for frame_ordinal, (frame, payload) in enumerate(frame_payloads):
             frame_group_id = str(frame.get("frame_group_id"))
             frame_targets = targets[
                 targets["frame_group_id"].astype(str).eq(frame_group_id) & targets["in_frame"].astype(bool)
@@ -110,26 +126,32 @@ class PersistentGpuFrameWorker:
                 continue
             t0 = time.perf_counter()
             try:
-                gdf, frame_stats = self._measure_frame(frame, frame_targets)
-                shard_path = shards_dir / f"{run_id}.{frame_group_id}.parquet"
-                tw = time.perf_counter()
-                gdf.to_parquet(shard_path, index=False)
-                write_wall = time.perf_counter() - tw
+                gdf, frame_stats = self._measure_frame(frame, frame_targets, payload)
                 rows = int(len(gdf))
                 ok_count = int(frame_stats["ok_count"])
                 summary["measurement_rows"] += rows
                 summary["ok_measurement_rows"] += ok_count
-                shard_row = {
-                    "frame_group_id": frame_group_id,
-                    "image_id": frame.get("image_id"),
-                    "path": str(shard_path),
-                    "rows": rows,
-                    "ok_rows": ok_count,
-                    "write_wall_sec": write_wall,
-                }
-                summary["shards"].append(shard_row)
+                pending_gdfs.append(gdf)
+                shard_group.append(
+                    {
+                        "frame_group_id": frame_group_id,
+                        "image_id": frame.get("image_id"),
+                        "rows": rows,
+                        "ok_rows": ok_count,
+                    }
+                )
                 if self.config.write_combined_output:
                     shard_frames.append(gdf)
+                write_wall = 0.0
+                shard_path = None
+                if len(pending_gdfs) >= self.config.shard_batch_frames:
+                    shard_path, write_wall = self._flush_shard_batch(
+                        pending_gdfs=pending_gdfs,
+                        shard_group=shard_group,
+                        shards_dir=shards_dir,
+                        run_id=run_id,
+                        summary=summary,
+                    )
                 timing = {
                     "frame_group_id": frame_group_id,
                     "image_id": frame.get("image_id"),
@@ -138,6 +160,7 @@ class PersistentGpuFrameWorker:
                     "ok_count": ok_count,
                     "wall_time_sec": time.perf_counter() - t0,
                     "write_wall_sec": write_wall,
+                    "deferred_write": shard_path is None,
                     **frame_stats,
                 }
                 summary["frame_timings"].append(timing)
@@ -159,6 +182,15 @@ class PersistentGpuFrameWorker:
             summary["total_wall_sec"] = time.perf_counter() - started
             self._write_status(status_path, summary, started, state="running")
 
+        if pending_gdfs:
+            self._flush_shard_batch(
+                pending_gdfs=pending_gdfs,
+                shard_group=shard_group,
+                shards_dir=shards_dir,
+                run_id=run_id,
+                summary=summary,
+            )
+
         if self.config.write_combined_output and shard_frames:
             combined_path = output_dir / f"{run_id}.measurements.parquet"
             tw = time.perf_counter()
@@ -173,7 +205,7 @@ class PersistentGpuFrameWorker:
         self._write_status(status_path, summary, started, state="complete")
         return summary
 
-    def _measure_frame(self, frame: dict[str, Any], targets: pd.DataFrame):
+    def _measure_frame(self, frame: dict[str, Any], targets: pd.DataFrame, payload: FramePayload):
         import cudf
 
         frame_started = time.perf_counter()
@@ -181,19 +213,13 @@ class PersistentGpuFrameWorker:
         detector = int(frame["detector"])
         release = str(frame.get("release") or "qr2")
         calibration = self._get_calibration(release=release, detector=detector)
-        t_read = time.perf_counter()
-        with fits.open(path, memmap=True) as hdul:
-            image_hdu = hdul["IMAGE"]
-            image = np.asarray(image_hdu.data, dtype=float)
-            variance = np.asarray(hdul["VARIANCE"].data, dtype=float) if "VARIANCE" in hdul else None
-            flags = np.asarray(hdul["FLAGS"].data, dtype=np.uint32) if "FLAGS" in hdul else None
-            unit_scale = image_to_ujy_arcsec2_scale(image_hdu.header)
-        fits_read_wall = time.perf_counter() - t_read
 
         t_select = time.perf_counter()
         x_zero = targets["x_pix"].to_numpy(dtype=float) - 1.0
         y_zero = targets["y_pix"].to_numpy(dtype=float) - 1.0
-        edge_zero = np.minimum.reduce([x_zero, y_zero, image.shape[1] - 1 - x_zero, image.shape[0] - 1 - y_zero])
+        edge_zero = np.minimum.reduce(
+            [x_zero, y_zero, payload.image.shape[1] - 1 - x_zero, payload.image.shape[0] - 1 - y_zero]
+        )
         selected = np.isfinite(edge_zero) & (edge_zero >= self.config.aperture.edge_margin_pix)
         selected_targets = targets.loc[selected].reset_index(drop=True)
         selected_edge = edge_zero[selected]
@@ -203,11 +229,11 @@ class PersistentGpuFrameWorker:
 
         t_kernel = time.perf_counter()
         batch = run_warp_frame_aperture_resident_cupy(
-            image=image,
-            variance=variance,
-            flags=flags,
+            image=payload.image,
+            variance=payload.variance,
+            flags=payload.flags,
             calibration=calibration.device_arrays,
-            image_to_ujy_arcsec2=unit_scale,
+            image_to_ujy_arcsec2=payload.unit_scale,
             x_zero_based=x_selected,
             y_zero_based=y_selected,
             aperture_radius_pix=self.config.aperture.aperture_radius_pix,
@@ -255,7 +281,7 @@ class PersistentGpuFrameWorker:
         return gdf, {
             "ok_count": ok_count,
             "selected_target_count": int(len(selected_targets)),
-            "fits_read_wall_sec": fits_read_wall,
+            "fits_read_wall_sec": payload.fits_read_wall_sec,
             "selection_wall_sec": selection_wall,
             "kernel_wall_sec": kernel_wall,
             "table_wall_sec": table_wall,
@@ -281,6 +307,76 @@ class PersistentGpuFrameWorker:
         )
         self._calibration[key] = cached
         return cached
+
+    def _iter_frame_payloads(self, frames: list[dict[str, Any]]):
+        if self.config.prefetch_frames <= 0:
+            for frame in frames:
+                yield frame, self._read_frame_payload(frame)
+            return
+        max_workers = max(1, int(self.config.prefetch_frames))
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fits-prefetch") as pool:
+            pending: dict[int, Future[FramePayload]] = {}
+            next_submit = 0
+            for _ in range(min(max_workers, len(frames))):
+                pending[next_submit] = pool.submit(self._read_frame_payload, frames[next_submit])
+                next_submit += 1
+            for idx, frame in enumerate(frames):
+                future = pending.pop(idx)
+                if next_submit < len(frames):
+                    pending[next_submit] = pool.submit(self._read_frame_payload, frames[next_submit])
+                    next_submit += 1
+                yield frame, future.result()
+
+    @staticmethod
+    def _read_frame_payload(frame: dict[str, Any]) -> FramePayload:
+        t_read = time.perf_counter()
+        path = Path(str(frame["path"]))
+        with fits.open(path, memmap=True) as hdul:
+            image_hdu = hdul["IMAGE"]
+            image = np.asarray(image_hdu.data, dtype=float)
+            variance = np.asarray(hdul["VARIANCE"].data, dtype=float) if "VARIANCE" in hdul else None
+            flags = np.asarray(hdul["FLAGS"].data, dtype=np.uint32) if "FLAGS" in hdul else None
+            unit_scale = image_to_ujy_arcsec2_scale(image_hdu.header)
+        return FramePayload(
+            image=image,
+            variance=variance,
+            flags=flags,
+            unit_scale=unit_scale,
+            fits_read_wall_sec=time.perf_counter() - t_read,
+        )
+
+    def _flush_shard_batch(
+        self,
+        *,
+        pending_gdfs: list[Any],
+        shard_group: list[dict[str, Any]],
+        shards_dir: Path,
+        run_id: str,
+        summary: dict[str, Any],
+    ) -> tuple[Path, float]:
+        if not pending_gdfs:
+            return shards_dir / f"{run_id}.empty.parquet", 0.0
+        first = shard_group[0]["frame_group_id"]
+        last = shard_group[-1]["frame_group_id"]
+        shard_path = shards_dir / f"{run_id}.{first}_to_{last}.parquet"
+        tw = time.perf_counter()
+        out = pending_gdfs[0] if len(pending_gdfs) == 1 else self._cudf.concat(pending_gdfs, ignore_index=True)
+        out.to_parquet(shard_path, index=False)
+        write_wall = time.perf_counter() - tw
+        summary["shards"].append(
+            {
+                "path": str(shard_path),
+                "frame_group_ids": [row["frame_group_id"] for row in shard_group],
+                "image_ids": [row["image_id"] for row in shard_group],
+                "rows": int(sum(row["rows"] for row in shard_group)),
+                "ok_rows": int(sum(row["ok_rows"] for row in shard_group)),
+                "frame_count": len(shard_group),
+                "write_wall_sec": write_wall,
+            }
+        )
+        pending_gdfs.clear()
+        shard_group.clear()
+        return shard_path, write_wall
 
     def _init_gpu_runtime(self) -> None:
         device_index = _device_index(self.config.device)

@@ -118,7 +118,9 @@ Implemented stages:
   --out-dir runs/persistent_gpu_worker_smoke10 \
   --run-id persistent_smoke10 \
   --limit-frames 10 \
-  --device cuda:0
+  --device cuda:0 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 2
 
 # Write a multi-GPU dispatch plan. The generated shell script launches one
 # persistent worker per device; the JSON is the same contract an EKS job
@@ -130,6 +132,8 @@ Implemented stages:
   --run-id dispatch_smoke10 \
   --plan-out runs/dispatch_smoke10/dispatch_plan.json \
   --devices cuda:0,cuda:1,cuda:2 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 2 \
   --limit-frames 10
 ```
 

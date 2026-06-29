@@ -19,6 +19,8 @@ class DispatchPlanConfig:
     cache_root: Path = Path("/mnt/niroseti/spherex_cache")
     limit_frames: int | None = None
     executable: str = ".venv/bin/luxquarry-allsky"
+    shard_batch_frames: int = 1
+    prefetch_frames: int = 0
 
 
 def build_dispatch_plan(config: DispatchPlanConfig) -> dict[str, Any]:
@@ -55,6 +57,10 @@ def build_dispatch_plan(config: DispatchPlanConfig) -> dict[str, Any]:
                 str(total_workers),
                 "--status-path",
                 str(status_path),
+                "--shard-batch-frames",
+                str(config.shard_batch_frames),
+                "--prefetch-frames",
+                str(config.prefetch_frames),
             ]
             if config.limit_frames is not None:
                 argv.extend(["--limit-frames", str(config.limit_frames)])

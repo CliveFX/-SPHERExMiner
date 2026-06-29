@@ -250,6 +250,51 @@ Notes:
 - The measured bottleneck has shifted to FITS reading and table/shard overhead;
   the aperture kernel is no longer the dominant cost on this smoke set.
 
+## 2026-06-29: Batched Shards and FITS Prefetch
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-persistent-gpu-worker \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/persistent_gpu_worker_smoke10_batch5_prefetch2 \
+  --run-id persistent_smoke10_batch5_prefetch2 \
+  --limit-frames 10 \
+  --device cuda:0 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 2
+```
+
+Result:
+
+```text
+frame_count: 10
+input_projected_rows: 5,000
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+failed_frames: 0
+shards: 2
+total_wall_sec: 1.156
+```
+
+Correctness:
+
+```text
+matched_ok_measurements_vs_cpu: 2,766
+flux_p95_abs_delta_uJy_vs_cpu: 0.0253
+```
+
+Notes:
+
+- Batching five frames per shard reduced output files from 10 to 2 on the smoke
+  run.
+- `--prefetch-frames 2` overlaps FITS reads with GPU/table work. The reported
+  per-frame `fits_read_wall_sec` remains useful as I/O accounting, but much of
+  it no longer blocks the hot loop.
+- This is the current recommended local worker mode for longer frame queues.
+
 ## 2026-06-29: Three-GPU Dispatch Smoke
 
 Commands:
