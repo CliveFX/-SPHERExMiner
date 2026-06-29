@@ -77,6 +77,7 @@ luxquarry_allsky_engine/
     implementation_plan.md
     benchmark_plan.md
     cuda_and_rapids_strategy.md
+    local_environment.md
     eks_plan.md
   src/
     # future Python package / CLI

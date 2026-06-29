@@ -1,0 +1,228 @@
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import time
+from datetime import datetime, timezone
+from importlib import import_module
+from pathlib import Path
+from typing import Any
+
+
+OPTIONAL_MODULES = [
+    "numpy",
+    "pandas",
+    "pyarrow",
+    "astropy",
+    "cupy",
+    "numba",
+    "warp",
+    "cudf",
+    "dask_cudf",
+    "rmm",
+    "kvikio",
+    "cuspatial",
+    "cuml",
+    "torch",
+]
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="luxquarry-allsky")
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    env_probe = sub.add_parser("env-probe", help="Report CUDA/RAPIDS/Python environment capabilities.")
+    env_probe.add_argument("--out", type=Path, help="Optional JSON output path.")
+    env_probe.set_defaults(func=cmd_env_probe)
+
+    bench = sub.add_parser("benchmark-smoke", help="Create a benchmark skeleton and perf_summary.json.")
+    bench.add_argument("--campaign-id", default="local_smoke")
+    bench.add_argument("--out-dir", type=Path, default=Path("runs/local_smoke"))
+    bench.add_argument("--frame-count", type=int, default=0)
+    bench.add_argument("--target-count", type=int, default=0)
+    bench.add_argument("--measurement-count", type=int, default=0)
+    bench.set_defaults(func=cmd_benchmark_smoke)
+
+    args = parser.parse_args(argv)
+    return int(args.func(args) or 0)
+
+
+def cmd_env_probe(args: argparse.Namespace) -> int:
+    report = build_env_report()
+    text = json.dumps(report, indent=2, sort_keys=True)
+    print(text)
+    if args.out:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(text + "\n", encoding="utf-8")
+    return 0
+
+
+def cmd_benchmark_smoke(args: argparse.Namespace) -> int:
+    start = time.perf_counter()
+    out_dir: Path = args.out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for child in ["manifest", "local_cache", "measurement_shards", "spectra", "candidates"]:
+        (out_dir / child).mkdir(exist_ok=True)
+
+    elapsed = time.perf_counter() - start
+    perf = {
+        "campaign_id": args.campaign_id,
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "frame_count": int(args.frame_count),
+        "target_count": int(args.target_count),
+        "measurement_count": int(args.measurement_count),
+        "total_wall_sec": elapsed,
+        "stage_wall_sec": {
+            "stage_fits": 0.0,
+            "catalog_query": 0.0,
+            "wcs_projection": 0.0,
+            "gpu_photometry": 0.0,
+            "write_measurements": 0.0,
+            "assemble_spectra": 0.0,
+            "score_candidates": 0.0,
+        },
+        "throughput": {
+            "frames_per_sec": _rate(args.frame_count, elapsed),
+            "measurements_per_sec": _rate(args.measurement_count, elapsed),
+            "measurements_per_gpu_sec": 0.0,
+            "parquet_rows_per_sec": 0.0,
+        },
+        "io": {
+            "fits_read_bytes": 0,
+            "catalog_read_bytes": 0,
+            "parquet_write_bytes": 0,
+            "local_cache_peak_bytes": 0,
+        },
+        "gpu": {
+            "device_count": len(_nvidia_smi_gpus()),
+            "kernel_wall_sec": 0.0,
+            "estimated_occupancy": None,
+        },
+    }
+    correctness = {
+        "campaign_id": args.campaign_id,
+        "created_utc": perf["created_utc"],
+        "reference_system": "current_target_centered_miner",
+        "checks": [],
+        "status": "not_run",
+    }
+    profile = {
+        "campaign_id": args.campaign_id,
+        "created_utc": perf["created_utc"],
+        "rows": [],
+        "note": "No instrumented stages yet. Future rows feed the 5% acceleration audit.",
+    }
+    _write_json(out_dir / "perf_summary.json", perf)
+    _write_json(out_dir / "correctness_summary.json", correctness)
+    _write_json(out_dir / "profile_summary.json", profile)
+    print(json.dumps({"out_dir": str(out_dir), "perf_summary": str(out_dir / "perf_summary.json")}, indent=2))
+    return 0
+
+
+def build_env_report() -> dict[str, Any]:
+    return {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "python": {
+            "executable": sys.executable,
+            "version": sys.version,
+            "prefix": sys.prefix,
+        },
+        "nvidia_smi": _nvidia_smi_report(),
+        "modules": {name: _module_report(name) for name in OPTIONAL_MODULES},
+    }
+
+
+def _module_report(name: str) -> dict[str, Any]:
+    try:
+        module = import_module(name)
+    except Exception as exc:
+        return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
+    version = getattr(module, "__version__", None)
+    report: dict[str, Any] = {"available": True, "version": str(version) if version is not None else None}
+    if name == "cupy":
+        report.update(_cupy_details(module))
+    if name == "torch":
+        report.update(_torch_details(module))
+    return report
+
+
+def _cupy_details(module: Any) -> dict[str, Any]:
+    try:
+        runtime = module.cuda.runtime
+        return {
+            "cuda_runtime_version": runtime.runtimeGetVersion(),
+            "device_count": runtime.getDeviceCount(),
+        }
+    except Exception as exc:
+        return {"cuda_error": f"{type(exc).__name__}: {exc}"}
+
+
+def _torch_details(module: Any) -> dict[str, Any]:
+    try:
+        return {
+            "cuda_available": bool(module.cuda.is_available()),
+            "cuda_device_count": int(module.cuda.device_count()),
+            "cuda_version": getattr(module.version, "cuda", None),
+        }
+    except Exception as exc:
+        return {"cuda_error": f"{type(exc).__name__}: {exc}"}
+
+
+def _nvidia_smi_report() -> dict[str, Any]:
+    try:
+        proc = subprocess.run(
+            [
+                "nvidia-smi",
+                "--query-gpu=index,name,memory.total,driver_version",
+                "--format=csv,noheader,nounits",
+            ],
+            check=True,
+            text=True,
+            capture_output=True,
+            timeout=10,
+        )
+    except Exception as exc:
+        return {"available": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {"available": True, "gpus": _parse_nvidia_smi(proc.stdout)}
+
+
+def _nvidia_smi_gpus() -> list[dict[str, Any]]:
+    report = _nvidia_smi_report()
+    return list(report.get("gpus") or []) if report.get("available") else []
+
+
+def _parse_nvidia_smi(stdout: str) -> list[dict[str, Any]]:
+    gpus = []
+    for line in stdout.splitlines():
+        parts = [part.strip() for part in line.split(",")]
+        if len(parts) < 4:
+            continue
+        index, name, memory_mb, driver = parts[:4]
+        try:
+            memory_total_mb = int(memory_mb)
+        except ValueError:
+            memory_total_mb = None
+        gpus.append(
+            {
+                "index": int(index) if index.isdigit() else index,
+                "name": name,
+                "memory_total_mb": memory_total_mb,
+                "driver_version": driver,
+            }
+        )
+    return gpus
+
+
+def _write_json(path: Path, data: dict[str, Any]) -> None:
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _rate(count: int, elapsed_sec: float) -> float:
+    return float(count / elapsed_sec) if elapsed_sec > 0 and count else 0.0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+
