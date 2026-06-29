@@ -171,6 +171,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Pass --batch-table-assembly to every persistent worker.",
     )
+    dispatch.add_argument(
+        "--materialize-worker-inputs",
+        action="store_true",
+        help="Write per-worker manifest/target parquets and point workers at their own input slices.",
+    )
     dispatch.add_argument("--shard-batch-frames", type=int, default=1)
     dispatch.add_argument("--prefetch-frames", type=int, default=0)
     dispatch.add_argument("--status-interval-frames", type=int, default=1)
@@ -406,6 +411,7 @@ def cmd_plan_gpu_dispatch(args: argparse.Namespace) -> int:
             executable=args.executable,
             async_shard_writes=args.async_shard_writes,
             batch_table_assembly=args.batch_table_assembly,
+            materialize_worker_inputs=args.materialize_worker_inputs,
             shard_batch_frames=args.shard_batch_frames,
             prefetch_frames=args.prefetch_frames,
             status_interval_frames=args.status_interval_frames,

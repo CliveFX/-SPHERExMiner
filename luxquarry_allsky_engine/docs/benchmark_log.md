@@ -561,3 +561,83 @@ Notes:
   frame processing.
 - `plan-gpu-dispatch --batch-table-assembly` passes this mode through to every
   generated persistent worker.
+
+## 2026-06-29: Materialized Dispatch Input Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky plan-gpu-dispatch \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_smoke10_materialized2 \
+  --run-id dispatch_smoke10_materialized2 \
+  --plan-out runs/dispatch_smoke10_materialized2/dispatch_plan.json \
+  --devices cuda:0,cuda:1,cuda:2 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 2 \
+  --status-interval-frames 5 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --materialize-worker-inputs \
+  --limit-frames 10
+
+runs/dispatch_smoke10_materialized2/dispatch_plan.sh
+
+.venv/bin/luxquarry-allsky collect-dispatch-run \
+  --plan runs/dispatch_smoke10_materialized2/dispatch_plan.json
+```
+
+Materialized inputs:
+
+```text
+source_manifest_rows: 10
+source_projected_target_rows: 5,000
+materialized_manifest_rows: 10
+materialized_projected_target_rows: 5,000
+worker frame slices: 4 / 3 / 3
+worker projected-target slices: 2,000 / 1,500 / 1,500
+```
+
+Collected result:
+
+```text
+complete: true
+complete_workers: 3
+completed_frames: 10
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+shard_count: 3
+missing_shards: 0
+worker_max_wall_sec: 0.811
+worker_sum_wall_sec: 2.397
+collect_wall_sec: 0.008
+```
+
+Comparison with the earlier non-materialized dispatch:
+
+```text
+old_rows: 2,770
+new_rows: 2,770
+old_ok_rows: 2,766
+new_ok_rows: 2,766
+aperture_flux_uJy_max_delta: 0.0
+aperture_flux_unc_uJy_max_delta: 0.0
+flags_summary_max_delta: 0.0
+aperture_status_code_max_delta: 0.0
+cwave_um_max_delta: 4.8e-7
+cband_um_max_delta: 4.3e-8
+```
+
+Notes:
+
+- Materialization is an input-startup optimization. It prevents every worker
+  from reading the full projected-target parquet just to filter out frames owned
+  by other workers.
+- Generated worker commands point at `worker_inputs/wXXXX/*.parquet` and run
+  with `--worker-index 0 --worker-count 1`; the logical worker index is still
+  recorded in the dispatch plan for aggregation.
+- This is the preferred dispatch shape for large local, multi-node, or EKS
+  execution.

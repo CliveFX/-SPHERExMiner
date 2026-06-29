@@ -70,6 +70,7 @@ cd luxquarry_allsky_engine
   --prefetch-frames 2 \
   --async-shard-writes \
   --batch-table-assembly \
+  --materialize-worker-inputs \
   --status-interval-frames 25 \
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --limit-frames 10
@@ -84,6 +85,22 @@ dispatch_plan.sh
 
 The shell file launches one persistent worker per listed GPU. The JSON file is
 the portable contract for an EKS Job generator.
+
+`--materialize-worker-inputs` writes each worker's manifest and projected-target
+slice before the shell plan is emitted:
+
+```text
+worker_inputs/w0000/frame_manifest.parquet
+worker_inputs/w0000/projected_targets.parquet
+worker_inputs/w0001/frame_manifest.parquet
+worker_inputs/w0001/projected_targets.parquet
+```
+
+In materialized mode, the generated worker command uses `--worker-index 0` and
+`--worker-count 1` because partitioning has already happened. The plan still
+records the original logical worker index for aggregation. This is the preferred
+shape for large multi-node runs where repeatedly reading the full projected
+target parquet would waste startup I/O.
 
 After the workers finish, collect the run:
 
@@ -180,6 +197,19 @@ ok_measurement_rows: 2,766
 shard_count: 10
 missing_shards: 0
 collect_wall_sec: ~0.008 sec
+```
+
+Materialized three-worker smoke:
+
+```text
+input slices: 4 / 3 / 3 frames
+projected target slices: 2,000 / 1,500 / 1,500 rows
+complete: true
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+worker_max_wall_sec: 0.811
+shard_count: 3
+missing_shards: 0
 ```
 
 For this tiny smoke test, process startup dominates. The point of the worker

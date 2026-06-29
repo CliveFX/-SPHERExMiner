@@ -139,6 +139,7 @@ Implemented stages:
   --prefetch-frames 2 \
   --async-shard-writes \
   --batch-table-assembly \
+  --materialize-worker-inputs \
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --limit-frames 10
 
@@ -185,6 +186,19 @@ measurement_shard_manifest.parquet
 The aggregate summary reports missing/incomplete workers, failed frames, missing
 shards, total rows, ok rows, and max worker wall time. The shard manifest is the
 input list downstream spectra assembly should consume.
+
+For large dispatches, add `--materialize-worker-inputs` to the plan command.
+That writes per-worker input slices before launch:
+
+```text
+worker_inputs/w0000/frame_manifest.parquet
+worker_inputs/w0000/projected_targets.parquet
+...
+```
+
+Workers then run with `worker_index=0` and `worker_count=1` against their own
+small manifest and projected-target parquet. This avoids every worker scanning
+the full target table at startup.
 
 Workers can also stage FITS inputs onto local SSD/NVMe with
 `--local-cache-dir`. On a 10-frame smoke, a warm staged cache reduced the

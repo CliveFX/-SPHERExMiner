@@ -26,6 +26,7 @@ class DispatchPlanConfig:
     local_cache_dir: Path | None = None
     async_shard_writes: bool = False
     batch_table_assembly: bool = False
+    materialize_worker_inputs: bool = False
 
 
 def build_dispatch_plan(config: DispatchPlanConfig) -> dict[str, Any]:
@@ -34,20 +35,31 @@ def build_dispatch_plan(config: DispatchPlanConfig) -> dict[str, Any]:
     if config.workers_per_device <= 0:
         raise ValueError("workers_per_device must be positive")
     total_workers = len(config.devices) * config.workers_per_device
+    materialized_inputs, materialize_summary = _materialize_worker_inputs(config, total_workers)
     workers = []
     worker_index = 0
     for device in config.devices:
         for local_slot in range(config.workers_per_device):
             worker_id = f"{config.run_id}.w{worker_index:04d}.{device.replace(':', '')}.s{local_slot}"
             worker_out = config.output_dir / "workers" / worker_id
+            worker_manifest = config.manifest_path
+            worker_projected_targets = config.projected_targets_path
+            runtime_worker_index = worker_index
+            runtime_worker_count = total_workers
+            if config.materialize_worker_inputs:
+                worker_input = materialized_inputs[worker_index]
+                worker_manifest = Path(worker_input["manifest_path"])
+                worker_projected_targets = Path(worker_input["projected_targets_path"])
+                runtime_worker_index = 0
+                runtime_worker_count = 1
             status_path = worker_out / "run_status.json"
             argv = [
                 config.executable,
                 "run-persistent-gpu-worker",
                 "--manifest",
-                str(config.manifest_path),
+                str(worker_manifest),
                 "--projected-targets",
-                str(config.projected_targets_path),
+                str(worker_projected_targets),
                 "--out-dir",
                 str(worker_out),
                 "--run-id",
@@ -57,9 +69,9 @@ def build_dispatch_plan(config: DispatchPlanConfig) -> dict[str, Any]:
                 "--device",
                 device,
                 "--worker-index",
-                str(worker_index),
+                str(runtime_worker_index),
                 "--worker-count",
-                str(total_workers),
+                str(runtime_worker_count),
                 "--status-path",
                 str(status_path),
                 "--shard-batch-frames",
@@ -69,7 +81,7 @@ def build_dispatch_plan(config: DispatchPlanConfig) -> dict[str, Any]:
                 "--status-interval-frames",
                 str(config.status_interval_frames),
             ]
-            if config.limit_frames is not None:
+            if config.limit_frames is not None and not config.materialize_worker_inputs:
                 argv.extend(["--limit-frames", str(config.limit_frames)])
             if config.local_cache_dir is not None:
                 argv.extend(["--local-cache-dir", str(config.local_cache_dir)])
@@ -82,8 +94,12 @@ def build_dispatch_plan(config: DispatchPlanConfig) -> dict[str, Any]:
                     "worker_id": worker_id,
                     "worker_index": worker_index,
                     "worker_count": total_workers,
+                    "runtime_worker_index": runtime_worker_index,
+                    "runtime_worker_count": runtime_worker_count,
                     "device": device,
                     "local_slot": local_slot,
+                    "manifest_path": str(worker_manifest),
+                    "projected_targets_path": str(worker_projected_targets),
                     "output_dir": str(worker_out),
                     "status_path": str(status_path),
                     "argv": argv,
@@ -105,14 +121,79 @@ def build_dispatch_plan(config: DispatchPlanConfig) -> dict[str, Any]:
         "local_cache_dir": str(config.local_cache_dir) if config.local_cache_dir else None,
         "async_shard_writes": config.async_shard_writes,
         "batch_table_assembly": config.batch_table_assembly,
+        "materialize_worker_inputs": config.materialize_worker_inputs,
+        "materialized_inputs": materialize_summary,
         "contract": {
-            "partitioning": "frame ordinal modulo worker_count equals worker_index",
+            "partitioning": (
+                "pre-materialized per-worker frame and target parquets"
+                if config.materialize_worker_inputs
+                else "frame ordinal modulo worker_count equals worker_index"
+            ),
             "output": "each worker writes independent measurement_shards and run_summary.json",
             "status": "each worker atomically rewrites run_status.json",
             "coordination": "no live database or shared lock required in the hot path",
         },
         "workers": workers,
     }
+
+
+def _materialize_worker_inputs(
+    config: DispatchPlanConfig,
+    total_workers: int,
+) -> tuple[dict[int, dict[str, Any]], dict[str, Any] | None]:
+    if not config.materialize_worker_inputs:
+        return {}, None
+    started = time.perf_counter()
+    import pandas as pd
+
+    manifest = pd.read_parquet(config.manifest_path)
+    if config.limit_frames is not None:
+        manifest = manifest.head(config.limit_frames).copy()
+    manifest = manifest.reset_index(drop=True)
+    projected_targets = pd.read_parquet(config.projected_targets_path)
+    worker_inputs_dir = config.output_dir / "worker_inputs"
+    worker_inputs_dir.mkdir(parents=True, exist_ok=True)
+
+    materialized: dict[int, dict[str, Any]] = {}
+    total_manifest_rows = 0
+    total_target_rows = 0
+    for worker_index in range(total_workers):
+        worker_dir = worker_inputs_dir / f"w{worker_index:04d}"
+        worker_dir.mkdir(parents=True, exist_ok=True)
+        worker_manifest = manifest.iloc[
+            [i for i in range(len(manifest)) if i % total_workers == worker_index]
+        ].copy()
+        frame_ids = set(worker_manifest["frame_group_id"].astype(str))
+        worker_targets = projected_targets[
+            projected_targets["frame_group_id"].astype(str).isin(frame_ids)
+        ].copy()
+        manifest_path = worker_dir / "frame_manifest.parquet"
+        projected_targets_path = worker_dir / "projected_targets.parquet"
+        worker_manifest.to_parquet(manifest_path, index=False)
+        worker_targets.to_parquet(projected_targets_path, index=False)
+        materialized[worker_index] = {
+            "worker_index": worker_index,
+            "manifest_path": str(manifest_path),
+            "projected_targets_path": str(projected_targets_path),
+            "frame_count": int(len(worker_manifest)),
+            "projected_target_rows": int(len(worker_targets)),
+        }
+        total_manifest_rows += int(len(worker_manifest))
+        total_target_rows += int(len(worker_targets))
+
+    summary = {
+        "worker_inputs_dir": str(worker_inputs_dir),
+        "worker_count": total_workers,
+        "source_manifest_path": str(config.manifest_path),
+        "source_projected_targets_path": str(config.projected_targets_path),
+        "source_manifest_rows": int(len(manifest)),
+        "source_projected_target_rows": int(len(projected_targets)),
+        "materialized_manifest_rows": total_manifest_rows,
+        "materialized_projected_target_rows": total_target_rows,
+        "wall_sec": time.perf_counter() - started,
+        "workers": list(materialized.values()),
+    }
+    return materialized, summary
 
 
 def write_dispatch_plan(plan: dict[str, Any], output_path: Path) -> None:
