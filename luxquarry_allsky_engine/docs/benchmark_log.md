@@ -1712,3 +1712,41 @@ Notes:
   source tables resident.
 - The next target is larger frame batches and multi-worker service mode, then
   S3/object-cache input support.
+
+## 2026-06-29: Shuffled Shard Assembly Validation Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky validate-assembly-order \
+  --shard-manifest runs/service_queue_smoke_v3/measurement_shard_manifest.parquet \
+  --out-dir runs/service_queue_smoke_v3/assembly_order_validation_v2 \
+  --run-id service_queue_smoke_v3_order_check_v2 \
+  --device cuda:0 \
+  --repetitions 3
+```
+
+Result:
+
+```text
+passed: true
+mismatch_count: 0
+shard_count: 2
+repetitions: 3
+baseline_spectra_hash: b18a15d5b41dfd85c0e15940f6aa81e3b33f2776b579f9e16fb1e23c306281fd
+baseline_target_summary_hash: 1a62c5839294a1569fd8c23e75b82b97210a3b4dfa306957799d5d86d9c909ca
+
+all runs:
+  input_measurement_rows: 573
+  spectra_measurement_rows: 573
+  target_count: 310
+```
+
+Notes:
+
+- `validate-assembly-order` assembles the original shard manifest plus shuffled
+  copies, then compares logical parquet hashes for spectra measurements and
+  target summaries.
+- This gives us a regression gate for the S3/EKS path, where worker completion
+  and shard listing order cannot be assumed.

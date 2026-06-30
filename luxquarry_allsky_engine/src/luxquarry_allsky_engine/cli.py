@@ -28,7 +28,12 @@ from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
 from .recovery import InjectionRecoveryConfig, score_injection_recovery
 from .scoring import CandidateScoringConfig, score_spectra_candidates
-from .spectra import SpectraAssemblyConfig, assemble_spectra_from_shards
+from .spectra import (
+    SpectraAssemblyConfig,
+    SpectraAssemblyValidationConfig,
+    assemble_spectra_from_shards,
+    validate_shard_order_independent_assembly,
+)
 from .status import DispatchStatusConfig, write_dispatch_status_snapshot
 from .task_queue import (
     GpuWorkerServiceConfig,
@@ -521,6 +526,19 @@ def main(argv: list[str] | None = None) -> int:
     spectra.add_argument("--device", default="cuda:0")
     spectra.add_argument("--only-ok", action="store_true", help="Only keep aperture_status_code == 0 measurements.")
     spectra.set_defaults(func=cmd_assemble_spectra)
+
+    validate_assembly = sub.add_parser(
+        "validate-assembly-order",
+        help="Reassemble shuffled shard manifests and verify spectra outputs are logically identical.",
+    )
+    validate_assembly.add_argument("--shard-manifest", type=Path, required=True)
+    validate_assembly.add_argument("--out-dir", type=Path, required=True)
+    validate_assembly.add_argument("--run-id", required=True)
+    validate_assembly.add_argument("--device", default="cuda:0")
+    validate_assembly.add_argument("--only-ok", action="store_true")
+    validate_assembly.add_argument("--repetitions", type=int, default=2)
+    validate_assembly.add_argument("--random-seed", type=int, default=1729)
+    validate_assembly.set_defaults(func=cmd_validate_assembly_order)
 
     args = parser.parse_args(argv)
     return int(args.func(args) or 0)
@@ -1105,6 +1123,22 @@ def cmd_assemble_spectra(args: argparse.Namespace) -> int:
             run_id=args.run_id,
             device=args.device,
             only_ok=args.only_ok,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_validate_assembly_order(args: argparse.Namespace) -> int:
+    summary = validate_shard_order_independent_assembly(
+        SpectraAssemblyValidationConfig(
+            shard_manifest_path=args.shard_manifest,
+            output_dir=args.out_dir,
+            run_id=args.run_id,
+            device=args.device,
+            only_ok=args.only_ok,
+            repetitions=args.repetitions,
+            random_seed=args.random_seed,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

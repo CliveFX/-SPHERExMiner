@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import time
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -17,6 +18,17 @@ class SpectraAssemblyConfig:
     run_id: str
     device: str = "cuda:0"
     only_ok: bool = False
+
+
+@dataclass(frozen=True)
+class SpectraAssemblyValidationConfig:
+    shard_manifest_path: Path
+    output_dir: Path
+    run_id: str
+    device: str = "cuda:0"
+    only_ok: bool = False
+    repetitions: int = 2
+    random_seed: int = 1729
 
 
 def assemble_spectra_from_shards(config: SpectraAssemblyConfig) -> dict[str, Any]:
@@ -82,6 +94,86 @@ def assemble_spectra_from_shards(config: SpectraAssemblyConfig) -> dict[str, Any
     return summary
 
 
+def validate_shard_order_independent_assembly(config: SpectraAssemblyValidationConfig) -> dict[str, Any]:
+    if config.repetitions <= 0:
+        raise ValueError("repetitions must be positive")
+    started = time.perf_counter()
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    manifest = pd.read_parquet(config.shard_manifest_path)
+    if len(manifest) == 0:
+        raise ValueError(f"No shard rows found in {config.shard_manifest_path}")
+
+    runs: list[dict[str, Any]] = []
+    base_dir = config.output_dir
+    for idx in range(config.repetitions + 1):
+        label = "original" if idx == 0 else f"shuffle_{idx:02d}"
+        run_dir = base_dir / label
+        run_dir.mkdir(parents=True, exist_ok=True)
+        run_manifest = manifest if idx == 0 else manifest.sample(frac=1.0, random_state=config.random_seed + idx)
+        run_manifest_path = run_dir / "measurement_shard_manifest.parquet"
+        run_manifest.to_parquet(run_manifest_path, index=False)
+        assembly = assemble_spectra_from_shards(
+            SpectraAssemblyConfig(
+                shard_manifest_path=run_manifest_path,
+                output_dir=run_dir,
+                run_id=f"{config.run_id}.{label}",
+                device=config.device,
+                only_ok=config.only_ok,
+            )
+        )
+        spectra_hash = _parquet_logical_hash(Path(assembly["spectra_measurements_path"]))
+        target_summary_hash = _parquet_logical_hash(Path(assembly["target_summary_path"]))
+        runs.append(
+            {
+                "label": label,
+                "manifest_path": str(run_manifest_path),
+                "output_dir": str(run_dir),
+                "spectra_measurements_path": assembly["spectra_measurements_path"],
+                "target_summary_path": assembly["target_summary_path"],
+                "spectra_hash": spectra_hash,
+                "target_summary_hash": target_summary_hash,
+                "input_measurement_rows": int(assembly["input_measurement_rows"]),
+                "spectra_measurement_rows": int(assembly["spectra_measurement_rows"]),
+                "target_count": int(assembly["target_count"]),
+                "shard_count": int(assembly["shard_count"]),
+                "total_wall_sec": float(assembly["total_wall_sec"]),
+            }
+        )
+
+    baseline = runs[0]
+    mismatches = [
+        run
+        for run in runs[1:]
+        if run["spectra_hash"] != baseline["spectra_hash"]
+        or run["target_summary_hash"] != baseline["target_summary_hash"]
+        or run["spectra_measurement_rows"] != baseline["spectra_measurement_rows"]
+        or run["target_count"] != baseline["target_count"]
+    ]
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "run_id": config.run_id,
+        "backend": "cudf_spectra_assembly_order_validation",
+        "device": config.device,
+        "shard_manifest_path": str(config.shard_manifest_path),
+        "output_dir": str(config.output_dir),
+        "only_ok": config.only_ok,
+        "repetitions": config.repetitions,
+        "random_seed": config.random_seed,
+        "passed": len(mismatches) == 0,
+        "mismatch_count": len(mismatches),
+        "shard_count": int(len(manifest)),
+        "baseline_spectra_hash": baseline["spectra_hash"],
+        "baseline_target_summary_hash": baseline["target_summary_hash"],
+        "runs": runs,
+        "total_wall_sec": time.perf_counter() - started,
+    }
+    summary_path = config.output_dir / "assembly_order_validation_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if mismatches:
+        raise ValueError(f"Assembly order validation failed for {len(mismatches)} shuffled manifests")
+    return summary
+
+
 def _build_target_summary(spectra):
     keys = ["catalog", "target_id"]
     out = spectra.groupby(keys).agg(
@@ -136,6 +228,17 @@ def _resolve_shard_paths(manifest_path: Path, raw_paths: list[str]) -> list[Path
             raise FileNotFoundError(f"Missing measurement shard from manifest: {raw}")
         paths.append(resolved)
     return paths
+
+
+def _parquet_logical_hash(path: Path) -> str:
+    frame = pd.read_parquet(path)
+    digest = hashlib.sha256()
+    digest.update(json.dumps(list(frame.columns), separators=(",", ":")).encode("utf-8"))
+    digest.update(str(len(frame)).encode("utf-8"))
+    if len(frame) > 0:
+        row_hashes = pd.util.hash_pandas_object(frame, index=False).to_numpy(dtype="uint64", copy=False)
+        digest.update(row_hashes.tobytes())
+    return digest.hexdigest()
 
 
 def _device_index(device: str) -> int:
