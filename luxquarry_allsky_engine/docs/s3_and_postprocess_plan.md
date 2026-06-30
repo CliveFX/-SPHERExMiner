@@ -38,6 +38,39 @@ The QR2 spectral image FITS products include image, flags, variance, zodiacal
 model, exposure-averaged PSF, and wavelength WCS extensions. Those products are
 the correct object-storage input for the next miner.
 
+## Current Local S3 Hook
+
+Implemented commands and behavior:
+
+```bash
+luxquarry-allsky rewrite-manifest-paths \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --out runs/manifest_smoke_v2_s3/frame_manifest.parquet \
+  --strip-prefix /mnt/niroseti/spherex_cache/raw \
+  --uri-prefix s3://nasa-irsa-spherex
+```
+
+This rewrites local cache paths such as:
+
+```text
+/mnt/niroseti/spherex_cache/raw/qr2/level2/...
+```
+
+to public object URIs such as:
+
+```text
+s3://nasa-irsa-spherex/qr2/level2/...
+```
+
+`run-gpu-worker-service` can now process manifest rows whose `path` is an S3 URI
+when `--local-cache-dir` is set. The worker stages the FITS object into the
+local cache, then reads it with the existing Astropy FITS path. Local paths keep
+the old copy/cache behavior.
+
+Current implementation uses anonymous HTTPS derived from the S3 URI, not boto3
+or s3fs. That keeps the first S3 path dependency-free; boto3/s3fs/fsspec remain
+benchmark candidates for discovery and async prefetch.
+
 ## Input Strategy
 
 Do not stream every photometry read directly from S3 into Astropy. That would
@@ -66,6 +99,7 @@ per frame batch
 Implementation options to benchmark:
 
 - `aws s3 cp --no-sign-request` for a simple process-level staging baseline.
+- current dependency-free HTTPS staging as the baseline inside the worker.
 - `boto3` anonymous client for a Python-managed async prefetcher.
 - `s3fs` or `fsspec` for manifest discovery and lightweight metadata, not for
   hot FITS reads until benchmarked.

@@ -1795,3 +1795,100 @@ Notes:
 - This remains opt-in so historical local assemblies do not silently change.
 - EKS/S3 postprocess should enable this flag because retrying task leases can
   legitimately re-emit a shard.
+
+## 2026-06-29: Public S3 FITS Staging Smoke
+
+Manifest rewrite:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky rewrite-manifest-paths \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --out runs/manifest_smoke_v2_s3/frame_manifest.parquet \
+  --strip-prefix /mnt/niroseti/spherex_cache/raw \
+  --uri-prefix s3://nasa-irsa-spherex
+```
+
+First rewritten path:
+
+```text
+s3://nasa-irsa-spherex/qr2/level2/2025W52_2A/l2b-v22-2026-006/5/level2_2025W52_2A_0305_3D5_spx_l2b-v22-2026-006.fits
+```
+
+S3 HEAD/content-length probe:
+
+```text
+content_length_bytes: 71,637,120
+```
+
+Worker smoke:
+
+```bash
+.venv/bin/luxquarry-allsky write-task-queue \
+  --manifest runs/manifest_smoke_v2_s3/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/service_queue_smoke_s3_source/queue \
+  --campaign-id service_queue_smoke_s3_source \
+  --frames-per-task 1 \
+  --limit-frames 1 \
+  --no-materialize-task-inputs
+
+.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir runs/service_queue_smoke_s3_source/queue \
+  --out-dir runs/service_queue_smoke_s3_source \
+  --run-id service_queue_smoke_s3_source \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --local-cache-dir /tmp/luxquarry_s3_stage_smoke \
+  --max-tasks 1 \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --shard-batch-frames 1
+```
+
+Result:
+
+```text
+tasks_completed: 1
+tasks_failed: 0
+frames_completed: 1
+measurement_rows: 280
+ok_measurement_rows: 280
+staged_bytes: 71,637,120
+staging_wall_sec: 3.611
+fits_read_wall_sec: 0.014
+frame_compute_wall_sec: 0.196
+kernel_wall_sec: 0.033
+task_wall_sec: 3.982
+service_wall_sec: 5.258
+```
+
+Assembly:
+
+```bash
+.venv/bin/luxquarry-allsky assemble-spectra \
+  --shard-manifest runs/service_queue_smoke_s3_source/measurement_shard_manifest.parquet \
+  --out-dir runs/service_queue_smoke_s3_source/spectra \
+  --run-id service_queue_smoke_s3_source \
+  --device cuda:0 \
+  --drop-duplicate-measurements
+```
+
+Assembly result:
+
+```text
+input_measurement_rows: 280
+spectra_measurement_rows: 280
+target_count: 280
+duplicate_measurement_rows_dropped: 0
+total_wall_sec: 1.236
+```
+
+Notes:
+
+- S3 paths require `--local-cache-dir`; the worker stages the object before
+  Astropy reads it.
+- The first implementation uses dependency-free anonymous HTTPS derived from
+  `s3://bucket/key`.
+- The next performance step is asynchronous S3 prefetch so downloads overlap
+  with GPU work instead of blocking the frame loop.

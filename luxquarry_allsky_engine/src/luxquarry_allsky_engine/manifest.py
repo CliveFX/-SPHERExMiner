@@ -5,7 +5,7 @@ import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 import pandas as pd
@@ -93,6 +93,47 @@ def build_frame_manifest(
     return summary
 
 
+def rewrite_manifest_paths_to_uri(
+    *,
+    manifest_path: Path,
+    output_path: Path,
+    strip_prefix: Path,
+    uri_prefix: str,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    manifest = pd.read_parquet(manifest_path)
+    if "path" not in manifest.columns:
+        raise ValueError(f"Manifest has no path column: {manifest_path}")
+    normalized_uri_prefix = uri_prefix.rstrip("/")
+    strip_prefix_resolved = strip_prefix.resolve()
+    rewritten_paths = [
+        _rewrite_one_path_to_uri(path, strip_prefix=strip_prefix_resolved, uri_prefix=normalized_uri_prefix)
+        for path in manifest["path"].astype(str).tolist()
+    ]
+    out = manifest.copy()
+    out["local_source_path"] = out["path"]
+    out["path"] = rewritten_paths
+    out["path_rewrite_prefix"] = normalized_uri_prefix
+    out["path_rewrite_created_utc"] = datetime.now(timezone.utc).isoformat()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(output_path, index=False)
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "source_manifest_path": str(manifest_path),
+        "output_path": str(output_path),
+        "strip_prefix": str(strip_prefix_resolved),
+        "uri_prefix": normalized_uri_prefix,
+        "frame_count": int(len(out)),
+        "first_path": rewritten_paths[0] if rewritten_paths else None,
+        "total_wall_sec": time.perf_counter() - started,
+    }
+    output_path.with_suffix(".summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return summary
+
+
 def iter_fits_paths(*, input_roots: list[Path], limit: int | None = None) -> Iterable[Path]:
     emitted = 0
     for root in input_roots:
@@ -111,6 +152,16 @@ def iter_fits_paths(*, input_roots: list[Path], limit: int | None = None) -> Ite
             emitted += 1
             if limit is not None and emitted >= limit:
                 return
+
+
+def _rewrite_one_path_to_uri(path: str, *, strip_prefix: Path, uri_prefix: str) -> str:
+    source_path = Path(path)
+    try:
+        relative = source_path.resolve().relative_to(strip_prefix)
+    except ValueError as exc:
+        raise ValueError(f"Path {path} is not under strip prefix {strip_prefix}") from exc
+    key = PurePosixPath(*relative.parts).as_posix()
+    return f"{uri_prefix}/{key}"
 
 
 def _manifest_row(*, index: int, path: Path, read_headers: bool) -> dict[str, Any]:

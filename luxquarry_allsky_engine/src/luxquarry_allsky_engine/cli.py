@@ -23,7 +23,7 @@ from .kubernetes import (
     write_kubernetes_postprocess_job,
 )
 from .local_runner import LocalDispatchRunConfig, LocalPlanWorkerRunConfig, run_dispatch_plan_workers, run_local_dispatch
-from .manifest import build_frame_manifest
+from .manifest import build_frame_manifest, rewrite_manifest_paths_to_uri
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
 from .recovery import InjectionRecoveryConfig, score_injection_recovery
@@ -118,6 +118,16 @@ def main(argv: list[str] | None = None) -> int:
     manifest.add_argument("--limit", type=int)
     manifest.add_argument("--no-read-headers", action="store_true")
     manifest.set_defaults(func=cmd_build_manifest)
+
+    rewrite_manifest = sub.add_parser(
+        "rewrite-manifest-paths",
+        help="Rewrite frame manifest paths from a local prefix to an object-store URI prefix.",
+    )
+    rewrite_manifest.add_argument("--manifest", type=Path, required=True)
+    rewrite_manifest.add_argument("--out", type=Path, required=True)
+    rewrite_manifest.add_argument("--strip-prefix", type=Path, required=True)
+    rewrite_manifest.add_argument("--uri-prefix", required=True)
+    rewrite_manifest.set_defaults(func=cmd_rewrite_manifest_paths)
 
     frame_targets = sub.add_parser("build-frame-targets", help="Query catalogs for targets inside frame footprints.")
     frame_targets.add_argument("--manifest", type=Path, required=True)
@@ -678,6 +688,17 @@ def cmd_build_manifest(args: argparse.Namespace) -> int:
         limit=args.limit,
         campaign_id=args.campaign_id,
         read_headers=not args.no_read_headers,
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_rewrite_manifest_paths(args: argparse.Namespace) -> int:
+    summary = rewrite_manifest_paths_to_uri(
+        manifest_path=args.manifest,
+        output_path=args.out,
+        strip_prefix=args.strip_prefix,
+        uri_prefix=args.uri_prefix,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0

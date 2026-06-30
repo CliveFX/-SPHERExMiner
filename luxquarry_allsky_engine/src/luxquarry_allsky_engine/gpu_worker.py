@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import hashlib
 import json
-import os
-import shutil
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -22,6 +19,7 @@ from .calibration import (
     load_spectral_wcs_maps,
 )
 from .photometry import ApertureConfig
+from .object_store import is_s3_uri, stage_input_file
 from .warp_aperture import (
     WarpFrameCalibrationDevice,
     run_warp_frame_aperture_resident_cupy,
@@ -472,18 +470,20 @@ class PersistentGpuFrameWorker:
         return image, variance, flags, unit_scale
 
     def _read_frame_payload(self, frame: dict[str, Any]) -> FramePayload:
-        source_path = Path(str(frame["path"]))
+        source_uri = str(frame["path"])
         staging_wall = 0.0
         staged_bytes = 0
-        read_path = source_path
+        if is_s3_uri(source_uri) and self.config.local_cache_dir is None:
+            raise ValueError("S3 FITS paths require PersistentWorkerConfig.local_cache_dir")
+        read_path = Path(source_uri)
         if self.config.local_cache_dir is not None:
             t_stage = time.perf_counter()
-            read_path, staged_bytes = self._stage_fits(source_path, self.config.local_cache_dir)
+            read_path, staged_bytes = self._stage_fits(source_uri, self.config.local_cache_dir)
             staging_wall = time.perf_counter() - t_stage
         t_read = time.perf_counter()
         image, variance, flags, unit_scale = self._read_fits_arrays(read_path)
         return FramePayload(
-            source_path=str(source_path),
+            source_path=source_uri,
             read_path=str(read_path),
             image=image,
             variance=variance,
@@ -495,17 +495,8 @@ class PersistentGpuFrameWorker:
         )
 
     @staticmethod
-    def _stage_fits(source_path: Path, cache_dir: Path) -> tuple[Path, int]:
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        size = source_path.stat().st_size
-        digest = hashlib.sha1(str(source_path.resolve()).encode("utf-8")).hexdigest()[:16]
-        dest = cache_dir / f"{digest}_{source_path.name}"
-        if dest.exists() and dest.stat().st_size == size:
-            return dest, 0
-        tmp = cache_dir / f".{source_path.name}.{os.getpid()}.tmp"
-        shutil.copyfile(source_path, tmp)
-        tmp.replace(dest)
-        return dest, int(size)
+    def _stage_fits(source_path: str | Path, cache_dir: Path) -> tuple[Path, int]:
+        return stage_input_file(source_path, cache_dir)
 
     def _flush_shard_batch(
         self,
