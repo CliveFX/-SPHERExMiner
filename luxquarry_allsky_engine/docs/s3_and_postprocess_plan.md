@@ -78,6 +78,20 @@ second. For S3-backed runs, prefetch width should be sized to the intended
 number of concurrent in-flight downloads per worker, bounded by local SSD,
 network, and memory pressure.
 
+Worker frame timings now include:
+
+```text
+payload_prefetched
+payload_wait_wall_sec
+staging_wall_sec
+staged_bytes
+```
+
+Use `payload_wait_wall_sec` as the dashboard tuning metric. `staging_wall_sec`
+is measured inside the prefetch thread and may overlap with other payloads;
+`payload_wait_wall_sec` is the time the main photometry loop actually blocked
+waiting for payload availability.
+
 ## Input Strategy
 
 Do not stream every photometry read directly from S3 into Astropy. That would

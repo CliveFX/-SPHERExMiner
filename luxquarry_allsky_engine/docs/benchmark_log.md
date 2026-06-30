@@ -1972,3 +1972,70 @@ Notes:
 - The reported per-frame `staging_wall_sec` is measured inside each prefetch
   thread. In concurrent mode, those durations overlap and should not be summed
   as wall-clock task time.
+
+## 2026-06-29: Payload Wait Timing Smoke
+
+Change:
+
+- Worker frame timings now include `payload_prefetched` and
+  `payload_wait_wall_sec`.
+- `payload_wait_wall_sec` measures how long the main frame loop blocked waiting
+  for `_read_frame_payload()` to finish.
+- This is the practical prefetch tuning metric. High wait means the GPU/table
+  path is starved on IO; near-zero wait means the payload was ready when needed.
+
+Local cached two-frame smoke:
+
+```text
+run_id: service_queue_smoke_prefetch_metrics_local
+frames_completed: 2
+measurement_rows: 573
+task_wall_sec: 0.410
+
+frame fg_00000000:
+  payload_prefetched: true
+  payload_wait_wall_sec: 0.020
+  staged_bytes: 0
+  staging_wall_sec: 0.005
+  frame_compute_wall_sec: 0.197
+
+frame fg_00000001:
+  payload_prefetched: true
+  payload_wait_wall_sec: 0.000006
+  staged_bytes: 0
+  staging_wall_sec: 0.008
+  frame_compute_wall_sec: 0.030
+```
+
+Cached S3 two-frame smoke:
+
+```text
+run_id: service_queue_smoke_prefetch_metrics_s3_cached
+frames_completed: 2
+measurement_rows: 573
+task_wall_sec: 0.709
+assembly target_count: 310
+
+frame fg_00000000:
+  payload_prefetched: true
+  payload_wait_wall_sec: 0.317
+  staged_bytes: 0
+  staging_wall_sec: 0.304
+  frame_compute_wall_sec: 0.201
+
+frame fg_00000001:
+  payload_prefetched: true
+  payload_wait_wall_sec: 0.000006
+  staged_bytes: 0
+  staging_wall_sec: 0.291
+  frame_compute_wall_sec: 0.074
+```
+
+Notes:
+
+- The first payload in a task usually has nonzero wait because the frame loop
+  cannot do useful photometry until at least one payload exists.
+- Later payload waits should approach zero when prefetch width is sufficient.
+- For S3-backed work, dashboard/status cards should report payload wait
+  separately from staging duration because staging may overlap across prefetch
+  threads.

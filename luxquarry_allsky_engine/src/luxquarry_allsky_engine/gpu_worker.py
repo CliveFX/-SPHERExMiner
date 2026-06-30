@@ -77,6 +77,14 @@ class FrameMeasurement:
         return len(self.metadata)
 
 
+@dataclass(frozen=True)
+class FramePayloadResult:
+    frame: dict[str, Any]
+    payload: FramePayload
+    payload_wait_wall_sec: float
+    prefetched: bool
+
+
 class PersistentGpuFrameWorker:
     def __init__(self, config: PersistentWorkerConfig):
         self.config = config
@@ -176,7 +184,9 @@ class PersistentGpuFrameWorker:
         frames = manifest.to_dict(orient="records")
         try:
             frame_payloads = self._iter_frame_payloads(frames)
-            for frame_ordinal, (frame, payload) in enumerate(frame_payloads):
+            for frame_ordinal, payload_result in enumerate(frame_payloads):
+                frame = payload_result.frame
+                payload = payload_result.payload
                 frame_group_id = str(frame.get("frame_group_id"))
                 frame_targets_all = targets_by_frame.get(frame_group_id)
                 if frame_targets_all is None or frame_targets_all.empty:
@@ -227,6 +237,8 @@ class PersistentGpuFrameWorker:
                         "measurement_count": rows,
                         "ok_count": ok_count,
                         "wall_time_sec": time.perf_counter() - t0,
+                        "payload_wait_wall_sec": payload_result.payload_wait_wall_sec,
+                        "payload_prefetched": payload_result.prefetched,
                         "write_wall_sec": write_wall,
                         "shard_submit_wall_sec": shard_submit_wall,
                         "async_write_queued": async_write_queued,
@@ -244,6 +256,8 @@ class PersistentGpuFrameWorker:
                             "measurement_count": 0,
                             "ok_count": 0,
                             "wall_time_sec": time.perf_counter() - t0,
+                            "payload_wait_wall_sec": payload_result.payload_wait_wall_sec,
+                            "payload_prefetched": payload_result.prefetched,
                             "error": f"{type(exc).__name__}: {exc}",
                         }
                     )
@@ -443,7 +457,13 @@ class PersistentGpuFrameWorker:
     def _iter_frame_payloads(self, frames: list[dict[str, Any]]):
         if self.config.prefetch_frames <= 0:
             for frame in frames:
-                yield frame, self._read_frame_payload(frame)
+                t_payload = time.perf_counter()
+                yield FramePayloadResult(
+                    frame=frame,
+                    payload=self._read_frame_payload(frame),
+                    payload_wait_wall_sec=time.perf_counter() - t_payload,
+                    prefetched=False,
+                )
             return
         max_workers = max(1, int(self.config.prefetch_frames))
         with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="fits-prefetch") as pool:
@@ -457,7 +477,13 @@ class PersistentGpuFrameWorker:
                 if next_submit < len(frames):
                     pending[next_submit] = pool.submit(self._read_frame_payload, frames[next_submit])
                     next_submit += 1
-                yield frame, future.result()
+                t_wait = time.perf_counter()
+                yield FramePayloadResult(
+                    frame=frame,
+                    payload=future.result(),
+                    payload_wait_wall_sec=time.perf_counter() - t_wait,
+                    prefetched=True,
+                )
 
     @staticmethod
     def _read_fits_arrays(path: Path) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, float]:
