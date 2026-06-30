@@ -231,9 +231,22 @@ worker Jobs
   -> collect measurement shard manifest
   -> GPU measurement partition shuffle
   -> reducer fanout Jobs
+  -> collect reducer outputs
   -> scorer fanout / candidate aggregation
   -> viewer-index load
 ```
 
 ClickHouse or another serving database belongs in the final viewer-index load,
 not in the worker or reducer hot path.
+
+After reducer Jobs complete, collect the spectra products:
+
+```bash
+.venv/bin/luxquarry-allsky collect-reducer-plan \
+  --plan runs/<run_id>/reducers/reducer_plan.json \
+  --out runs/<run_id>/reducers/reducer_collect_summary.json
+```
+
+The collector writes `reducer_outputs.parquet`, one row per reducer partition.
+That table is the scalable handoff to scorer fanout and to the eventual
+ClickHouse/viewer loader.

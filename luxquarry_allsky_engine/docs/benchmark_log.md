@@ -2303,3 +2303,68 @@ Generated file:
 ```text
 runs/service_queue_smoke_v3/reducer_plan_smoke/k8s_device_override/service_queue_smoke_v3_reducers.reducer-jobs.yaml
 ```
+
+## 2026-06-29: Local Reducer Lifecycle and Collection
+
+Change:
+
+- Added `luxquarry-allsky run-reducer-plan`.
+- Added `luxquarry-allsky collect-reducer-plan`.
+- Local reducer runs support `--resume` and `--max-parallel`.
+- Reducer collection writes `reducer_outputs.parquet`, which is the handoff for
+  scorer fanout and viewer/ClickHouse indexing.
+
+Lifecycle smoke:
+
+```text
+input partition manifest:
+  runs/service_queue_smoke_v3/measurement_partition_smoke/service_queue_smoke_v3_measurement_partitions.measurement_partition_manifest.parquet
+max_partitions: 2
+devices: cuda:0
+max_parallel: 1
+reducer_count: 2
+total planned measurement rows: 270
+```
+
+Run result:
+
+```text
+status: complete
+launched_reducer_count: 2
+failed_reducer_count: 0
+total_wall_sec: 5.208
+
+part00000 wall_sec: 2.604
+part00001 wall_sec: 2.503
+```
+
+Collection result:
+
+```text
+complete: true
+complete_reducer_count: 2
+failed_reducer_count: 0
+input_measurement_rows: 270
+spectra_measurement_rows: 270
+target_count: 147
+collect_wall_sec: 0.009
+reducer_manifest_path:
+  runs/service_queue_smoke_v3/reducer_lifecycle_smoke/reducer_outputs.parquet
+```
+
+Collected reducer rows:
+
+```text
+part00000: 140 spectra measurements, 78 targets
+part00001: 130 spectra measurements, 69 targets
+```
+
+Resume check:
+
+```text
+run-reducer-plan --resume
+launched_reducer_count: 0
+skipped_reducer_count: 2
+failed_reducer_count: 0
+status: complete
+```

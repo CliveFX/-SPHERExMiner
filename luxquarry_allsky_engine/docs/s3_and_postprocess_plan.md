@@ -294,6 +294,39 @@ files. Use `--write-empty-partitions` only when a downstream launcher wants a
 manifest file for every possible bucket. The JSON summary includes a bounded
 `partition_preview`; the full partition table lives in parquet.
 
+Current local reducer lifecycle:
+
+```bash
+luxquarry-allsky write-reducer-plan \
+  --partition-manifest runs/service_queue_smoke_v3/measurement_partition_smoke/service_queue_smoke_v3_measurement_partitions.measurement_partition_manifest.parquet \
+  --out-dir runs/service_queue_smoke_v3/reducer_lifecycle_smoke \
+  --run-id service_queue_smoke_v3_reducer_lifecycle \
+  --plan-out runs/service_queue_smoke_v3/reducer_lifecycle_smoke/reducer_plan.json \
+  --executable .venv/bin/luxquarry-allsky \
+  --devices cuda:0 \
+  --max-partitions 2
+
+luxquarry-allsky run-reducer-plan \
+  --plan runs/service_queue_smoke_v3/reducer_lifecycle_smoke/reducer_plan.json \
+  --max-parallel 1
+
+luxquarry-allsky collect-reducer-plan \
+  --plan runs/service_queue_smoke_v3/reducer_lifecycle_smoke/reducer_plan.json \
+  --out runs/service_queue_smoke_v3/reducer_lifecycle_smoke/reducer_collect_summary.json
+```
+
+`run-reducer-plan --resume` skips reducers whose `assemble_summary.json`,
+spectra parquet, and target-summary parquet already exist. `collect-reducer-plan`
+writes:
+
+```text
+reducer_collect_summary.json
+reducer_outputs.parquet
+```
+
+`reducer_outputs.parquet` is the handoff table for scorer fanout, viewer-index
+loading, or ClickHouse ingestion.
+
 The current measurement dedupe key is:
 
 ```text

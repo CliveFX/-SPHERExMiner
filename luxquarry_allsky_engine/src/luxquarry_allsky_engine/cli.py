@@ -29,7 +29,15 @@ from .manifest import build_frame_manifest, rewrite_manifest_paths_to_uri
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
 from .recovery import InjectionRecoveryConfig, score_injection_recovery
-from .reducer import ReducerPlanConfig, build_reducer_plan, write_reducer_plan
+from .reducer import (
+    LocalReducerRunConfig,
+    ReducerCollectConfig,
+    ReducerPlanConfig,
+    build_reducer_plan,
+    collect_reducer_plan,
+    run_reducer_plan,
+    write_reducer_plan,
+)
 from .scoring import CandidateScoringConfig, score_spectra_candidates
 from .spectra import (
     MeasurementPartitionConfig,
@@ -644,6 +652,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     reducer_plan.add_argument("--max-partitions", type=int)
     reducer_plan.set_defaults(func=cmd_write_reducer_plan)
+
+    run_reducers = sub.add_parser(
+        "run-reducer-plan",
+        help="Launch local spectra reducers from a reducer fanout plan.",
+    )
+    run_reducers.add_argument("--plan", type=Path, required=True)
+    run_reducers.add_argument("--logs-dir", type=Path)
+    run_reducers.add_argument("--resume", action="store_true")
+    run_reducers.add_argument("--max-parallel", type=int)
+    run_reducers.add_argument("--allow-failed-reducers", action="store_true")
+    run_reducers.set_defaults(func=cmd_run_reducer_plan)
+
+    collect_reducers = sub.add_parser(
+        "collect-reducer-plan",
+        help="Collect reducer assemble-spectra outputs into a manifest and aggregate JSON.",
+    )
+    collect_reducers.add_argument("--plan", type=Path, required=True)
+    collect_reducers.add_argument("--out", type=Path)
+    collect_reducers.add_argument("--allow-incomplete", action="store_true")
+    collect_reducers.set_defaults(func=cmd_collect_reducer_plan)
 
     validate_assembly = sub.add_parser(
         "validate-assembly-order",
@@ -1361,6 +1389,32 @@ def cmd_write_reducer_plan(args: argparse.Namespace) -> int:
             sort_keys=True,
         )
     )
+    return 0
+
+
+def cmd_run_reducer_plan(args: argparse.Namespace) -> int:
+    summary = run_reducer_plan(
+        LocalReducerRunConfig(
+            plan_path=args.plan,
+            logs_dir=args.logs_dir,
+            resume=args.resume,
+            max_parallel=args.max_parallel,
+            allow_failed_reducers=args.allow_failed_reducers,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_collect_reducer_plan(args: argparse.Namespace) -> int:
+    summary = collect_reducer_plan(
+        ReducerCollectConfig(
+            plan_path=args.plan,
+            output_path=args.out,
+            allow_incomplete=args.allow_incomplete,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
 
