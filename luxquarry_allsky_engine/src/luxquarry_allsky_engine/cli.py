@@ -29,9 +29,11 @@ from .projection import project_frame_targets
 from .recovery import InjectionRecoveryConfig, score_injection_recovery
 from .scoring import CandidateScoringConfig, score_spectra_candidates
 from .spectra import (
+    PartitionedSpectraAssemblyConfig,
     SpectraAssemblyConfig,
     SpectraAssemblyValidationConfig,
     SpectraRetryDedupValidationConfig,
+    assemble_spectra_partitions,
     assemble_spectra_from_shards,
     validate_retry_dedup_assembly,
     validate_shard_order_independent_assembly,
@@ -543,6 +545,24 @@ def main(argv: list[str] | None = None) -> int:
         help="Drop retry-duplicate measurement rows by catalog/target/frame/image/detector before sorting.",
     )
     spectra.set_defaults(func=cmd_assemble_spectra)
+
+    partitioned_spectra = sub.add_parser(
+        "assemble-spectra-partitions",
+        help="Build target-hash partitioned spectra products from measurement shards using cuDF.",
+    )
+    partitioned_spectra.add_argument("--shard-manifest", type=Path, required=True)
+    partitioned_spectra.add_argument("--out-dir", type=Path, required=True)
+    partitioned_spectra.add_argument("--run-id", required=True)
+    partitioned_spectra.add_argument("--device", default="cuda:0")
+    partitioned_spectra.add_argument("--partition-count", type=int, default=64)
+    partitioned_spectra.add_argument(
+        "--partition-index",
+        type=int,
+        help="Assemble only one target-hash partition. Omit to assemble all partitions sequentially.",
+    )
+    partitioned_spectra.add_argument("--only-ok", action="store_true")
+    partitioned_spectra.add_argument("--drop-duplicate-measurements", action="store_true")
+    partitioned_spectra.set_defaults(func=cmd_assemble_spectra_partitions)
 
     validate_assembly = sub.add_parser(
         "validate-assembly-order",
@@ -1163,6 +1183,23 @@ def cmd_assemble_spectra(args: argparse.Namespace) -> int:
             output_dir=args.out_dir,
             run_id=args.run_id,
             device=args.device,
+            only_ok=args.only_ok,
+            drop_duplicate_measurements=args.drop_duplicate_measurements,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_assemble_spectra_partitions(args: argparse.Namespace) -> int:
+    summary = assemble_spectra_partitions(
+        PartitionedSpectraAssemblyConfig(
+            shard_manifest_path=args.shard_manifest,
+            output_dir=args.out_dir,
+            run_id=args.run_id,
+            device=args.device,
+            partition_count=args.partition_count,
+            partition_index=args.partition_index,
             only_ok=args.only_ok,
             drop_duplicate_measurements=args.drop_duplicate_measurements,
         )

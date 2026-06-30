@@ -2089,3 +2089,81 @@ Notes:
   parsing every nested worker `run_summary.json`.
 - The frame table is the right source for per-frame plots and distribution
   views.
+
+## 2026-06-29: Target-Partitioned Spectra Assembly Smoke
+
+Change:
+
+- Added `luxquarry-allsky assemble-spectra-partitions`.
+- The command assigns each row to a stable cuDF hash bucket over
+  `(catalog, target_id)` and writes one spectra parquet plus one target-summary
+  parquet per bucket.
+- Passing `--partition-index N` assembles only one reducer bucket, which is the
+  horizontal postprocess shape for large campaigns.
+
+All-partition smoke:
+
+```text
+input manifest: runs/service_queue_smoke_v3/measurement_shard_manifest.parquet
+partition_count: 4
+shard_count: 2
+input_measurement_rows: 573
+spectra_measurement_rows: 573
+target_count: 310
+read_shards_wall_sec: 0.139
+bucket_wall_sec: 0.033
+total_wall_sec: 7.291
+```
+
+Partition row counts:
+
+```text
+partition 0: 140 measurements, 78 targets
+partition 1: 130 measurements, 69 targets
+partition 2: 147 measurements, 79 targets
+partition 3: 156 measurements, 84 targets
+```
+
+Single-partition smoke:
+
+```text
+partition_index: 2
+spectra_measurement_rows: 147
+target_count: 79
+read_shards_wall_sec: 0.138
+bucket_wall_sec: 0.029
+total_wall_sec: 1.242
+```
+
+Correctness check:
+
+```text
+all-partitions part00002 spectra hash:
+  a96b096e958e51422890020548e8c6bb61b51153b21f648c061c09f1e36fd1f6
+single-partition part00002 spectra hash:
+  a96b096e958e51422890020548e8c6bb61b51153b21f648c061c09f1e36fd1f6
+
+all-partitions part00002 target-summary hash:
+  b1d0fdc61f7cb3f61564745f84a36b347b50f3db4260094ee87e5dabfa7c52db
+single-partition part00002 target-summary hash:
+  b1d0fdc61f7cb3f61564745f84a36b347b50f3db4260094ee87e5dabfa7c52db
+```
+
+Empty-partition check:
+
+```text
+partition_count: 1024
+partition_index: 0
+spectra_measurement_rows: 0
+target_count: 0
+status: completed without error
+```
+
+Notes:
+
+- The first all-partition target-summary groupby paid a cuDF warmup cost
+  (`~6.1 sec`), while later partitions were `~0.012 sec`. Reducer jobs should be
+  long-lived or large enough to amortize this.
+- This is not the final all-sky reducer yet. It proves the deterministic
+  target-bucket contract. The next optimization is avoiding repeated full-shard
+  reads by using Dask-cuDF or writing pre-shuffled reducer inputs.

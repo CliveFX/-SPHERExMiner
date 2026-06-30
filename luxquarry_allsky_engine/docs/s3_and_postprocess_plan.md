@@ -172,7 +172,8 @@ Performance target:
 read many parquet shards with cuDF/Dask-cuDF
 normalize schema once
 drop duplicate retry rows by deterministic key
-sort/partition by target_id and wavelength
+hash-partition by catalog + target_id
+sort each partition by target_id and wavelength
 write spectra_measurements.parquet and target_summary.parquet
 score candidates from assembled spectra
 write small JSON summaries for dashboards
@@ -186,8 +187,11 @@ Near-term implementation:
 2. Add duplicate retry-row handling with an explicit deterministic key.
    Implemented as `assemble-spectra --drop-duplicate-measurements` plus
    `luxquarry-allsky validate-assembly-retry-dedup`.
-3. Add Dask-cuDF assembly path for large shard manifests.
-4. Add status cards for assembly/scoring throughput:
+3. Add target-hash partitioned spectra assembly. Implemented as
+   `luxquarry-allsky assemble-spectra-partitions`.
+4. Add Dask-cuDF assembly path or a reducer fanout wrapper for very large shard
+   manifests.
+5. Add status cards for assembly/scoring throughput:
    rows/sec, shards/sec, bytes/sec, GPU read/compute/write wall time.
 
 Current order-validation command:
@@ -218,6 +222,38 @@ luxquarry-allsky validate-assembly-retry-dedup \
 This command duplicates shard-manifest entries to simulate a retry re-emitting
 the same measurements, assembles with `--drop-duplicate-measurements`, and
 compares logical spectra/summary hashes against a non-duplicated baseline.
+
+Current partitioned spectra command:
+
+```bash
+luxquarry-allsky assemble-spectra-partitions \
+  --shard-manifest runs/service_queue_smoke_v3/measurement_shard_manifest.parquet \
+  --out-dir runs/service_queue_smoke_v3/partitioned_spectra_smoke \
+  --run-id service_queue_smoke_v3_partitioned \
+  --device cuda:0 \
+  --partition-count 64 \
+  --drop-duplicate-measurements
+```
+
+To run one reducer partition on a node:
+
+```bash
+luxquarry-allsky assemble-spectra-partitions \
+  --shard-manifest runs/service_queue_smoke_v3/measurement_shard_manifest.parquet \
+  --out-dir runs/service_queue_smoke_v3/partitioned_spectra_part00002 \
+  --run-id service_queue_smoke_v3_partitioned \
+  --device cuda:0 \
+  --partition-count 64 \
+  --partition-index 2 \
+  --drop-duplicate-measurements
+```
+
+The partition key is a cuDF GPU hash over `(catalog, target_id)`. This keeps all
+measurements for a target in the same reducer bucket, so spectra assembly can be
+fanned out horizontally without relying on shard arrival order. The current
+implementation still reads the shard set in each reducer; the next scaling step
+is a Dask-cuDF or pre-shuffled reducer path that avoids repeated full-manifest
+reads for very large campaigns.
 
 The current measurement dedupe key is:
 

@@ -43,6 +43,18 @@ class SpectraRetryDedupValidationConfig:
     duplicate_shard_count: int | None = None
 
 
+@dataclass(frozen=True)
+class PartitionedSpectraAssemblyConfig:
+    shard_manifest_path: Path
+    output_dir: Path
+    run_id: str
+    device: str = "cuda:0"
+    partition_count: int = 64
+    partition_index: int | None = None
+    only_ok: bool = False
+    drop_duplicate_measurements: bool = False
+
+
 DEDUPE_KEY_CANDIDATES = (
     "catalog",
     "target_id",
@@ -126,6 +138,137 @@ def assemble_spectra_from_shards(config: SpectraAssemblyConfig) -> dict[str, Any
         "total_wall_sec": time.perf_counter() - started,
     }
     summary_path = config.output_dir / "assemble_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return summary
+
+
+def assemble_spectra_partitions(config: PartitionedSpectraAssemblyConfig) -> dict[str, Any]:
+    if config.partition_count <= 0:
+        raise ValueError("partition_count must be positive")
+    if config.partition_index is not None and (
+        config.partition_index < 0 or config.partition_index >= config.partition_count
+    ):
+        raise ValueError("partition_index must be in [0, partition_count)")
+
+    started = time.perf_counter()
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    shard_manifest = pd.read_parquet(config.shard_manifest_path)
+    shard_paths = _resolve_shard_paths(config.shard_manifest_path, shard_manifest["path"].tolist())
+    if not shard_paths:
+        raise ValueError(f"No measurement shards found in {config.shard_manifest_path}")
+
+    import cudf
+    import cupy as cp
+
+    cp.cuda.Device(_device_index(config.device)).use()
+    t_read = time.perf_counter()
+    measurements = cudf.read_parquet([str(path) for path in shard_paths])
+    read_wall = time.perf_counter() - t_read
+
+    input_rows = int(len(measurements))
+    if config.only_ok:
+        measurements = measurements[measurements["aperture_status_code"] == 0]
+    filtered_rows = int(len(measurements))
+
+    dedupe_wall = 0.0
+    duplicate_measurement_rows_dropped = 0
+    dedupe_key = _measurement_dedupe_key(measurements)
+    if config.drop_duplicate_measurements:
+        t_dedupe = time.perf_counter()
+        before_dedupe = int(len(measurements))
+        measurements = measurements.drop_duplicates(subset=dedupe_key)
+        duplicate_measurement_rows_dropped = before_dedupe - int(len(measurements))
+        dedupe_wall = time.perf_counter() - t_dedupe
+
+    t_bucket = time.perf_counter()
+    measurements["target_partition"] = (
+        measurements[["catalog", "target_id"]].hash_values() % config.partition_count
+    ).astype("int32")
+    bucket_wall = time.perf_counter() - t_bucket
+
+    partition_indices = (
+        [int(config.partition_index)]
+        if config.partition_index is not None
+        else list(range(config.partition_count))
+    )
+    partition_rows: list[dict[str, Any]] = []
+    for partition_index in partition_indices:
+        t_partition = time.perf_counter()
+        partition = measurements[measurements["target_partition"] == partition_index]
+        partition_input_rows = int(len(partition))
+
+        t_sort = time.perf_counter()
+        sort_cols = ["catalog", "target_id", "cwave_um", "frame_group_id", "image_id"]
+        spectra = partition.sort_values(sort_cols, ignore_index=True)
+        spectra["is_ok_measurement"] = (spectra["aperture_status_code"] == 0).astype("int32")
+        sort_wall = time.perf_counter() - t_sort
+
+        spectra_path = config.output_dir / f"{config.run_id}.part{partition_index:05d}.spectra_measurements.parquet"
+        t_write_spectra = time.perf_counter()
+        spectra.to_parquet(spectra_path, index=False)
+        write_spectra_wall = time.perf_counter() - t_write_spectra
+
+        t_summary = time.perf_counter()
+        target_summary = _build_target_summary(spectra)
+        target_summary_path = config.output_dir / f"{config.run_id}.part{partition_index:05d}.target_summary.parquet"
+        target_summary.to_parquet(target_summary_path, index=False)
+        summary_wall = time.perf_counter() - t_summary
+
+        partition_rows.append(
+            {
+                "partition_index": partition_index,
+                "partition_count": config.partition_count,
+                "spectra_measurements_path": str(spectra_path),
+                "target_summary_path": str(target_summary_path),
+                "spectra_measurement_rows": partition_input_rows,
+                "target_count": int(len(target_summary)),
+                "sort_wall_sec": sort_wall,
+                "write_spectra_wall_sec": write_spectra_wall,
+                "target_summary_wall_sec": summary_wall,
+                "total_partition_wall_sec": time.perf_counter() - t_partition,
+            }
+        )
+
+    partition_manifest_path = config.output_dir / (
+        f"{config.run_id}.partition_manifest.part{config.partition_index:05d}.parquet"
+        if config.partition_index is not None
+        else f"{config.run_id}.partition_manifest.parquet"
+    )
+    pd.DataFrame(partition_rows).to_parquet(partition_manifest_path, index=False)
+
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "run_id": config.run_id,
+        "backend": "cudf_partitioned_spectra_assembly",
+        "device": config.device,
+        "shard_manifest_path": str(config.shard_manifest_path),
+        "output_dir": str(config.output_dir),
+        "partition_count": config.partition_count,
+        "partition_index": config.partition_index,
+        "partition_manifest_path": str(partition_manifest_path),
+        "only_ok": config.only_ok,
+        "drop_duplicate_measurements": config.drop_duplicate_measurements,
+        "measurement_dedupe_key": dedupe_key,
+        "shard_count": len(shard_paths),
+        "input_measurement_rows": input_rows,
+        "filtered_measurement_rows": filtered_rows,
+        "duplicate_measurement_rows_dropped": duplicate_measurement_rows_dropped,
+        "spectra_measurement_rows": sum(int(row["spectra_measurement_rows"]) for row in partition_rows),
+        "target_count": sum(int(row["target_count"]) for row in partition_rows),
+        "partition_rows": len(partition_rows),
+        "read_shards_wall_sec": read_wall,
+        "dedupe_wall_sec": dedupe_wall,
+        "bucket_wall_sec": bucket_wall,
+        "write_spectra_wall_sec": sum(float(row["write_spectra_wall_sec"]) for row in partition_rows),
+        "target_summary_wall_sec": sum(float(row["target_summary_wall_sec"]) for row in partition_rows),
+        "total_wall_sec": time.perf_counter() - started,
+        "partitions": partition_rows,
+    }
+    summary_path = config.output_dir / (
+        f"partitioned_assemble_summary.part{config.partition_index:05d}.json"
+        if config.partition_index is not None
+        else "partitioned_assemble_summary.json"
+    )
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
 
