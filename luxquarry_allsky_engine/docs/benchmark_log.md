@@ -1750,3 +1750,48 @@ Notes:
   target summaries.
 - This gives us a regression gate for the S3/EKS path, where worker completion
   and shard listing order cannot be assumed.
+
+## 2026-06-29: Retry Duplicate Assembly Dedup Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky validate-assembly-retry-dedup \
+  --shard-manifest runs/service_queue_smoke_v3/measurement_shard_manifest.parquet \
+  --out-dir runs/service_queue_smoke_v3/retry_dedup_validation \
+  --run-id service_queue_smoke_v3_retry_dedup \
+  --device cuda:0
+```
+
+Result:
+
+```text
+passed: true
+source_shard_count: 2
+duplicate_shard_count: 2
+duplicated_manifest_shard_count: 4
+
+baseline input_measurement_rows: 573
+baseline duplicate_measurement_rows_dropped: 0
+baseline spectra_measurement_rows: 573
+baseline target_count: 310
+
+duplicated input_measurement_rows: 1,146
+duplicated duplicate_measurement_rows_dropped: 573
+duplicated spectra_measurement_rows: 573
+duplicated target_count: 310
+
+spectra_hash:
+  b18a15d5b41dfd85c0e15940f6aa81e3b33f2776b579f9e16fb1e23c306281fd
+target_summary_hash:
+  1a62c5839294a1569fd8c23e75b82b97210a3b4dfa306957799d5d86d9c909ca
+```
+
+Notes:
+
+- `assemble-spectra --drop-duplicate-measurements` drops retry duplicates using
+  `catalog`, `target_id`, `frame_group_id`, `image_id`, and `detector`.
+- This remains opt-in so historical local assemblies do not silently change.
+- EKS/S3 postprocess should enable this flag because retrying task leases can
+  legitimately re-emit a shard.

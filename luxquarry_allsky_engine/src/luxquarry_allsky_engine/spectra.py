@@ -18,6 +18,7 @@ class SpectraAssemblyConfig:
     run_id: str
     device: str = "cuda:0"
     only_ok: bool = False
+    drop_duplicate_measurements: bool = False
 
 
 @dataclass(frozen=True)
@@ -27,8 +28,28 @@ class SpectraAssemblyValidationConfig:
     run_id: str
     device: str = "cuda:0"
     only_ok: bool = False
+    drop_duplicate_measurements: bool = False
     repetitions: int = 2
     random_seed: int = 1729
+
+
+@dataclass(frozen=True)
+class SpectraRetryDedupValidationConfig:
+    shard_manifest_path: Path
+    output_dir: Path
+    run_id: str
+    device: str = "cuda:0"
+    only_ok: bool = False
+    duplicate_shard_count: int | None = None
+
+
+DEDUPE_KEY_CANDIDATES = (
+    "catalog",
+    "target_id",
+    "frame_group_id",
+    "image_id",
+    "detector",
+)
 
 
 def assemble_spectra_from_shards(config: SpectraAssemblyConfig) -> dict[str, Any]:
@@ -50,6 +71,16 @@ def assemble_spectra_from_shards(config: SpectraAssemblyConfig) -> dict[str, Any
     input_rows = int(len(measurements))
     if config.only_ok:
         measurements = measurements[measurements["aperture_status_code"] == 0]
+    filtered_rows = int(len(measurements))
+    dedupe_wall = 0.0
+    duplicate_measurement_rows_dropped = 0
+    dedupe_key = _measurement_dedupe_key(measurements)
+    if config.drop_duplicate_measurements:
+        t_dedupe = time.perf_counter()
+        before_dedupe = int(len(measurements))
+        measurements = measurements.drop_duplicates(subset=dedupe_key)
+        duplicate_measurement_rows_dropped = before_dedupe - int(len(measurements))
+        dedupe_wall = time.perf_counter() - t_dedupe
     output_rows = int(len(measurements))
 
     t_sort = time.perf_counter()
@@ -79,11 +110,16 @@ def assemble_spectra_from_shards(config: SpectraAssemblyConfig) -> dict[str, Any
         "spectra_measurements_path": str(spectra_path),
         "target_summary_path": str(target_summary_path),
         "only_ok": config.only_ok,
+        "drop_duplicate_measurements": config.drop_duplicate_measurements,
+        "measurement_dedupe_key": dedupe_key,
         "shard_count": len(shard_paths),
         "input_measurement_rows": input_rows,
+        "filtered_measurement_rows": filtered_rows,
+        "duplicate_measurement_rows_dropped": duplicate_measurement_rows_dropped,
         "spectra_measurement_rows": output_rows,
         "target_count": int(len(target_summary)),
         "read_shards_wall_sec": read_wall,
+        "dedupe_wall_sec": dedupe_wall,
         "sort_wall_sec": sort_wall,
         "write_spectra_wall_sec": write_spectra_wall,
         "target_summary_wall_sec": summary_wall,
@@ -119,6 +155,7 @@ def validate_shard_order_independent_assembly(config: SpectraAssemblyValidationC
                 run_id=f"{config.run_id}.{label}",
                 device=config.device,
                 only_ok=config.only_ok,
+                drop_duplicate_measurements=config.drop_duplicate_measurements,
             )
         )
         spectra_hash = _parquet_logical_hash(Path(assembly["spectra_measurements_path"]))
@@ -157,6 +194,7 @@ def validate_shard_order_independent_assembly(config: SpectraAssemblyValidationC
         "shard_manifest_path": str(config.shard_manifest_path),
         "output_dir": str(config.output_dir),
         "only_ok": config.only_ok,
+        "drop_duplicate_measurements": config.drop_duplicate_measurements,
         "repetitions": config.repetitions,
         "random_seed": config.random_seed,
         "passed": len(mismatches) == 0,
@@ -171,6 +209,87 @@ def validate_shard_order_independent_assembly(config: SpectraAssemblyValidationC
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     if mismatches:
         raise ValueError(f"Assembly order validation failed for {len(mismatches)} shuffled manifests")
+    return summary
+
+
+def validate_retry_dedup_assembly(config: SpectraRetryDedupValidationConfig) -> dict[str, Any]:
+    started = time.perf_counter()
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    manifest = pd.read_parquet(config.shard_manifest_path)
+    if len(manifest) == 0:
+        raise ValueError(f"No shard rows found in {config.shard_manifest_path}")
+    duplicate_count = config.duplicate_shard_count if config.duplicate_shard_count is not None else len(manifest)
+    if duplicate_count <= 0:
+        raise ValueError("duplicate_shard_count must be positive")
+    duplicate_count = min(int(duplicate_count), int(len(manifest)))
+
+    baseline_dir = config.output_dir / "baseline"
+    duplicate_dir = config.output_dir / "duplicated_retry"
+    baseline_dir.mkdir(parents=True, exist_ok=True)
+    duplicate_dir.mkdir(parents=True, exist_ok=True)
+
+    baseline_manifest_path = baseline_dir / "measurement_shard_manifest.parquet"
+    manifest.to_parquet(baseline_manifest_path, index=False)
+    baseline = assemble_spectra_from_shards(
+        SpectraAssemblyConfig(
+            shard_manifest_path=baseline_manifest_path,
+            output_dir=baseline_dir,
+            run_id=f"{config.run_id}.baseline",
+            device=config.device,
+            only_ok=config.only_ok,
+            drop_duplicate_measurements=True,
+        )
+    )
+
+    duplicated_manifest = pd.concat([manifest, manifest.head(duplicate_count)], ignore_index=True)
+    duplicated_manifest_path = duplicate_dir / "measurement_shard_manifest.parquet"
+    duplicated_manifest.to_parquet(duplicated_manifest_path, index=False)
+    duplicated = assemble_spectra_from_shards(
+        SpectraAssemblyConfig(
+            shard_manifest_path=duplicated_manifest_path,
+            output_dir=duplicate_dir,
+            run_id=f"{config.run_id}.duplicated_retry",
+            device=config.device,
+            only_ok=config.only_ok,
+            drop_duplicate_measurements=True,
+        )
+    )
+
+    baseline_spectra_hash = _parquet_logical_hash(Path(baseline["spectra_measurements_path"]))
+    duplicated_spectra_hash = _parquet_logical_hash(Path(duplicated["spectra_measurements_path"]))
+    baseline_target_hash = _parquet_logical_hash(Path(baseline["target_summary_path"]))
+    duplicated_target_hash = _parquet_logical_hash(Path(duplicated["target_summary_path"]))
+    passed = (
+        baseline_spectra_hash == duplicated_spectra_hash
+        and baseline_target_hash == duplicated_target_hash
+        and int(baseline["spectra_measurement_rows"]) == int(duplicated["spectra_measurement_rows"])
+        and int(baseline["target_count"]) == int(duplicated["target_count"])
+        and int(duplicated["duplicate_measurement_rows_dropped"]) > 0
+    )
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "run_id": config.run_id,
+        "backend": "cudf_spectra_retry_dedup_validation",
+        "device": config.device,
+        "shard_manifest_path": str(config.shard_manifest_path),
+        "output_dir": str(config.output_dir),
+        "only_ok": config.only_ok,
+        "passed": passed,
+        "source_shard_count": int(len(manifest)),
+        "duplicate_shard_count": duplicate_count,
+        "duplicated_manifest_shard_count": int(len(duplicated_manifest)),
+        "baseline_spectra_hash": baseline_spectra_hash,
+        "duplicated_spectra_hash": duplicated_spectra_hash,
+        "baseline_target_summary_hash": baseline_target_hash,
+        "duplicated_target_summary_hash": duplicated_target_hash,
+        "baseline": baseline,
+        "duplicated_retry": duplicated,
+        "total_wall_sec": time.perf_counter() - started,
+    }
+    summary_path = config.output_dir / "retry_dedup_validation_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if not passed:
+        raise ValueError("Retry duplicate assembly validation failed")
     return summary
 
 
@@ -228,6 +347,15 @@ def _resolve_shard_paths(manifest_path: Path, raw_paths: list[str]) -> list[Path
             raise FileNotFoundError(f"Missing measurement shard from manifest: {raw}")
         paths.append(resolved)
     return paths
+
+
+def _measurement_dedupe_key(measurements: Any) -> list[str]:
+    available = set(measurements.columns)
+    keys = [column for column in DEDUPE_KEY_CANDIDATES if column in available]
+    missing = [column for column in DEDUPE_KEY_CANDIDATES if column not in available]
+    if missing:
+        raise ValueError(f"Measurement table missing dedupe key columns: {missing}")
+    return keys
 
 
 def _parquet_logical_hash(path: Path) -> str:

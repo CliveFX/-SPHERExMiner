@@ -106,6 +106,8 @@ Near-term implementation:
    verifies identical spectra output. Implemented as
    `luxquarry-allsky validate-assembly-order`.
 2. Add duplicate retry-row handling with an explicit deterministic key.
+   Implemented as `assemble-spectra --drop-duplicate-measurements` plus
+   `luxquarry-allsky validate-assembly-retry-dedup`.
 3. Add Dask-cuDF assembly path for large shard manifests.
 4. Add status cards for assembly/scoring throughput:
    rows/sec, shards/sec, bytes/sec, GPU read/compute/write wall time.
@@ -124,6 +126,30 @@ luxquarry-allsky validate-assembly-order \
 The command assembles the original shard manifest and N shuffled manifests, then
 hashes the logical parquet output for spectra measurements and target summaries.
 It fails if row counts or hashes differ.
+
+Current retry-dedup validation command:
+
+```bash
+luxquarry-allsky validate-assembly-retry-dedup \
+  --shard-manifest runs/service_queue_smoke_v3/measurement_shard_manifest.parquet \
+  --out-dir runs/service_queue_smoke_v3/retry_dedup_validation \
+  --run-id service_queue_smoke_v3_retry_dedup \
+  --device cuda:0
+```
+
+This command duplicates shard-manifest entries to simulate a retry re-emitting
+the same measurements, assembles with `--drop-duplicate-measurements`, and
+compares logical spectra/summary hashes against a non-duplicated baseline.
+
+The current measurement dedupe key is:
+
+```text
+catalog
+target_id
+frame_group_id
+image_id
+detector
+```
 
 ## EKS Mapping
 
