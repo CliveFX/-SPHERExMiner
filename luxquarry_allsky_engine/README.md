@@ -184,6 +184,20 @@ Implemented stages:
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --score-baseline
 
+# Isolate worker launch/payload throughput without spectra assembly/finalize.
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_worker_only_smoke \
+  --run-id dispatch_worker_only_smoke \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 2 \
+  --shard-batch-frames 1,2 \
+  --prefetch-frames 0 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --worker-only
+
 # Resume the same local run. Complete workers are skipped; missing or failed
 # workers are relaunched before finalization.
 .venv/bin/luxquarry-allsky run-local-dispatch \

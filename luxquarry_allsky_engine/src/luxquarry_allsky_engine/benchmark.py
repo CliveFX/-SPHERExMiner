@@ -10,7 +10,13 @@ from typing import Any
 
 import pandas as pd
 
-from .local_runner import LocalDispatchRunConfig, run_local_dispatch
+from .dispatch import DispatchPlanConfig, build_dispatch_plan, collect_dispatch_run, write_dispatch_plan
+from .local_runner import (
+    LocalDispatchRunConfig,
+    LocalPlanWorkerRunConfig,
+    run_dispatch_plan_workers,
+    run_local_dispatch,
+)
 
 
 @dataclass(frozen=True)
@@ -38,6 +44,7 @@ class DispatchBenchmarkSweepConfig:
     candidate_max_rows: int | None = None
     status_snapshot_interval_sec: float = 0.0
     continue_on_error: bool = False
+    worker_only: bool = False
 
 
 def run_dispatch_benchmark_sweep(config: DispatchBenchmarkSweepConfig) -> dict[str, Any]:
@@ -51,31 +58,7 @@ def run_dispatch_benchmark_sweep(config: DispatchBenchmarkSweepConfig) -> dict[s
         trial_dir = config.output_dir / "trials" / trial_run_id
         trial_started = time.perf_counter()
         try:
-            summary = run_local_dispatch(
-                LocalDispatchRunConfig(
-                    manifest_path=config.manifest_path,
-                    projected_targets_path=config.projected_targets_path,
-                    output_dir=trial_dir,
-                    run_id=trial_run_id,
-                    devices=config.devices,
-                    workers_per_device=int(settings["workers_per_device"]),
-                    cache_root=config.cache_root,
-                    limit_frames=int(settings["limit_frames"]),
-                    executable=config.executable,
-                    shard_batch_frames=int(settings["shard_batch_frames"]),
-                    prefetch_frames=int(settings["prefetch_frames"]),
-                    local_cache_dir=config.local_cache_dir,
-                    async_shard_writes=config.async_shard_writes,
-                    batch_table_assembly=config.batch_table_assembly,
-                    materialize_worker_inputs=config.materialize_worker_inputs,
-                    finalize_device=config.finalize_device,
-                    score_baseline=config.score_baseline,
-                    candidate_min_abs_zscore=config.candidate_min_abs_zscore,
-                    candidate_min_measurements=config.candidate_min_measurements,
-                    candidate_max_rows=config.candidate_max_rows,
-                    status_snapshot_interval_sec=config.status_snapshot_interval_sec,
-                )
-            )
+            summary = _run_trial(config, settings, trial_dir, trial_run_id)
             row = _trial_row(
                 config=config,
                 settings=settings,
@@ -106,6 +89,115 @@ def run_dispatch_benchmark_sweep(config: DispatchBenchmarkSweepConfig) -> dict[s
         profile_rows.extend(_profile_rows_for_trial(row, summary))
 
     return _write_outputs(config, rows, profile_rows, started)
+
+
+def _run_trial(
+    config: DispatchBenchmarkSweepConfig,
+    settings: dict[str, int],
+    trial_dir: Path,
+    trial_run_id: str,
+) -> dict[str, Any]:
+    if config.worker_only:
+        return _run_worker_only_trial(config, settings, trial_dir, trial_run_id)
+    return run_local_dispatch(
+        LocalDispatchRunConfig(
+            manifest_path=config.manifest_path,
+            projected_targets_path=config.projected_targets_path,
+            output_dir=trial_dir,
+            run_id=trial_run_id,
+            devices=config.devices,
+            workers_per_device=int(settings["workers_per_device"]),
+            cache_root=config.cache_root,
+            limit_frames=int(settings["limit_frames"]),
+            executable=config.executable,
+            shard_batch_frames=int(settings["shard_batch_frames"]),
+            prefetch_frames=int(settings["prefetch_frames"]),
+            local_cache_dir=config.local_cache_dir,
+            async_shard_writes=config.async_shard_writes,
+            batch_table_assembly=config.batch_table_assembly,
+            materialize_worker_inputs=config.materialize_worker_inputs,
+            finalize_device=config.finalize_device,
+            score_baseline=config.score_baseline,
+            candidate_min_abs_zscore=config.candidate_min_abs_zscore,
+            candidate_min_measurements=config.candidate_min_measurements,
+            candidate_max_rows=config.candidate_max_rows,
+            status_snapshot_interval_sec=config.status_snapshot_interval_sec,
+        )
+    )
+
+
+def _run_worker_only_trial(
+    config: DispatchBenchmarkSweepConfig,
+    settings: dict[str, int],
+    trial_dir: Path,
+    trial_run_id: str,
+) -> dict[str, Any]:
+    started = time.perf_counter()
+    trial_dir.mkdir(parents=True, exist_ok=True)
+    plan_path = trial_dir / "dispatch_plan.json"
+    t_plan = time.perf_counter()
+    plan = build_dispatch_plan(
+        DispatchPlanConfig(
+            manifest_path=config.manifest_path,
+            projected_targets_path=config.projected_targets_path,
+            output_dir=trial_dir,
+            run_id=trial_run_id,
+            devices=config.devices,
+            workers_per_device=int(settings["workers_per_device"]),
+            cache_root=config.cache_root,
+            limit_frames=int(settings["limit_frames"]),
+            executable=config.executable,
+            shard_batch_frames=int(settings["shard_batch_frames"]),
+            prefetch_frames=int(settings["prefetch_frames"]),
+            status_interval_frames=1,
+            local_cache_dir=config.local_cache_dir,
+            async_shard_writes=config.async_shard_writes,
+            batch_table_assembly=config.batch_table_assembly,
+            materialize_worker_inputs=config.materialize_worker_inputs,
+        )
+    )
+    write_dispatch_plan(plan, plan_path)
+    plan_wall = time.perf_counter() - t_plan
+    worker = run_dispatch_plan_workers(
+        LocalPlanWorkerRunConfig(
+            plan_path=plan_path,
+            logs_dir=trial_dir / "worker_logs",
+            status_snapshot_interval_sec=config.status_snapshot_interval_sec,
+        )
+    )
+    aggregate = collect_dispatch_run(plan_path)
+    elapsed = time.perf_counter() - started
+    measurement_rows = int(aggregate.get("measurement_rows") or 0)
+    return {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "backend": "luxquarry_worker_only_benchmark_trial",
+        "status": worker.get("status"),
+        "run_id": trial_run_id,
+        "plan_path": str(plan_path),
+        "output_dir": str(trial_dir),
+        "devices": list(config.devices),
+        "resume": False,
+        "status_snapshot_interval_sec": config.status_snapshot_interval_sec,
+        "worker_count": int(plan.get("worker_count") or 0),
+        "launched_worker_count": int(worker.get("launched_worker_count") or 0),
+        "skipped_worker_count": int(worker.get("skipped_worker_count") or 0),
+        "materialize_worker_inputs": bool(plan.get("materialize_worker_inputs")),
+        "plan_wall_sec": plan_wall,
+        "worker_wall_sec": float(worker.get("worker_wall_sec") or 0.0),
+        "finalize_wall_sec": 0.0,
+        "total_wall_sec": elapsed,
+        "measurement_rows": measurement_rows,
+        "measurements_per_sec": _rate(measurement_rows, elapsed),
+        "failed_worker_count": int(worker.get("failed_worker_count") or 0),
+        "worker_results": list(worker.get("worker_results") or []),
+        "finalize": {
+            "aggregate": aggregate,
+            "measurement_rows": measurement_rows,
+            "target_count": 0,
+            "spectra": {},
+            "baseline_scoring": {},
+        },
+    }
 
 
 def _settings(config: DispatchBenchmarkSweepConfig):
@@ -311,6 +403,7 @@ def _write_outputs(
         "manifest_path": str(config.manifest_path),
         "projected_targets_path": str(config.projected_targets_path),
         "devices": list(config.devices),
+        "worker_only": config.worker_only,
         "trial_count": len(rows),
         "complete_trial_count": int((results["status"] == "complete").sum()) if not results.empty else 0,
         "failed_trial_count": int((results["status"] == "failed").sum()) if not results.empty else 0,

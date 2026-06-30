@@ -1348,3 +1348,68 @@ Notes:
 - The next real benchmark should sweep at least 10, 50, and 100 frames on all
   local GPUs. That is the first point where setup overhead should stop hiding
   GPU and storage throughput.
+
+## 2026-06-29: Worker-Only Dispatch Sweep Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_worker_only_smoke \
+  --run-id dispatch_worker_only_smoke \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 2 \
+  --shard-batch-frames 1,2 \
+  --prefetch-frames 0 \
+  --repetitions 1 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --status-snapshot-interval-sec 0 \
+  --worker-only
+```
+
+Trial summary:
+
+```text
+trial s1:
+  measurement_rows: 573
+  total_wall_sec: 3.298
+  worker_wall_sec: 3.269
+  worker_payload_wall_sec: 0.401
+  worker_launch_overhead_sec: 2.869
+  collect_wall_sec: 0.002
+  measurements_per_sec_total: 173.7
+  measurements_per_sec_worker_payload: 1,429.7
+
+trial s2:
+  measurement_rows: 573
+  total_wall_sec: 3.267
+  worker_wall_sec: 3.252
+  worker_payload_wall_sec: 0.438
+  worker_launch_overhead_sec: 2.815
+  collect_wall_sec: 0.002
+  measurements_per_sec_total: 175.4
+  measurements_per_sec_worker_payload: 1,309.5
+```
+
+Profile rows:
+
+```text
+s1 worker_phase: 99.12%
+s2 worker_phase: 99.55%
+```
+
+Notes:
+
+- Worker-only mode confirms spectra assembly/scoring are not the dominant
+  cost for tiny jobs. The parent process still sees roughly 3 seconds because
+  launching a fresh worker process dominates.
+- The actual persistent-worker payload is roughly 0.40-0.42 sec for this
+  two-frame workload.
+- This supports two next steps:
+  1. benchmark much larger frame batches, where launch cost is amortized;
+  2. design the next version as a long-lived worker service or queue consumer,
+     not one subprocess per small dispatch.

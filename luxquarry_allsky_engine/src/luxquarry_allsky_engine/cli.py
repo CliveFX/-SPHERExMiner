@@ -22,7 +22,7 @@ from .kubernetes import (
     write_kubernetes_jobs,
     write_kubernetes_postprocess_job,
 )
-from .local_runner import LocalDispatchRunConfig, run_local_dispatch
+from .local_runner import LocalDispatchRunConfig, LocalPlanWorkerRunConfig, run_dispatch_plan_workers, run_local_dispatch
 from .manifest import build_frame_manifest
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
@@ -93,6 +93,7 @@ def main(argv: list[str] | None = None) -> int:
     dispatch_sweep.add_argument("--candidate-max-rows", type=int)
     dispatch_sweep.add_argument("--status-snapshot-interval-sec", type=float, default=0.0)
     dispatch_sweep.add_argument("--continue-on-error", action="store_true")
+    dispatch_sweep.add_argument("--worker-only", action="store_true")
     dispatch_sweep.set_defaults(func=cmd_run_dispatch_benchmark_sweep)
 
     manifest = sub.add_parser("build-manifest", help="Scan FITS frames and write a frame manifest parquet.")
@@ -286,6 +287,17 @@ def main(argv: list[str] | None = None) -> int:
     collect_dispatch.add_argument("--plan", type=Path, required=True)
     collect_dispatch.add_argument("--out", type=Path)
     collect_dispatch.set_defaults(func=cmd_collect_dispatch_run)
+
+    run_plan_workers = sub.add_parser(
+        "run-dispatch-plan-workers",
+        help="Launch workers from an existing dispatch plan without finalizing spectra.",
+    )
+    run_plan_workers.add_argument("--plan", type=Path, required=True)
+    run_plan_workers.add_argument("--logs-dir", type=Path)
+    run_plan_workers.add_argument("--resume", action="store_true")
+    run_plan_workers.add_argument("--status-snapshot-interval-sec", type=float, default=1.0)
+    run_plan_workers.add_argument("--allow-failed-workers", action="store_true")
+    run_plan_workers.set_defaults(func=cmd_run_dispatch_plan_workers)
 
     dispatch_status = sub.add_parser(
         "dispatch-status",
@@ -557,6 +569,7 @@ def cmd_run_dispatch_benchmark_sweep(args: argparse.Namespace) -> int:
             candidate_max_rows=args.candidate_max_rows,
             status_snapshot_interval_sec=args.status_snapshot_interval_sec,
             continue_on_error=args.continue_on_error,
+            worker_only=args.worker_only,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
@@ -775,6 +788,20 @@ def cmd_run_local_dispatch(args: argparse.Namespace) -> int:
 
 def cmd_collect_dispatch_run(args: argparse.Namespace) -> int:
     summary = collect_dispatch_run(plan_path=args.plan, output_path=args.out)
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_run_dispatch_plan_workers(args: argparse.Namespace) -> int:
+    summary = run_dispatch_plan_workers(
+        LocalPlanWorkerRunConfig(
+            plan_path=args.plan,
+            logs_dir=args.logs_dir,
+            resume=args.resume,
+            status_snapshot_interval_sec=args.status_snapshot_interval_sec,
+            allow_failed_workers=args.allow_failed_workers,
+        )
+    )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 

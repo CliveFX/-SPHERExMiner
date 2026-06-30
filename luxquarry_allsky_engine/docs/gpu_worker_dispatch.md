@@ -179,6 +179,19 @@ This writes `dispatch_status.json` next to the dispatch plan unless `--out` is
 provided. It reads only small JSON files and writes via
 `dispatch_status.json.tmp -> dispatch_status.json`.
 
+To rerun only the workers from an existing dispatch plan, without spectra
+assembly, candidate scoring, or campaign finalization:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-plan-workers \
+  --plan runs/local_dispatch_smoke2/dispatch_plan.json \
+  --status-snapshot-interval-sec 0
+```
+
+This writes `worker_only_summary.json` next to the plan. It is intended for
+isolating worker launch overhead and persistent-worker payload throughput.
+
 Snapshot fields include:
 
 ```text

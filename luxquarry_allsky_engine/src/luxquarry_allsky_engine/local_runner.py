@@ -54,6 +54,15 @@ class LocalDispatchRunConfig:
     status_snapshot_interval_sec: float = 1.0
 
 
+@dataclass(frozen=True)
+class LocalPlanWorkerRunConfig:
+    plan_path: Path
+    logs_dir: Path | None = None
+    resume: bool = False
+    status_snapshot_interval_sec: float = 1.0
+    allow_failed_workers: bool = False
+
+
 def run_local_dispatch(config: LocalDispatchRunConfig) -> dict[str, Any]:
     started = time.perf_counter()
     config.output_dir.mkdir(parents=True, exist_ok=True)
@@ -149,6 +158,40 @@ def run_local_dispatch(config: LocalDispatchRunConfig) -> dict[str, Any]:
     )
     summary["finalize_wall_sec"] = finalize_wall
     _write_summary(config.output_dir / "local_dispatch_summary.json", summary)
+    return summary
+
+
+def run_dispatch_plan_workers(config: LocalPlanWorkerRunConfig) -> dict[str, Any]:
+    started = time.perf_counter()
+    plan = json.loads(config.plan_path.read_text(encoding="utf-8"))
+    run_output_dir = _run_output_dir(config.plan_path, plan)
+    logs_dir = config.logs_dir or run_output_dir / "worker_logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+
+    t_workers = time.perf_counter()
+    worker_results = _run_workers(
+        plan,
+        logs_dir,
+        plan_path=config.plan_path,
+        resume=config.resume,
+        status_snapshot_interval_sec=config.status_snapshot_interval_sec,
+    )
+    worker_wall = time.perf_counter() - t_workers
+    failed_workers = [row for row in worker_results if row["returncode"] != 0]
+    status = "complete" if not failed_workers else "worker_failed"
+    summary = _worker_only_summary(
+        config=config,
+        plan=plan,
+        logs_dir=logs_dir,
+        worker_wall=worker_wall,
+        worker_results=worker_results,
+        started=started,
+        status=status,
+    )
+    summary_path = run_output_dir / "worker_only_summary.json"
+    _write_summary(summary_path, summary)
+    if failed_workers and not config.allow_failed_workers:
+        raise RuntimeError(f"{len(failed_workers)} local worker(s) failed; see {logs_dir}")
     return summary
 
 
@@ -293,3 +336,45 @@ def _summary(
 
 def _write_summary(path: Path, summary: dict[str, Any]) -> None:
     path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _run_output_dir(plan_path: Path, plan: dict[str, Any]) -> Path:
+    configured = Path(str(plan.get("output_dir") or plan_path.parent))
+    if configured.is_absolute() or configured.exists():
+        return configured
+    if plan_path.parent.name == configured.name:
+        return plan_path.parent
+    return configured
+
+
+def _worker_only_summary(
+    *,
+    config: LocalPlanWorkerRunConfig,
+    plan: dict[str, Any],
+    logs_dir: Path,
+    worker_wall: float,
+    worker_results: list[dict[str, Any]],
+    started: float,
+    status: str,
+) -> dict[str, Any]:
+    elapsed = time.perf_counter() - started
+    return {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "backend": "luxquarry_worker_only_runner",
+        "status": status,
+        "run_id": str(plan.get("run_id") or config.plan_path.parent.name),
+        "plan_path": str(config.plan_path),
+        "output_dir": str(_run_output_dir(config.plan_path, plan)),
+        "logs_dir": str(logs_dir),
+        "devices": list(plan.get("devices") or []),
+        "resume": config.resume,
+        "status_snapshot_interval_sec": config.status_snapshot_interval_sec,
+        "worker_count": int(plan.get("worker_count") or len(worker_results)),
+        "launched_worker_count": sum(1 for row in worker_results if not row.get("skipped")),
+        "skipped_worker_count": sum(1 for row in worker_results if row.get("skipped")),
+        "materialize_worker_inputs": bool(plan.get("materialize_worker_inputs")),
+        "worker_wall_sec": worker_wall,
+        "total_wall_sec": elapsed,
+        "failed_worker_count": sum(1 for row in worker_results if row["returncode"] != 0),
+        "worker_results": worker_results,
+    }

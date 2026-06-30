@@ -69,6 +69,10 @@ cd luxquarry_allsky_engine
   --score-baseline
 ```
 
+Add `--worker-only` to skip spectra assembly, scoring, and campaign
+finalization. Worker-only sweeps are the correct tool for isolating worker
+process launch overhead from persistent GPU worker payload throughput.
+
 It writes:
 
 ```text
