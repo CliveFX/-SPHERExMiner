@@ -92,6 +92,29 @@ is measured inside the prefetch thread and may overlap with other payloads;
 `payload_wait_wall_sec` is the time the main photometry loop actually blocked
 waiting for payload availability.
 
+`collect-task-queue-run` now lifts those frame timings into:
+
+```text
+aggregate_summary.json:
+  payload_wait_wall_sec
+  payload_wait_mean_wall_sec
+  staging_wall_sec
+  staged_bytes
+  fits_read_wall_sec
+  kernel_wall_sec
+  frame_compute_wall_sec
+  frame_table_path
+
+task_queue_tasks.parquet:
+  per-task sums for the same metrics
+
+task_queue_frames.parquet:
+  one row per completed frame
+```
+
+Dashboards should read the aggregate JSON for cards and
+`task_queue_frames.parquet` for per-frame plots.
+
 ## Input Strategy
 
 Do not stream every photometry read directly from S3 into Astropy. That would

@@ -2039,3 +2039,53 @@ Notes:
 - For S3-backed work, dashboard/status cards should report payload wait
   separately from staging duration because staging may overlap across prefetch
   threads.
+
+## 2026-06-29: Task Queue Collection Timing Aggregates
+
+Change:
+
+- `collect-task-queue-run` now writes frame-level timing rows to
+  `task_queue_frames.parquet`.
+- `aggregate_summary.json` and `task_queue_tasks.parquet` include aggregate
+  payload wait, staging, FITS read, kernel, and frame-compute timing fields.
+
+Recollected cached S3 metric run:
+
+```text
+run_id: service_queue_smoke_prefetch_metrics_s3_cached
+completed_frames: 2
+measurement_rows: 573
+frame_timing_rows: 2
+payload_wait_wall_sec: 0.317
+payload_wait_mean_wall_sec: 0.158
+staging_wall_sec: 0.596
+staged_bytes: 0
+fits_read_wall_sec: 0.028
+kernel_wall_sec: 0.061
+frame_compute_wall_sec: 0.276
+frame_table_path: runs/service_queue_smoke_prefetch_metrics_s3_cached/task_queue_frames.parquet
+```
+
+Recollected local metric run:
+
+```text
+run_id: service_queue_smoke_prefetch_metrics_local
+completed_frames: 2
+measurement_rows: 573
+frame_timing_rows: 2
+payload_wait_wall_sec: 0.020
+payload_wait_mean_wall_sec: 0.010
+staging_wall_sec: 0.013
+staged_bytes: 0
+fits_read_wall_sec: 0.030
+kernel_wall_sec: 0.061
+frame_compute_wall_sec: 0.227
+frame_table_path: runs/service_queue_smoke_prefetch_metrics_local/task_queue_frames.parquet
+```
+
+Notes:
+
+- These fields let the simple status/dashboard layer show IO starvation without
+  parsing every nested worker `run_summary.json`.
+- The frame table is the right source for per-frame plots and distribution
+  views.

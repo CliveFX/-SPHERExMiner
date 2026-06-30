@@ -255,10 +255,12 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
     failed_paths = sorted((config.queue_dir / "failed").glob("*.json"))
     shard_rows: list[dict[str, Any]] = []
     task_rows: list[dict[str, Any]] = []
+    frame_rows: list[dict[str, Any]] = []
 
     for complete_path in complete_paths:
         task = json.loads(complete_path.read_text(encoding="utf-8"))
         worker_summary = task.get("worker_summary") or {}
+        task_frame_rows = _frame_timing_rows(task=task, worker_summary=worker_summary)
         task_rows.append(
             {
                 "task_id": task.get("task_id"),
@@ -272,9 +274,16 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                 "task_input_read_wall_sec": float(task.get("task_input_read_wall_sec") or 0.0),
                 "task_input_select_wall_sec": float(task.get("task_input_select_wall_sec") or 0.0),
                 "task_wall_sec": float(task.get("task_wall_sec") or 0.0),
+                "payload_wait_wall_sec": sum(float(row["payload_wait_wall_sec"]) for row in task_frame_rows),
+                "staging_wall_sec": sum(float(row["staging_wall_sec"]) for row in task_frame_rows),
+                "staged_bytes": sum(int(row["staged_bytes"]) for row in task_frame_rows),
+                "fits_read_wall_sec": sum(float(row["fits_read_wall_sec"]) for row in task_frame_rows),
+                "kernel_wall_sec": sum(float(row["kernel_wall_sec"]) for row in task_frame_rows),
+                "frame_compute_wall_sec": sum(float(row["frame_compute_wall_sec"]) for row in task_frame_rows),
                 "summary_path": task.get("summary_path"),
             }
         )
+        frame_rows.extend(task_frame_rows)
         for shard in worker_summary.get("shards") or []:
             shard_path = Path(str(shard.get("path")))
             shard_rows.append(
@@ -309,6 +318,12 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                 "task_input_read_wall_sec": 0.0,
                 "task_input_select_wall_sec": 0.0,
                 "task_wall_sec": float(task.get("task_wall_sec") or 0.0),
+                "payload_wait_wall_sec": 0.0,
+                "staging_wall_sec": 0.0,
+                "staged_bytes": 0,
+                "fits_read_wall_sec": 0.0,
+                "kernel_wall_sec": 0.0,
+                "frame_compute_wall_sec": 0.0,
                 "summary_path": None,
                 "error": task.get("error"),
             }
@@ -322,9 +337,18 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
     pd.DataFrame(shard_rows).to_parquet(shard_manifest_path, index=False)
     task_table_path = config.output_path.with_name("task_queue_tasks.parquet")
     pd.DataFrame(task_rows).to_parquet(task_table_path, index=False)
+    frame_table_path = config.output_path.with_name("task_queue_frames.parquet")
+    pd.DataFrame(frame_rows).to_parquet(frame_table_path, index=False)
 
     complete_tasks = sum(1 for row in task_rows if row["status"] == "complete")
     failed_tasks = sum(1 for row in task_rows if row["status"] == "failed")
+    payload_wait_total = sum(float(row["payload_wait_wall_sec"]) for row in frame_rows)
+    staging_wall_total = sum(float(row["staging_wall_sec"]) for row in frame_rows)
+    staged_bytes_total = sum(int(row["staged_bytes"]) for row in frame_rows)
+    fits_read_wall_total = sum(float(row["fits_read_wall_sec"]) for row in frame_rows)
+    kernel_wall_total = sum(float(row["kernel_wall_sec"]) for row in frame_rows)
+    frame_compute_wall_total = sum(float(row["frame_compute_wall_sec"]) for row in frame_rows)
+    completed_frame_count = sum(int(row["completed_frames"]) for row in task_rows)
     summary = {
         "created_utc": _utc_now(),
         "queue_dir": str(config.queue_dir),
@@ -333,16 +357,25 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
         "leased_tasks": leased_count,
         "complete_tasks": complete_tasks,
         "failed_tasks": failed_tasks,
-        "completed_frames": sum(int(row["completed_frames"]) for row in task_rows),
+        "completed_frames": completed_frame_count,
         "measurement_rows": sum(int(row["measurement_rows"]) for row in task_rows),
         "ok_measurement_rows": sum(int(row["ok_measurement_rows"]) for row in task_rows),
         "failed_frames": sum(int(row["failed_frames"]) for row in task_rows),
+        "frame_timing_rows": len(frame_rows),
+        "payload_wait_wall_sec": payload_wait_total,
+        "payload_wait_mean_wall_sec": payload_wait_total / completed_frame_count if completed_frame_count else 0.0,
+        "staging_wall_sec": staging_wall_total,
+        "staged_bytes": staged_bytes_total,
+        "fits_read_wall_sec": fits_read_wall_total,
+        "kernel_wall_sec": kernel_wall_total,
+        "frame_compute_wall_sec": frame_compute_wall_total,
         "shard_count": len(shard_rows),
         "missing_shards": missing_shards,
         "worker_sum_wall_sec": sum(float(row["task_wall_sec"]) for row in task_rows),
         "collect_wall_sec": time.perf_counter() - started,
         "shard_manifest_path": str(shard_manifest_path),
         "task_table_path": str(task_table_path),
+        "frame_table_path": str(frame_table_path),
         "tasks": task_rows,
         "shards": shard_rows,
     }
@@ -364,6 +397,41 @@ def _claim_next_task(queue_dir: Path, worker_id: str) -> tuple[Path, dict[str, A
         _write_json_atomic(lease_path, task)
         return lease_path, task
     return None
+
+
+def _frame_timing_rows(*, task: dict[str, Any], worker_summary: dict[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for ordinal, timing in enumerate(worker_summary.get("frame_timings") or []):
+        rows.append(
+            {
+                "task_id": task.get("task_id"),
+                "worker_id": task.get("worker_id"),
+                "device": worker_summary.get("device"),
+                "frame_ordinal": ordinal,
+                "frame_group_id": timing.get("frame_group_id"),
+                "image_id": timing.get("image_id"),
+                "input_target_count": int(timing.get("input_target_count") or 0),
+                "measurement_count": int(timing.get("measurement_count") or 0),
+                "ok_count": int(timing.get("ok_count") or 0),
+                "selected_target_count": int(timing.get("selected_target_count") or 0),
+                "payload_prefetched": bool(timing.get("payload_prefetched", False)),
+                "payload_wait_wall_sec": float(timing.get("payload_wait_wall_sec") or 0.0),
+                "staging_wall_sec": float(timing.get("staging_wall_sec") or 0.0),
+                "staged_bytes": int(timing.get("staged_bytes") or 0),
+                "fits_read_wall_sec": float(timing.get("fits_read_wall_sec") or 0.0),
+                "selection_wall_sec": float(timing.get("selection_wall_sec") or 0.0),
+                "kernel_wall_sec": float(timing.get("kernel_wall_sec") or 0.0),
+                "table_wall_sec": float(timing.get("table_wall_sec") or 0.0),
+                "frame_compute_wall_sec": float(timing.get("frame_compute_wall_sec") or 0.0),
+                "wall_time_sec": float(timing.get("wall_time_sec") or 0.0),
+                "write_wall_sec": float(timing.get("write_wall_sec") or 0.0),
+                "shard_submit_wall_sec": float(timing.get("shard_submit_wall_sec") or 0.0),
+                "async_write_queued": bool(timing.get("async_write_queued", False)),
+                "deferred_write": bool(timing.get("deferred_write", False)),
+                "error": timing.get("error"),
+            }
+        )
+    return rows
 
 
 def _compact_worker_summary(summary: dict[str, Any]) -> dict[str, Any]:
