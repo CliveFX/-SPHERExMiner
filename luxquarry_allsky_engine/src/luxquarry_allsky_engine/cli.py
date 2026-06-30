@@ -211,6 +211,11 @@ def main(argv: list[str] | None = None) -> int:
     task_queue.add_argument("--campaign-id", required=True)
     task_queue.add_argument("--frames-per-task", type=int, default=25)
     task_queue.add_argument("--limit-frames", type=int)
+    task_queue.add_argument(
+        "--no-materialize-task-inputs",
+        action="store_true",
+        help="Write lightweight frame-id tasks and let the worker service keep source tables resident.",
+    )
     task_queue.set_defaults(func=cmd_write_task_queue)
 
     worker_service = sub.add_parser(
@@ -763,6 +768,7 @@ def cmd_write_task_queue(args: argparse.Namespace) -> int:
             campaign_id=args.campaign_id,
             frames_per_task=args.frames_per_task,
             limit_frames=args.limit_frames,
+            materialize_task_inputs=not args.no_materialize_task_inputs,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

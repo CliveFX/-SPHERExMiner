@@ -20,6 +20,7 @@ class TaskQueueWriteConfig:
     campaign_id: str
     frames_per_task: int = 25
     limit_frames: int | None = None
+    materialize_task_inputs: bool = True
 
 
 @dataclass(frozen=True)
@@ -51,34 +52,40 @@ def write_task_queue(config: TaskQueueWriteConfig) -> dict[str, Any]:
     if config.limit_frames is not None:
         manifest = manifest.head(config.limit_frames).copy()
     manifest = manifest.reset_index(drop=True)
-    targets = pd.read_parquet(config.projected_targets_path)
-    targets["frame_group_id"] = targets["frame_group_id"].astype(str)
+    targets = None
+    if config.materialize_task_inputs:
+        targets = pd.read_parquet(config.projected_targets_path)
+        targets["frame_group_id"] = targets["frame_group_id"].astype(str)
 
     tasks: list[dict[str, Any]] = []
     for batch_index, start in enumerate(range(0, len(manifest), config.frames_per_task)):
         frame_slice = manifest.iloc[start : start + config.frames_per_task].copy()
         frame_ids = [str(value) for value in frame_slice["frame_group_id"].tolist()]
-        target_slice = targets[targets["frame_group_id"].isin(frame_ids)].copy()
         task_id = f"task_{batch_index:06d}"
-        input_dir = queue_dir / "task_inputs" / task_id
-        input_dir.mkdir(parents=True, exist_ok=True)
-        task_manifest_path = input_dir / "frame_manifest.parquet"
-        task_targets_path = input_dir / "projected_targets.parquet"
-        frame_slice.to_parquet(task_manifest_path, index=False)
-        target_slice.to_parquet(task_targets_path, index=False)
         task = {
             "task_id": task_id,
             "campaign_id": config.campaign_id,
             "batch_index": batch_index,
             "frame_group_ids": frame_ids,
             "frame_count": int(len(frame_slice)),
-            "projected_target_rows": int(len(target_slice)),
-            "manifest_path": str(task_manifest_path),
-            "projected_targets_path": str(task_targets_path),
+            "materialized_inputs": bool(config.materialize_task_inputs),
             "attempt": 0,
             "status": "pending",
             "created_utc": _utc_now(),
         }
+        if config.materialize_task_inputs:
+            if targets is None:
+                raise ValueError("targets must be loaded when materialize_task_inputs is enabled")
+            target_slice = targets[targets["frame_group_id"].isin(frame_ids)].copy()
+            input_dir = queue_dir / "task_inputs" / task_id
+            input_dir.mkdir(parents=True, exist_ok=True)
+            task_manifest_path = input_dir / "frame_manifest.parquet"
+            task_targets_path = input_dir / "projected_targets.parquet"
+            frame_slice.to_parquet(task_manifest_path, index=False)
+            target_slice.to_parquet(task_targets_path, index=False)
+            task["projected_target_rows"] = int(len(target_slice))
+            task["manifest_path"] = str(task_manifest_path)
+            task["projected_targets_path"] = str(task_targets_path)
         _write_json_atomic(queue_dir / "pending" / f"{task_id}.json", task)
         tasks.append(task)
 
@@ -88,16 +95,17 @@ def write_task_queue(config: TaskQueueWriteConfig) -> dict[str, Any]:
         "queue_dir": str(queue_dir),
         "source_manifest_path": str(config.manifest_path),
         "source_projected_targets_path": str(config.projected_targets_path),
+        "materialized_task_inputs": bool(config.materialize_task_inputs),
         "frames_per_task": int(config.frames_per_task),
         "frame_count": int(len(manifest)),
-        "projected_target_rows": int(len(targets)),
+        "projected_target_rows": int(len(targets)) if targets is not None else None,
         "task_count": len(tasks),
         "write_wall_sec": time.perf_counter() - started,
         "tasks": [
             {
                 "task_id": task["task_id"],
                 "frame_count": task["frame_count"],
-                "projected_target_rows": task["projected_target_rows"],
+                "projected_target_rows": task.get("projected_target_rows"),
                 "frame_group_ids": task["frame_group_ids"],
             }
             for task in tasks
@@ -117,6 +125,21 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
     task_output_root = output_dir / "tasks"
     task_output_root.mkdir(parents=True, exist_ok=True)
 
+    queue_manifest = _read_queue_manifest(queue_dir)
+    source_manifest: pd.DataFrame | None = None
+    source_targets: pd.DataFrame | None = None
+    source_input_load_wall = 0.0
+    materialized_queue = bool(queue_manifest.get("materialized_task_inputs", True)) if queue_manifest else True
+    if not materialized_queue:
+        source_input_started = time.perf_counter()
+        source_manifest_path = _resolve_queue_path(queue_dir, queue_manifest["source_manifest_path"])
+        source_targets_path = _resolve_queue_path(queue_dir, queue_manifest["source_projected_targets_path"])
+        source_manifest = pd.read_parquet(source_manifest_path).reset_index(drop=True)
+        source_targets = pd.read_parquet(source_targets_path)
+        source_manifest["frame_group_id"] = source_manifest["frame_group_id"].astype(str)
+        source_targets["frame_group_id"] = source_targets["frame_group_id"].astype(str)
+        source_input_load_wall = time.perf_counter() - source_input_started
+
     worker = PersistentGpuFrameWorker(config.worker_config)
     summary: dict[str, Any] = {
         "created_utc": _utc_now(),
@@ -125,6 +148,9 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
         "queue_dir": str(queue_dir),
         "output_dir": str(output_dir),
         "device": config.worker_config.device,
+        "materialized_task_inputs": materialized_queue,
+        "resident_source_inputs": not materialized_queue,
+        "source_input_load_wall_sec": source_input_load_wall,
         "tasks_completed": 0,
         "tasks_failed": 0,
         "frames_completed": 0,
@@ -146,12 +172,28 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
         task_status_path = output_dir / "status" / "tasks" / f"{task_id}.json"
         task_run_id = f"{config.run_id}.{task_id}.{config.worker_id}"
         try:
-            input_read_started = time.perf_counter()
-            task_manifest_path = Path(str(task["manifest_path"]))
-            task_targets_path = Path(str(task["projected_targets_path"]))
-            manifest = pd.read_parquet(task_manifest_path)
-            targets = pd.read_parquet(task_targets_path)
-            input_read_wall = time.perf_counter() - input_read_started
+            task_manifest_path: Path | str | None
+            task_targets_path: Path | str | None
+            input_read_wall = 0.0
+            input_select_started = time.perf_counter()
+            if "manifest_path" in task and "projected_targets_path" in task:
+                input_read_started = time.perf_counter()
+                task_manifest_path = Path(str(task["manifest_path"]))
+                task_targets_path = Path(str(task["projected_targets_path"]))
+                manifest = pd.read_parquet(task_manifest_path)
+                targets = pd.read_parquet(task_targets_path)
+                input_read_wall = time.perf_counter() - input_read_started
+            else:
+                if source_manifest is None or source_targets is None:
+                    raise ValueError("Task has no materialized inputs and no resident source inputs are loaded")
+                frame_ids = {str(value) for value in task.get("frame_group_ids") or []}
+                if not frame_ids:
+                    raise ValueError(f"Task {task_id} has no frame_group_ids")
+                manifest = source_manifest[source_manifest["frame_group_id"].isin(frame_ids)].copy()
+                targets = source_targets[source_targets["frame_group_id"].isin(frame_ids)].copy()
+                task_manifest_path = queue_manifest.get("source_manifest_path") if queue_manifest else None
+                task_targets_path = queue_manifest.get("source_projected_targets_path") if queue_manifest else None
+            input_select_wall = time.perf_counter() - input_select_started
             task_summary = worker.process_frame_batch(
                 manifest=manifest,
                 targets=targets,
@@ -162,6 +204,7 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
                 status_path=task_status_path,
             )
             task_summary["task_input_read_wall_sec"] = input_read_wall
+            task_summary["task_input_select_wall_sec"] = input_select_wall
             completed = {
                 **task,
                 "status": "complete",
@@ -170,6 +213,7 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
                 "task_output_dir": str(task_out),
                 "summary_path": str(task_out / "run_summary.json"),
                 "task_input_read_wall_sec": input_read_wall,
+                "task_input_select_wall_sec": input_select_wall,
                 "task_wall_sec": time.perf_counter() - task_started,
                 "worker_summary": _compact_worker_summary(task_summary),
             }
@@ -226,6 +270,7 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                 "ok_measurement_rows": int(worker_summary.get("ok_measurement_rows") or 0),
                 "failed_frames": int(worker_summary.get("failed_frames") or 0),
                 "task_input_read_wall_sec": float(task.get("task_input_read_wall_sec") or 0.0),
+                "task_input_select_wall_sec": float(task.get("task_input_select_wall_sec") or 0.0),
                 "task_wall_sec": float(task.get("task_wall_sec") or 0.0),
                 "summary_path": task.get("summary_path"),
             }
@@ -262,6 +307,7 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                 "ok_measurement_rows": 0,
                 "failed_frames": 0,
                 "task_input_read_wall_sec": 0.0,
+                "task_input_select_wall_sec": 0.0,
                 "task_wall_sec": float(task.get("task_wall_sec") or 0.0),
                 "summary_path": None,
                 "error": task.get("error"),
@@ -342,6 +388,7 @@ def _compact_worker_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "batch_table_assembly",
         "total_wall_sec",
         "task_input_read_wall_sec",
+        "task_input_select_wall_sec",
         "async_shard_write_wait_wall_sec",
         "queued_shard_writes",
     }
@@ -368,6 +415,23 @@ def _write_service_status(path: Path, summary: dict[str, Any], started: float, *
         **summary,
     }
     _write_json_atomic(path, status)
+
+
+def _read_queue_manifest(queue_dir: Path) -> dict[str, Any]:
+    path = queue_dir / "queue_manifest.json"
+    if not path.exists():
+        return {}
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _resolve_queue_path(queue_dir: Path, value: str | Path) -> Path:
+    path = Path(str(value))
+    if path.is_absolute() or path.exists():
+        return path
+    candidate = queue_dir / path
+    if candidate.exists():
+        return candidate
+    return path
 
 
 def _write_json_atomic(path: Path, payload: dict[str, Any]) -> None:

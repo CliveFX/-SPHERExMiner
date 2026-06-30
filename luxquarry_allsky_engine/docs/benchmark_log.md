@@ -1602,3 +1602,113 @@ Notes:
 - This still is not the final frame miner: per-task parquet slices remain, and
   the next target is a service-owned manifest/target index plus larger frame
   batches so the worker is not constantly reopening tiny parquet files.
+
+## 2026-06-29: Lightweight Queue / Resident Source Table Smoke
+
+Change:
+
+- `write-task-queue --no-materialize-task-inputs` now writes task JSON with
+  frame IDs only.
+- `run-gpu-worker-service` loads the source frame manifest and projected target
+  table once at startup for lightweight queues, then slices resident DataFrames
+  per task.
+- Existing materialized task queues remain supported for compatibility.
+
+Command shape:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-task-queue \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/service_queue_smoke_v3/queue \
+  --campaign-id service_queue_smoke_v3 \
+  --frames-per-task 1 \
+  --limit-frames 2 \
+  --no-materialize-task-inputs
+
+.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir runs/service_queue_smoke_v3/queue \
+  --out-dir runs/service_queue_smoke_v3 \
+  --run-id service_queue_smoke_v3 \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --local-cache-dir /tmp/luxquarry_stage_service_smoke \
+  --max-tasks 2 \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --shard-batch-frames 1
+```
+
+Result:
+
+```text
+queue_writer:
+  materialized_task_inputs: false
+  frame_count: 2
+  task_count: 2
+  write_wall_sec: 0.015
+
+worker_service:
+  materialized_task_inputs: false
+  resident_source_inputs: true
+  source_input_load_wall_sec: 0.019
+  tasks_completed: 2
+  tasks_failed: 0
+  frames_completed: 2
+  measurement_rows: 573
+  ok_measurement_rows: 572
+  summary_total_wall_sec: 1.685
+  shell_observed_wall_sec: 2.925
+  task_wall_sum_sec: 0.442
+
+task_000000:
+  task_input_read_wall_sec: 0.000
+  task_input_select_wall_sec: 0.001
+  task_wall_sec: 0.371
+  frame_compute_wall_sec: 0.194
+  kernel_wall_sec: 0.031
+  table_wall_sec: 0.064
+  write_wall_sec: 0.154
+
+task_000001:
+  task_input_read_wall_sec: 0.000
+  task_input_select_wall_sec: 0.001
+  task_wall_sec: 0.071
+  frame_compute_wall_sec: 0.028
+  kernel_wall_sec: 0.026
+  table_wall_sec: 0.002
+  write_wall_sec: 0.021
+
+collect:
+  complete: true
+  shard_count: 2
+  collect_wall_sec: 0.010
+
+assemble_spectra:
+  input_measurement_rows: 573
+  target_count: 310
+  total_wall_sec: 1.242
+```
+
+Comparison:
+
+```text
+materialized v2 task wall sum: 0.466 sec
+resident-table v3 task wall sum: 0.442 sec
+materialized v2 queue write:    0.030 sec
+resident-table v3 queue write:  0.015 sec
+measurement rows:               unchanged at 573
+target spectra:                 unchanged at 310
+```
+
+Notes:
+
+- This removes per-task parquet materialization and per-task parquet reads from
+  service mode.
+- The tiny smoke only shows a small absolute gain because FITS/kernel/shard
+  overhead dominate two single-frame tasks. The benefit should matter more for
+  large queues because task creation becomes metadata-only and workers keep the
+  source tables resident.
+- The next target is larger frame batches and multi-worker service mode, then
+  S3/object-cache input support.

@@ -272,6 +272,9 @@ Current v1 behavior:
 
 - `write-task-queue` splits a frame manifest into frame-batch JSON tasks and
   materializes per-task manifest/projected-target parquet slices.
+- `write-task-queue --no-materialize-task-inputs` writes lightweight frame-id
+  tasks only; the worker service then keeps the source manifest and projected
+  target table resident and slices them per task.
 - `run-gpu-worker-service` initializes RAPIDS/CuPy/Warp once, constructs one
   `PersistentGpuFrameWorker`, claims tasks with atomic file renames, and writes
   normal measurement shards.
@@ -281,11 +284,10 @@ Current v1 behavior:
 Known v1 limitations:
 
 - It is still a local filesystem queue, not an EKS queue.
-- It still reads per-task parquet inputs instead of holding one global manifest
-  index in process.
-- It still calls the existing worker `.run()` method once per task, so the next
-  optimization is a lower-level `process_frame_batch()` API that avoids
-  rebuilding per-run summaries and task-local data structures.
+- The lightweight queue keeps source DataFrames resident, but the in-process
+  manifest/target index is still pandas, not cuDF/Dask-cuDF.
+- It now uses a lower-level `process_frame_batch()` API, but the worker still
+  creates task-local summaries and output directories.
 - It has no lease expiry/retry controller yet; failed tasks are isolated, but
   stale leases are not automatically requeued.
 
