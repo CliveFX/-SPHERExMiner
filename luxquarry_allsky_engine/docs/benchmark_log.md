@@ -1413,3 +1413,97 @@ Notes:
   1. benchmark much larger frame batches, where launch cost is amortized;
   2. design the next version as a long-lived worker service or queue consumer,
      not one subprocess per small dispatch.
+
+## 2026-06-29: Local Task Queue Service Smoke
+
+Commands:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-task-queue \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/service_queue_smoke_v1/queue \
+  --campaign-id service_queue_smoke_v1 \
+  --frames-per-task 1 \
+  --limit-frames 2
+
+.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir runs/service_queue_smoke_v1/queue \
+  --out-dir runs/service_queue_smoke_v1 \
+  --run-id service_queue_smoke_v1 \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --local-cache-dir /tmp/luxquarry_stage_service_smoke \
+  --max-tasks 2 \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --shard-batch-frames 1
+
+.venv/bin/luxquarry-allsky collect-task-queue-run \
+  --queue-dir runs/service_queue_smoke_v1/queue \
+  --out runs/service_queue_smoke_v1/aggregate_summary.json
+
+.venv/bin/luxquarry-allsky assemble-spectra \
+  --shard-manifest runs/service_queue_smoke_v1/measurement_shard_manifest.parquet \
+  --out-dir runs/service_queue_smoke_v1/spectra \
+  --run-id service_queue_smoke_v1 \
+  --device cuda:0
+```
+
+Result:
+
+```text
+queue_writer:
+  frame_count: 2
+  task_count: 2
+  frames_per_task: 1
+  write_wall_sec: 0.030
+
+worker_service:
+  tasks_completed: 2
+  tasks_failed: 0
+  frames_completed: 2
+  measurement_rows: 573
+  ok_measurement_rows: 572
+  summary_total_wall_sec: 1.942
+  shell_observed_wall_sec: 3.199
+  task_wall_sum_sec: 0.682
+
+task_000000:
+  task_wall_sec: 0.502
+  frame_compute_wall_sec: 0.200
+  kernel_wall_sec: 0.033
+  table_wall_sec: 0.060
+  staging_wall_sec: 0.112
+  write_wall_sec: 0.152
+
+task_000001:
+  task_wall_sec: 0.181
+  frame_compute_wall_sec: 0.028
+  kernel_wall_sec: 0.026
+  table_wall_sec: 0.002
+  staging_wall_sec: 0.106
+  write_wall_sec: 0.022
+
+collect:
+  complete: true
+  shard_count: 2
+  collect_wall_sec: 0.023
+
+assemble_spectra:
+  input_measurement_rows: 573
+  target_count: 310
+  total_wall_sec: 1.249
+```
+
+Notes:
+
+- The service queue produced the same downstream measurement shard manifest
+  shape as dispatch, and `assemble-spectra` consumed it unchanged.
+- The first task still pays warmup/calibration/table overhead. The second task
+  shows the intended direction: the same worker process and resident GPU
+  calibration cache continue without a new subprocess.
+- This prototype still materializes per-task parquet inputs and calls the
+  existing worker run method per task. It proves the service contract, not the
+  final monolithic frame miner.

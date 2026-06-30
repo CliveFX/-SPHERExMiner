@@ -30,6 +30,14 @@ from .recovery import InjectionRecoveryConfig, score_injection_recovery
 from .scoring import CandidateScoringConfig, score_spectra_candidates
 from .spectra import SpectraAssemblyConfig, assemble_spectra_from_shards
 from .status import DispatchStatusConfig, write_dispatch_status_snapshot
+from .task_queue import (
+    GpuWorkerServiceConfig,
+    TaskQueueCollectConfig,
+    TaskQueueWriteConfig,
+    collect_task_queue_run,
+    run_gpu_worker_service,
+    write_task_queue,
+)
 
 
 OPTIONAL_MODULES = [
@@ -192,6 +200,50 @@ def main(argv: list[str] | None = None) -> int:
     persistent.add_argument("--edge-margin-pix", type=float, default=6.0)
     persistent.add_argument("--limit-frames", type=int)
     persistent.set_defaults(func=cmd_run_persistent_gpu_worker)
+
+    task_queue = sub.add_parser(
+        "write-task-queue",
+        help="Materialize a local frame-batch task queue for long-lived GPU worker services.",
+    )
+    task_queue.add_argument("--manifest", type=Path, required=True)
+    task_queue.add_argument("--projected-targets", type=Path, required=True)
+    task_queue.add_argument("--out-dir", type=Path, required=True)
+    task_queue.add_argument("--campaign-id", required=True)
+    task_queue.add_argument("--frames-per-task", type=int, default=25)
+    task_queue.add_argument("--limit-frames", type=int)
+    task_queue.set_defaults(func=cmd_write_task_queue)
+
+    worker_service = sub.add_parser(
+        "run-gpu-worker-service",
+        help="Run a long-lived GPU worker that claims local frame-batch tasks until the queue drains.",
+    )
+    worker_service.add_argument("--queue-dir", type=Path, required=True)
+    worker_service.add_argument("--out-dir", type=Path, required=True)
+    worker_service.add_argument("--run-id", required=True)
+    worker_service.add_argument("--worker-id", default="worker-000")
+    worker_service.add_argument("--cache-root", type=Path, default=Path("/mnt/niroseti/spherex_cache"))
+    worker_service.add_argument("--device", default="cuda:0")
+    worker_service.add_argument("--max-tasks", type=int)
+    worker_service.add_argument("--no-rmm-pool", action="store_true")
+    worker_service.add_argument("--async-shard-writes", action="store_true")
+    worker_service.add_argument("--batch-table-assembly", action="store_true")
+    worker_service.add_argument("--shard-batch-frames", type=int, default=1)
+    worker_service.add_argument("--prefetch-frames", type=int, default=0)
+    worker_service.add_argument("--status-interval-frames", type=int, default=1)
+    worker_service.add_argument("--local-cache-dir", type=Path)
+    worker_service.add_argument("--aperture-radius-pix", type=float, default=2.0)
+    worker_service.add_argument("--annulus-inner-pix", type=float, default=4.0)
+    worker_service.add_argument("--annulus-outer-pix", type=float, default=6.0)
+    worker_service.add_argument("--edge-margin-pix", type=float, default=6.0)
+    worker_service.set_defaults(func=cmd_run_gpu_worker_service)
+
+    collect_task_queue = sub.add_parser(
+        "collect-task-queue-run",
+        help="Aggregate completed local task-queue summaries and write a measurement shard manifest.",
+    )
+    collect_task_queue.add_argument("--queue-dir", type=Path, required=True)
+    collect_task_queue.add_argument("--out", type=Path, required=True)
+    collect_task_queue.set_defaults(func=cmd_collect_task_queue_run)
 
     dispatch = sub.add_parser(
         "plan-gpu-dispatch",
@@ -695,6 +747,75 @@ def cmd_run_persistent_gpu_worker(args: argparse.Namespace) -> int:
         ),
         limit_frames=args.limit_frames,
         status_path=args.status_path,
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_write_task_queue(args: argparse.Namespace) -> int:
+    if args.frames_per_task <= 0:
+        raise ValueError("--frames-per-task must be positive")
+    summary = write_task_queue(
+        TaskQueueWriteConfig(
+            manifest_path=args.manifest,
+            projected_targets_path=args.projected_targets,
+            output_dir=args.out_dir,
+            campaign_id=args.campaign_id,
+            frames_per_task=args.frames_per_task,
+            limit_frames=args.limit_frames,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_run_gpu_worker_service(args: argparse.Namespace) -> int:
+    if args.shard_batch_frames <= 0:
+        raise ValueError("--shard-batch-frames must be positive")
+    if args.prefetch_frames < 0:
+        raise ValueError("--prefetch-frames must be non-negative")
+    if args.status_interval_frames <= 0:
+        raise ValueError("--status-interval-frames must be positive")
+    if args.max_tasks is not None and args.max_tasks <= 0:
+        raise ValueError("--max-tasks must be positive")
+    summary = run_gpu_worker_service(
+        GpuWorkerServiceConfig(
+            queue_dir=args.queue_dir,
+            output_dir=args.out_dir,
+            run_id=args.run_id,
+            worker_id=args.worker_id,
+            max_tasks=args.max_tasks,
+            worker_config=PersistentWorkerConfig(
+                aperture=ApertureConfig(
+                    cache_root=args.cache_root,
+                    aperture_radius_pix=args.aperture_radius_pix,
+                    annulus_inner_pix=args.annulus_inner_pix,
+                    annulus_outer_pix=args.annulus_outer_pix,
+                    edge_margin_pix=args.edge_margin_pix,
+                ),
+                device=args.device,
+                worker_index=0,
+                worker_count=1,
+                rmm_pool=not args.no_rmm_pool,
+                async_shard_writes=args.async_shard_writes,
+                batch_table_assembly=args.batch_table_assembly,
+                shard_batch_frames=args.shard_batch_frames,
+                prefetch_frames=args.prefetch_frames,
+                status_interval_frames=args.status_interval_frames,
+                local_cache_dir=args.local_cache_dir,
+            ),
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_collect_task_queue_run(args: argparse.Namespace) -> int:
+    summary = collect_task_queue_run(
+        TaskQueueCollectConfig(
+            queue_dir=args.queue_dir,
+            output_path=args.out,
+        )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0

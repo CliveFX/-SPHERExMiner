@@ -235,7 +235,7 @@ acceleration decision.
 
 ## Local Prototype
 
-The next local prototype should add:
+The local prototype now includes:
 
 ```text
 write-task-queue
@@ -267,6 +267,27 @@ luxquarry-allsky collect-task-queue-run \
 The service smoke should compare against `run-dispatch-benchmark-sweep` on the
 same frame count. The expected improvement is not faster kernel math; it is
 removing repeated process/RAPIDS/CUDA startup from many small dispatches.
+
+Current v1 behavior:
+
+- `write-task-queue` splits a frame manifest into frame-batch JSON tasks and
+  materializes per-task manifest/projected-target parquet slices.
+- `run-gpu-worker-service` initializes RAPIDS/CuPy/Warp once, constructs one
+  `PersistentGpuFrameWorker`, claims tasks with atomic file renames, and writes
+  normal measurement shards.
+- `collect-task-queue-run` writes a `measurement_shard_manifest.parquet` that
+  is directly consumable by `assemble-spectra`.
+
+Known v1 limitations:
+
+- It is still a local filesystem queue, not an EKS queue.
+- It still reads per-task parquet inputs instead of holding one global manifest
+  index in process.
+- It still calls the existing worker `.run()` method once per task, so the next
+  optimization is a lower-level `process_frame_batch()` API that avoids
+  rebuilding per-run summaries and task-local data structures.
+- It has no lease expiry/retry controller yet; failed tasks are isolated, but
+  stale leases are not automatically requeued.
 
 ## EKS Mapping
 
