@@ -87,6 +87,26 @@ class KubernetesReducerJobConfig:
     env: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class KubernetesCandidateScorerJobConfig:
+    candidate_plan_path: Path
+    output_dir: Path
+    image: str
+    namespace: str = "default"
+    service_account: str | None = None
+    container_executable: str = "luxquarry-allsky"
+    working_dir: str | None = None
+    device: str | None = "cuda:0"
+    gpu_limit: int = 1
+    cpu_request: str = "2"
+    memory_request: str = "8Gi"
+    restart_policy: str = "Never"
+    backoff_limit: int = 1
+    pvc_name: str | None = None
+    mount_path: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
+
+
 def write_kubernetes_jobs(config: KubernetesJobConfig) -> dict[str, Any]:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     plan = json.loads(config.plan_path.read_text(encoding="utf-8"))
@@ -153,6 +173,31 @@ def write_kubernetes_reducer_jobs(config: KubernetesReducerJobConfig) -> dict[st
         "worker_names": [job["metadata"]["name"] for job in jobs],
     }
     summary_path = config.output_dir / "k8s_reducer_jobs_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return summary
+
+
+def write_kubernetes_candidate_scorer_jobs(config: KubernetesCandidateScorerJobConfig) -> dict[str, Any]:
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    plan = json.loads(config.candidate_plan_path.read_text(encoding="utf-8"))
+    jobs = [_candidate_scorer_job(plan, scorer, config) for scorer in plan.get("scorers") or []]
+    run_id = str(plan.get("run_id") or "luxquarry-candidate-scorers")
+    manifest_path = config.output_dir / f"{run_id}.candidate-scorer-jobs.yaml"
+    manifest_path.write_text(_as_yaml_documents(jobs), encoding="utf-8")
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "backend": "kubernetes_candidate_scorer_job_manifest_generator",
+        "candidate_plan_path": str(config.candidate_plan_path),
+        "run_id": run_id,
+        "namespace": config.namespace,
+        "image": config.image,
+        "job_count": len(jobs),
+        "manifest_path": str(manifest_path),
+        "total_spectra_measurement_rows": int(plan.get("total_spectra_measurement_rows") or 0),
+        "total_target_count_by_partition": int(plan.get("total_target_count_by_partition") or 0),
+        "worker_names": [job["metadata"]["name"] for job in jobs],
+    }
+    summary_path = config.output_dir / "k8s_candidate_scorer_jobs_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
 
@@ -252,6 +297,61 @@ def _reducer_job(plan: dict[str, Any], reducer: dict[str, Any], config: Kubernet
         "kind": "Job",
         "metadata": {
             "name": _job_name(reducer_id),
+            "namespace": config.namespace,
+            "labels": labels,
+        },
+        "spec": {
+            "backoffLimit": config.backoff_limit,
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": pod_spec,
+            },
+        },
+    }
+
+
+def _candidate_scorer_job(
+    plan: dict[str, Any],
+    scorer: dict[str, Any],
+    config: KubernetesCandidateScorerJobConfig,
+) -> dict[str, Any]:
+    run_id = str(plan.get("run_id") or "candidate-scorers")
+    scorer_id = str(scorer["scorer_id"])
+    argv = list(scorer["argv"])
+    args = argv[1:] if argv else []
+    if config.device:
+        args = _replace_option(args, "--device", config.device)
+    labels = {
+        "app.kubernetes.io/name": "luxquarry-allsky",
+        "luxquarry/run-id": _label_value(run_id),
+        "luxquarry/job-role": "candidate-scorer",
+        "luxquarry/partition-index": str(scorer.get("partition_index", 0)),
+    }
+    container = _container(
+        name="luxquarry-candidate-scorer",
+        image=config.image,
+        command=[config.container_executable],
+        args=args,
+        env=config.env,
+        working_dir=config.working_dir,
+        gpu_limit=config.gpu_limit,
+        cpu_request=config.cpu_request,
+        memory_request=config.memory_request,
+        pvc_name=config.pvc_name,
+        mount_path=config.mount_path,
+    )
+    pod_spec = _pod_spec(
+        container=container,
+        restart_policy=config.restart_policy,
+        service_account=config.service_account,
+        pvc_name=config.pvc_name,
+        mount_path=config.mount_path,
+    )
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": _job_name(scorer_id),
             "namespace": config.namespace,
             "labels": labels,
         },

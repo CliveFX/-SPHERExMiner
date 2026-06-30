@@ -26,9 +26,11 @@ from .dispatch import DispatchPlanConfig, build_dispatch_plan, collect_dispatch_
 from .finalize import FinalizeDispatchConfig, finalize_dispatch_run
 from .gpu_worker import PersistentWorkerConfig, run_persistent_gpu_worker
 from .kubernetes import (
+    KubernetesCandidateScorerJobConfig,
     KubernetesJobConfig,
     KubernetesPostprocessJobConfig,
     KubernetesReducerJobConfig,
+    write_kubernetes_candidate_scorer_jobs,
     write_kubernetes_jobs,
     write_kubernetes_postprocess_job,
     write_kubernetes_reducer_jobs,
@@ -568,6 +570,38 @@ def main(argv: list[str] | None = None) -> int:
         help="Environment variable to place on every reducer container. Repeatable.",
     )
     k8s_reducers.set_defaults(func=cmd_write_k8s_reducer_jobs)
+
+    k8s_candidate_scorers = sub.add_parser(
+        "write-k8s-candidate-scorer-jobs",
+        help="Write one Kubernetes Job per candidate scorer from a candidate fanout plan.",
+    )
+    k8s_candidate_scorers.add_argument("--candidate-plan", type=Path, required=True)
+    k8s_candidate_scorers.add_argument("--out-dir", type=Path, required=True)
+    k8s_candidate_scorers.add_argument("--image", required=True)
+    k8s_candidate_scorers.add_argument("--namespace", default="default")
+    k8s_candidate_scorers.add_argument("--service-account")
+    k8s_candidate_scorers.add_argument("--container-executable", default="luxquarry-allsky")
+    k8s_candidate_scorers.add_argument("--working-dir")
+    k8s_candidate_scorers.add_argument(
+        "--device",
+        default="cuda:0",
+        help="Device string passed inside each scorer pod. Use cuda:0 for one-GPU pods.",
+    )
+    k8s_candidate_scorers.add_argument("--gpu-limit", type=int, default=1)
+    k8s_candidate_scorers.add_argument("--cpu-request", default="2")
+    k8s_candidate_scorers.add_argument("--memory-request", default="8Gi")
+    k8s_candidate_scorers.add_argument("--restart-policy", default="Never")
+    k8s_candidate_scorers.add_argument("--backoff-limit", type=int, default=1)
+    k8s_candidate_scorers.add_argument("--pvc-name")
+    k8s_candidate_scorers.add_argument("--mount-path")
+    k8s_candidate_scorers.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Environment variable to place on every scorer container. Repeatable.",
+    )
+    k8s_candidate_scorers.set_defaults(func=cmd_write_k8s_candidate_scorer_jobs)
 
     campaign_contract = sub.add_parser(
         "write-campaign-contract",
@@ -1319,6 +1353,31 @@ def cmd_write_k8s_reducer_jobs(args: argparse.Namespace) -> int:
     summary = write_kubernetes_reducer_jobs(
         KubernetesReducerJobConfig(
             reducer_plan_path=args.reducer_plan,
+            output_dir=args.out_dir,
+            image=args.image,
+            namespace=args.namespace,
+            service_account=args.service_account,
+            container_executable=args.container_executable,
+            working_dir=args.working_dir,
+            device=args.device,
+            gpu_limit=args.gpu_limit,
+            cpu_request=args.cpu_request,
+            memory_request=args.memory_request,
+            restart_policy=args.restart_policy,
+            backoff_limit=args.backoff_limit,
+            pvc_name=args.pvc_name,
+            mount_path=args.mount_path,
+            env=_parse_env_assignments(args.env),
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_write_k8s_candidate_scorer_jobs(args: argparse.Namespace) -> int:
+    summary = write_kubernetes_candidate_scorer_jobs(
+        KubernetesCandidateScorerJobConfig(
+            candidate_plan_path=args.candidate_plan,
             output_dir=args.out_dir,
             image=args.image,
             namespace=args.namespace,

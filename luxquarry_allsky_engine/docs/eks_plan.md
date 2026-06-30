@@ -266,17 +266,27 @@ After reducer collection, fan out candidate scoring over the reducer outputs:
   --plan-out runs/<run_id>/candidate_fanout/candidate_fanout_plan.json \
   --devices cuda:0
 
-.venv/bin/luxquarry-allsky run-candidate-fanout-plan \
-  --plan runs/<run_id>/candidate_fanout/candidate_fanout_plan.json \
-  --max-parallel 1
+.venv/bin/luxquarry-allsky write-k8s-candidate-scorer-jobs \
+  --candidate-plan runs/<run_id>/candidate_fanout/candidate_fanout_plan.json \
+  --out-dir runs/<run_id>/candidate_fanout/k8s \
+  --image <ecr-image-uri> \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --device cuda:0 \
+  --pvc-name luxquarry-data \
+  --mount-path /workspace
 
 .venv/bin/luxquarry-allsky collect-candidate-fanout-plan \
   --plan runs/<run_id>/candidate_fanout/candidate_fanout_plan.json \
   --out runs/<run_id>/candidate_fanout/candidate_fanout_collect_summary.json
 ```
 
-The local runner is a smoke/development path. At cloud scale the same
-`candidate_fanout_plan.json` should map to one scorer Job per reducer partition,
-then `collect-candidate-fanout-plan` writes `candidate_scorer_outputs.parquet`.
-That manifest is the input to candidate aggregation, quality dashboards, and
+`run-candidate-fanout-plan` is still available for local smoke/development. At
+cloud scale, `write-k8s-candidate-scorer-jobs` maps the same
+`candidate_fanout_plan.json` to one scorer Job per reducer partition. For
+Kubernetes one-GPU pods, pass `--device cuda:0`; the generator rewrites each
+planned scorer command to use the pod-local GPU. After scorer Jobs finish,
+`collect-candidate-fanout-plan` writes `candidate_scorer_outputs.parquet`. That
+manifest is the input to candidate aggregation, quality dashboards, and
 ClickHouse/viewer indexing.

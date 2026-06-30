@@ -358,6 +358,22 @@ candidate_scorer_outputs.parquet
 viewer-index loading, or ClickHouse ingestion. It records each candidate parquet
 path, candidate counts, target counts, and scorer timing.
 
+For Kubernetes/EKS, replace the local runner with:
+
+```bash
+luxquarry-allsky write-k8s-candidate-scorer-jobs \
+  --candidate-plan runs/service_queue_smoke_v3/candidate_fanout_smoke/candidate_fanout_plan.json \
+  --out-dir runs/service_queue_smoke_v3/candidate_fanout_smoke/k8s \
+  --image <ecr-image-uri> \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --device cuda:0
+```
+
+That emits one candidate scorer Job per reducer spectra partition. The collector
+command is unchanged after the Jobs finish.
+
 The current measurement dedupe key is:
 
 ```text

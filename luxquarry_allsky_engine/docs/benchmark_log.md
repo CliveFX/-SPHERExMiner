@@ -2449,3 +2449,59 @@ Notes:
   tuning.
 - The next cloud-scale step is to generate Kubernetes scorer Jobs from the same
   fanout plan, mirroring the reducer Job path.
+
+## 2026-06-29: Candidate Scorer Kubernetes Jobs
+
+Change:
+
+- Added `luxquarry-allsky write-k8s-candidate-scorer-jobs`.
+- The command consumes `candidate_fanout_plan.json` and emits one Kubernetes Job
+  per candidate scorer partition.
+- The generator rewrites `--device` to the pod-local device string, so a plan
+  built with local multi-GPU names can still run as one-GPU pods using
+  `--device cuda:0`.
+
+Smoke command:
+
+```bash
+luxquarry-allsky write-k8s-candidate-scorer-jobs \
+  --candidate-plan runs/service_queue_smoke_v3/candidate_fanout_smoke/candidate_fanout_plan.json \
+  --out-dir runs/service_queue_smoke_v3/candidate_fanout_smoke/k8s \
+  --image luxquarry-allsky:test \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --pvc-name luxquarry-data \
+  --mount-path /workspace \
+  --device cuda:0
+```
+
+Result:
+
+```text
+job_count: 2
+image: luxquarry-allsky:test
+namespace: luxquarry
+total_spectra_measurement_rows: 270
+total_target_count_by_partition: 147
+manifest:
+  runs/service_queue_smoke_v3/candidate_fanout_smoke/k8s/service_queue_smoke_v3_candidate_fanout.candidate-scorer-jobs.yaml
+```
+
+Generated Jobs:
+
+```text
+service-queue-smoke-v3-candidate-fanout-part00000
+service-queue-smoke-v3-candidate-fanout-part00001
+```
+
+Manifest inspection confirmed:
+
+```text
+container command: luxquarry-allsky
+container args: score-spectra-candidates ...
+device override inside pod: cuda:0
+gpu request per job: 1
+job-role label: candidate-scorer
+pvc mount: /workspace
+```
