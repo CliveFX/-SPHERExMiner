@@ -396,6 +396,11 @@ The cloud version should run one independent frame-group worker per GPU/pod.
 - Kubernetes Jobs or queue-fed workers for frame groups.
 - Post-processing Dask/RAPIDS jobs for spectra assembly and candidate scoring.
 
+The measured worker-only smoke shows small dispatches are dominated by worker
+startup. The next performance target is a long-lived GPU worker service that
+polls frame-batch tasks and pays CUDA/RAPIDS startup once per worker lifetime;
+see `docs/worker_service_design.md`.
+
 ## Campaign Completion Contract
 
 A survey run is not complete when baseline aperture shards exist. The complete
@@ -437,6 +442,7 @@ luxquarry_allsky_engine/
     benchmark_log.md
     cuda_and_rapids_strategy.md
     gpu_worker_dispatch.md
+    worker_service_design.md
     local_environment.md
     eks_plan.md
   src/

@@ -30,6 +30,12 @@ is coarser than one frame group per Job and avoids tiny pod startup overhead.
 Later queue-fed workers can reduce the unit back to individual frame groups if
 retry granularity matters more than startup cost.
 
+Local worker-only benchmarking has now measured startup/setup overhead at about
+2.8 sec on a two-frame dispatch, while the actual worker payload is about
+0.40-0.44 sec. For EKS-scale mining, the target is therefore long-lived GPU
+workers polling frame-batch tasks, not one tiny pod/job per small frame group.
+See `worker_service_design.md` for the queue and lease contract.
+
 Each job:
 
 1. Stages FITS and reads pre-built target slices.

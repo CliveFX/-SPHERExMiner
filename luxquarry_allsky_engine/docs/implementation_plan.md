@@ -126,6 +126,12 @@ Exit criteria:
 
 Goal: keep GPUs fed.
 
+The worker-only benchmark shows a 2-frame task spends about 0.40-0.44 sec in
+worker payload but about 3.25 sec in the parent-observed worker phase. The
+measured launch/setup overhead is about 2.8 sec. For small tasks, the next
+optimization is not kernel math; it is a long-lived worker service. See
+`worker_service_design.md`.
+
 Tasks:
 
 1. Batch multiple frames per GPU residency window.

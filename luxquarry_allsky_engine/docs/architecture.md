@@ -32,6 +32,11 @@ frame group
 The key product is not a run folder full of target spectra. The key product is
 an append-only measurement table.
 
+The measured worker-only smoke shows small dispatches are dominated by worker
+process startup, not GPU payload. The next performance shape is a long-lived
+GPU worker service that polls frame-batch tasks and pays CUDA/RAPIDS startup
+once per worker lifetime. See `worker_service_design.md`.
+
 ## Work Units
 
 A work unit is a frame group.
@@ -182,4 +187,3 @@ Use RAPIDS where it fits naturally:
 - cuSpatial: candidate for footprint filtering if it proves clean.
 
 Custom CUDA/Warp kernels remain appropriate for aperture/PSF photometry.
-
