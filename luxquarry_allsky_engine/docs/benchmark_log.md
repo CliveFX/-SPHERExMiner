@@ -2167,3 +2167,88 @@ Notes:
 - This is not the final all-sky reducer yet. It proves the deterministic
   target-bucket contract. The next optimization is avoiding repeated full-shard
   reads by using Dask-cuDF or writing pre-shuffled reducer inputs.
+
+## 2026-06-29: Pre-Shuffled Measurement Reducer Inputs
+
+Change:
+
+- Added `luxquarry-allsky partition-measurement-shards`.
+- The command reads measurement shards once with cuDF, hashes rows by
+  `(catalog, target_id)`, and writes one measurement parquet plus one one-row
+  shard manifest per non-empty target bucket.
+- Reducers can now run `assemble-spectra` against a single partition manifest
+  instead of all original measurement shards.
+- `measurement_partition_summary.json` keeps stdout/status bounded with
+  `partition_preview`; the full partition table is
+  `<run_id>.measurement_partition_manifest.parquet`.
+
+Four-partition smoke:
+
+```text
+input manifest: runs/service_queue_smoke_v3/measurement_shard_manifest.parquet
+partition_count: 4
+shard_count: 2
+input_measurement_rows: 573
+partitioned_measurement_rows: 573
+target_count_sum_by_partition: 310
+written_partitions: 4
+read_shards_wall_sec: 0.139
+bucket_wall_sec: 0.029
+write_partitions_wall_sec: 0.063
+total_wall_sec: 1.134
+```
+
+Partition row counts:
+
+```text
+partition 0: 140 measurements, 78 targets
+partition 1: 130 measurements, 69 targets
+partition 2: 147 measurements, 79 targets
+partition 3: 156 measurements, 84 targets
+```
+
+Reducer smoke over only partition 2:
+
+```text
+input manifest:
+  runs/service_queue_smoke_v3/measurement_partition_smoke/partition_manifests/service_queue_smoke_v3_measurement_partitions.part00002.measurement_shard_manifest.parquet
+input_measurement_rows: 147
+spectra_measurement_rows: 147
+target_count: 79
+shard_count: 1
+total_wall_sec: 1.210
+```
+
+Correctness check:
+
+```text
+direct partitioned assembly part00002 spectra hash:
+  a96b096e958e51422890020548e8c6bb61b51153b21f648c061c09f1e36fd1f6
+pre-shuffled reducer part00002 spectra hash:
+  a96b096e958e51422890020548e8c6bb61b51153b21f648c061c09f1e36fd1f6
+
+direct partitioned assembly part00002 target-summary hash:
+  b1d0fdc61f7cb3f61564745f84a36b347b50f3db4260094ee87e5dabfa7c52db
+pre-shuffled reducer part00002 target-summary hash:
+  b1d0fdc61f7cb3f61564745f84a36b347b50f3db4260094ee87e5dabfa7c52db
+```
+
+Sparse-bucket smoke:
+
+```text
+partition_count: 1024
+written_partitions: 272
+partitioned_measurement_rows: 573
+target_count_sum_by_partition: 310
+summary_partition_limit: 5
+partition_preview_truncated: true
+total_wall_sec: 5.509
+```
+
+Notes:
+
+- Empty partitions are skipped by default to avoid creating thousands of tiny
+  files. `--write-empty-partitions` is available for launchers that require a
+  file for every bucket.
+- This creates the desired horizontal reducer shape:
+  photometry shards -> one GPU shuffle -> many independent spectra reducers.

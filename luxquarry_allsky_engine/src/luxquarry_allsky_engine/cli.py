@@ -29,12 +29,14 @@ from .projection import project_frame_targets
 from .recovery import InjectionRecoveryConfig, score_injection_recovery
 from .scoring import CandidateScoringConfig, score_spectra_candidates
 from .spectra import (
+    MeasurementPartitionConfig,
     PartitionedSpectraAssemblyConfig,
     SpectraAssemblyConfig,
     SpectraAssemblyValidationConfig,
     SpectraRetryDedupValidationConfig,
     assemble_spectra_partitions,
     assemble_spectra_from_shards,
+    partition_measurement_shards,
     validate_retry_dedup_assembly,
     validate_shard_order_independent_assembly,
 )
@@ -563,6 +565,30 @@ def main(argv: list[str] | None = None) -> int:
     partitioned_spectra.add_argument("--only-ok", action="store_true")
     partitioned_spectra.add_argument("--drop-duplicate-measurements", action="store_true")
     partitioned_spectra.set_defaults(func=cmd_assemble_spectra_partitions)
+
+    partition_measurements = sub.add_parser(
+        "partition-measurement-shards",
+        help="GPU-shuffle measurement shards into target-hash parquet buckets for reducer fanout.",
+    )
+    partition_measurements.add_argument("--shard-manifest", type=Path, required=True)
+    partition_measurements.add_argument("--out-dir", type=Path, required=True)
+    partition_measurements.add_argument("--run-id", required=True)
+    partition_measurements.add_argument("--device", default="cuda:0")
+    partition_measurements.add_argument("--partition-count", type=int, default=64)
+    partition_measurements.add_argument("--only-ok", action="store_true")
+    partition_measurements.add_argument("--drop-duplicate-measurements", action="store_true")
+    partition_measurements.add_argument(
+        "--write-empty-partitions",
+        action="store_true",
+        help="Write empty parquet/manifests for empty target buckets. Default skips empty buckets.",
+    )
+    partition_measurements.add_argument(
+        "--summary-partition-limit",
+        type=int,
+        default=64,
+        help="Maximum partition rows to embed in JSON/stdout. Full manifest is always written to parquet.",
+    )
+    partition_measurements.set_defaults(func=cmd_partition_measurement_shards)
 
     validate_assembly = sub.add_parser(
         "validate-assembly-order",
@@ -1202,6 +1228,24 @@ def cmd_assemble_spectra_partitions(args: argparse.Namespace) -> int:
             partition_index=args.partition_index,
             only_ok=args.only_ok,
             drop_duplicate_measurements=args.drop_duplicate_measurements,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_partition_measurement_shards(args: argparse.Namespace) -> int:
+    summary = partition_measurement_shards(
+        MeasurementPartitionConfig(
+            shard_manifest_path=args.shard_manifest,
+            output_dir=args.out_dir,
+            run_id=args.run_id,
+            device=args.device,
+            partition_count=args.partition_count,
+            only_ok=args.only_ok,
+            drop_duplicate_measurements=args.drop_duplicate_measurements,
+            write_empty_partitions=args.write_empty_partitions,
+            summary_partition_limit=args.summary_partition_limit,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

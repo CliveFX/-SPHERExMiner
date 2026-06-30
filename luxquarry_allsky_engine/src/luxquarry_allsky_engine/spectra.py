@@ -55,6 +55,19 @@ class PartitionedSpectraAssemblyConfig:
     drop_duplicate_measurements: bool = False
 
 
+@dataclass(frozen=True)
+class MeasurementPartitionConfig:
+    shard_manifest_path: Path
+    output_dir: Path
+    run_id: str
+    device: str = "cuda:0"
+    partition_count: int = 64
+    only_ok: bool = False
+    drop_duplicate_measurements: bool = False
+    write_empty_partitions: bool = False
+    summary_partition_limit: int = 64
+
+
 DEDUPE_KEY_CANDIDATES = (
     "catalog",
     "target_id",
@@ -138,6 +151,136 @@ def assemble_spectra_from_shards(config: SpectraAssemblyConfig) -> dict[str, Any
         "total_wall_sec": time.perf_counter() - started,
     }
     summary_path = config.output_dir / "assemble_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return summary
+
+
+def partition_measurement_shards(config: MeasurementPartitionConfig) -> dict[str, Any]:
+    if config.partition_count <= 0:
+        raise ValueError("partition_count must be positive")
+    if config.summary_partition_limit < 0:
+        raise ValueError("summary_partition_limit must be non-negative")
+
+    started = time.perf_counter()
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    shard_manifest = pd.read_parquet(config.shard_manifest_path)
+    shard_paths = _resolve_shard_paths(config.shard_manifest_path, shard_manifest["path"].tolist())
+    if not shard_paths:
+        raise ValueError(f"No measurement shards found in {config.shard_manifest_path}")
+
+    import cudf
+    import cupy as cp
+
+    cp.cuda.Device(_device_index(config.device)).use()
+    t_read = time.perf_counter()
+    measurements = cudf.read_parquet([str(path) for path in shard_paths])
+    read_wall = time.perf_counter() - t_read
+
+    input_rows = int(len(measurements))
+    if config.only_ok:
+        measurements = measurements[measurements["aperture_status_code"] == 0]
+    filtered_rows = int(len(measurements))
+
+    dedupe_wall = 0.0
+    duplicate_measurement_rows_dropped = 0
+    dedupe_key = _measurement_dedupe_key(measurements)
+    if config.drop_duplicate_measurements:
+        t_dedupe = time.perf_counter()
+        before_dedupe = int(len(measurements))
+        measurements = measurements.drop_duplicates(subset=dedupe_key)
+        duplicate_measurement_rows_dropped = before_dedupe - int(len(measurements))
+        dedupe_wall = time.perf_counter() - t_dedupe
+
+    t_bucket = time.perf_counter()
+    measurements["target_partition"] = (
+        measurements[["catalog", "target_id"]].hash_values() % config.partition_count
+    ).astype("int32")
+    bucket_wall = time.perf_counter() - t_bucket
+
+    partition_rows: list[dict[str, Any]] = []
+    manifest_dir = config.output_dir / "partition_manifests"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+    write_wall_total = 0.0
+    manifest_write_wall_total = 0.0
+    for partition_index in range(config.partition_count):
+        t_partition = time.perf_counter()
+        partition = measurements[measurements["target_partition"] == partition_index]
+        row_count = int(len(partition))
+        if row_count == 0 and not config.write_empty_partitions:
+            continue
+
+        target_count = int(len(partition[["catalog", "target_id"]].drop_duplicates())) if row_count else 0
+        partition_path = config.output_dir / f"{config.run_id}.part{partition_index:05d}.measurements.parquet"
+        t_write = time.perf_counter()
+        partition.to_parquet(partition_path, index=False)
+        write_wall = time.perf_counter() - t_write
+        write_wall_total += write_wall
+
+        one_row_manifest = pd.DataFrame(
+            [
+                {
+                    "path": str(partition_path),
+                    "partition_index": partition_index,
+                    "partition_count": config.partition_count,
+                    "rows": row_count,
+                    "target_count": target_count,
+                }
+            ]
+        )
+        one_row_manifest_path = manifest_dir / f"{config.run_id}.part{partition_index:05d}.measurement_shard_manifest.parquet"
+        t_manifest = time.perf_counter()
+        one_row_manifest.to_parquet(one_row_manifest_path, index=False)
+        manifest_write_wall_total += time.perf_counter() - t_manifest
+
+        partition_row = {
+            "partition_index": partition_index,
+            "partition_count": config.partition_count,
+            "path": str(partition_path),
+            "measurement_shard_manifest_path": str(one_row_manifest_path),
+            "rows": row_count,
+            "target_count": target_count,
+            "write_wall_sec": write_wall,
+            "total_partition_wall_sec": time.perf_counter() - t_partition,
+            "exists": partition_path.exists(),
+        }
+        partition_rows.append(partition_row)
+
+    partition_manifest_path = config.output_dir / f"{config.run_id}.measurement_partition_manifest.parquet"
+    pd.DataFrame(partition_rows).to_parquet(partition_manifest_path, index=False)
+
+    partition_preview = partition_rows[: config.summary_partition_limit]
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "run_id": config.run_id,
+        "backend": "cudf_measurement_target_partition_shuffle",
+        "device": config.device,
+        "shard_manifest_path": str(config.shard_manifest_path),
+        "output_dir": str(config.output_dir),
+        "partition_count": config.partition_count,
+        "written_partitions": len(partition_rows),
+        "write_empty_partitions": config.write_empty_partitions,
+        "partition_manifest_path": str(partition_manifest_path),
+        "partition_shard_manifest_dir": str(manifest_dir),
+        "only_ok": config.only_ok,
+        "drop_duplicate_measurements": config.drop_duplicate_measurements,
+        "measurement_dedupe_key": dedupe_key,
+        "shard_count": len(shard_paths),
+        "input_measurement_rows": input_rows,
+        "filtered_measurement_rows": filtered_rows,
+        "duplicate_measurement_rows_dropped": duplicate_measurement_rows_dropped,
+        "partitioned_measurement_rows": sum(int(row["rows"]) for row in partition_rows),
+        "target_count_sum_by_partition": sum(int(row["target_count"]) for row in partition_rows),
+        "read_shards_wall_sec": read_wall,
+        "dedupe_wall_sec": dedupe_wall,
+        "bucket_wall_sec": bucket_wall,
+        "write_partitions_wall_sec": write_wall_total,
+        "write_partition_manifests_wall_sec": manifest_write_wall_total,
+        "total_wall_sec": time.perf_counter() - started,
+        "partition_preview_count": len(partition_preview),
+        "partition_preview_truncated": len(partition_preview) < len(partition_rows),
+        "partition_preview": partition_preview,
+    }
+    summary_path = config.output_dir / "measurement_partition_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
 

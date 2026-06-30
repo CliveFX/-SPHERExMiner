@@ -189,8 +189,8 @@ Near-term implementation:
    `luxquarry-allsky validate-assembly-retry-dedup`.
 3. Add target-hash partitioned spectra assembly. Implemented as
    `luxquarry-allsky assemble-spectra-partitions`.
-4. Add Dask-cuDF assembly path or a reducer fanout wrapper for very large shard
-   manifests.
+4. Add pre-shuffled reducer inputs so each reducer reads only its target bucket.
+   Implemented as `luxquarry-allsky partition-measurement-shards`.
 5. Add status cards for assembly/scoring throughput:
    rows/sec, shards/sec, bytes/sec, GPU read/compute/write wall time.
 
@@ -250,10 +250,49 @@ luxquarry-allsky assemble-spectra-partitions \
 
 The partition key is a cuDF GPU hash over `(catalog, target_id)`. This keeps all
 measurements for a target in the same reducer bucket, so spectra assembly can be
-fanned out horizontally without relying on shard arrival order. The current
-implementation still reads the shard set in each reducer; the next scaling step
-is a Dask-cuDF or pre-shuffled reducer path that avoids repeated full-manifest
-reads for very large campaigns.
+fanned out horizontally without relying on shard arrival order. This direct
+command is useful for correctness checks, but it still reads the original shard
+set before filtering a bucket. For large campaigns, use the pre-shuffled reducer
+input command below.
+
+Current pre-shuffled reducer input command:
+
+```bash
+luxquarry-allsky partition-measurement-shards \
+  --shard-manifest runs/service_queue_smoke_v3/measurement_shard_manifest.parquet \
+  --out-dir runs/service_queue_smoke_v3/measurement_partition_smoke \
+  --run-id service_queue_smoke_v3_measurement_partitions \
+  --device cuda:0 \
+  --partition-count 64 \
+  --drop-duplicate-measurements
+```
+
+This reads the original measurement shard manifest once with cuDF, hashes rows
+by `(catalog, target_id)`, writes one measurement parquet per non-empty target
+bucket, and writes:
+
+```text
+<run_id>.measurement_partition_manifest.parquet
+partition_manifests/<run_id>.partNNNNN.measurement_shard_manifest.parquet
+measurement_partition_summary.json
+```
+
+Each `partition_manifests/*.measurement_shard_manifest.parquet` is directly
+consumable by `assemble-spectra`. That gives the EKS reducer shape:
+
+```bash
+luxquarry-allsky assemble-spectra \
+  --shard-manifest partition_manifests/<run_id>.part00002.measurement_shard_manifest.parquet \
+  --out-dir spectra_part00002 \
+  --run-id <run_id>.part00002 \
+  --device cuda:0 \
+  --drop-duplicate-measurements
+```
+
+The partitioner skips empty buckets by default to avoid thousands of tiny empty
+files. Use `--write-empty-partitions` only when a downstream launcher wants a
+manifest file for every possible bucket. The JSON summary includes a bounded
+`partition_preview`; the full partition table lives in parquet.
 
 The current measurement dedupe key is:
 
