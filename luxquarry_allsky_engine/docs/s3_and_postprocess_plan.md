@@ -71,6 +71,13 @@ Current implementation uses anonymous HTTPS derived from the S3 URI, not boto3
 or s3fs. That keeps the first S3 path dependency-free; boto3/s3fs/fsspec remain
 benchmark candidates for discovery and async prefetch.
 
+The existing worker `--prefetch-frames` option also applies to S3 staging. A
+two-frame smoke showed that width 2 can start both S3 downloads concurrently,
+while width 1 serializes the first download and only partially overlaps the
+second. For S3-backed runs, prefetch width should be sized to the intended
+number of concurrent in-flight downloads per worker, bounded by local SSD,
+network, and memory pressure.
+
 ## Input Strategy
 
 Do not stream every photometry read directly from S3 into Astropy. That would

@@ -1892,3 +1892,83 @@ Notes:
   `s3://bucket/key`.
 - The next performance step is asynchronous S3 prefetch so downloads overlap
   with GPU work instead of blocking the frame loop.
+
+## 2026-06-29: S3 Prefetch Width Smoke
+
+Input:
+
+```text
+manifest: runs/manifest_smoke_v2_s3/frame_manifest.parquet
+frames: 2
+frame bytes: 71,637,120 each
+task shape: one two-frame lightweight task
+```
+
+Prefetch width 1:
+
+```bash
+.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir runs/service_queue_smoke_s3_prefetch2/queue \
+  --out-dir runs/service_queue_smoke_s3_prefetch2 \
+  --run-id service_queue_smoke_s3_prefetch2 \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --local-cache-dir /tmp/luxquarry_s3_stage_prefetch_smoke \
+  --max-tasks 1 \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --shard-batch-frames 1 \
+  --prefetch-frames 1
+```
+
+Result:
+
+```text
+frames_completed: 2
+measurement_rows: 573
+service_wall_sec: 21.534
+task_wall_sec: 20.289
+frame0 staging_wall_sec: 15.682
+frame1 staging_wall_sec: 4.521
+```
+
+Prefetch width 2:
+
+```bash
+.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir runs/service_queue_smoke_s3_prefetch2w/queue \
+  --out-dir runs/service_queue_smoke_s3_prefetch2w \
+  --run-id service_queue_smoke_s3_prefetch2w \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --local-cache-dir /tmp/luxquarry_s3_stage_prefetch2w_smoke \
+  --max-tasks 1 \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --shard-batch-frames 1 \
+  --prefetch-frames 2
+```
+
+Result:
+
+```text
+frames_completed: 2
+measurement_rows: 573
+service_wall_sec: 9.249
+task_wall_sec: 7.978
+frame0 staging_wall_sec: 7.581
+frame1 staging_wall_sec: 3.842
+assembly target_count: 310
+```
+
+Notes:
+
+- With `--prefetch-frames 1`, the executor has one download worker. The first
+  frame gates the task and the second frame can only overlap with the first
+  frame's short compute/shard work.
+- With `--prefetch-frames 2`, both frame downloads can run concurrently at task
+  start. This reduced observed service wall from 21.5 sec to 9.25 sec in this
+  small smoke.
+- The reported per-frame `staging_wall_sec` is measured inside each prefetch
+  thread. In concurrent mode, those durations overlap and should not be summed
+  as wall-clock task time.
