@@ -2505,3 +2505,113 @@ gpu request per job: 1
 job-role label: candidate-scorer
 pvc mount: /workspace
 ```
+
+## 2026-06-29: Standalone Object Staging Benchmark
+
+Change:
+
+- Added `luxquarry-allsky benchmark-object-staging`.
+- The command stages manifest `path` entries through the same
+  `stage_input_file()` implementation used by persistent workers.
+- It sweeps staging concurrency without running FITS reads, photometry kernels,
+  spectra assembly, or parquet scoring.
+- It writes aggregate JSON plus per-object parquet:
+
+```text
+object_staging_summary.json
+object_staging_results.parquet
+```
+
+Local two-frame smoke:
+
+```bash
+luxquarry-allsky benchmark-object-staging \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --out-dir runs/object_staging_bench_local_smoke \
+  --cache-dir /tmp/luxquarry_object_staging_local_smoke \
+  --concurrency 1,2 \
+  --limit 2 \
+  --cache-mode per-concurrency
+```
+
+Result:
+
+```text
+input_rows: 2
+bytes per sweep: 143,274,240
+
+concurrency 1:
+  wall_sec: 0.204
+  transferred_mib_per_sec: 668.3
+  cache_miss_count: 2
+
+concurrency 2:
+  wall_sec: 0.131
+  transferred_mib_per_sec: 1044.8
+  cache_miss_count: 2
+```
+
+S3 one-frame smoke:
+
+```bash
+luxquarry-allsky benchmark-object-staging \
+  --manifest runs/manifest_smoke_v2_s3/frame_manifest.parquet \
+  --out-dir runs/object_staging_bench_s3_smoke \
+  --cache-dir /tmp/luxquarry_object_staging_s3_smoke \
+  --concurrency 1 \
+  --limit 1 \
+  --cache-mode per-concurrency \
+  --require-s3
+```
+
+Result:
+
+```text
+input_rows: 1
+bytes_written: 71,637,120
+wall_sec: 4.651
+transferred_mib_per_sec: 14.7
+cache_miss_count: 1
+```
+
+S3 two-frame concurrency smoke:
+
+```bash
+luxquarry-allsky benchmark-object-staging \
+  --manifest runs/manifest_smoke_v2_s3/frame_manifest.parquet \
+  --out-dir runs/object_staging_bench_s3_concurrency_smoke \
+  --cache-dir /tmp/luxquarry_object_staging_s3_concurrency_smoke \
+  --concurrency 1,2 \
+  --limit 2 \
+  --cache-mode per-concurrency \
+  --require-s3
+```
+
+Result:
+
+```text
+input_rows: 2
+bytes per sweep: 143,274,240
+
+concurrency 1:
+  wall_sec: 11.233
+  transferred_mib_per_sec: 12.2
+  p95_stage_wall_sec: 7.257
+
+concurrency 2:
+  wall_sec: 13.320
+  transferred_mib_per_sec: 10.3
+  p95_stage_wall_sec: 13.167
+```
+
+Notes:
+
+- On this route, local staging is hundreds of MiB/sec and S3 staging is tens of
+  MiB/sec, so S3/object-store staging is a credible bottleneck before GPU
+  occupancy matters.
+- Concurrency 2 was slower than concurrency 1 for this tiny S3 smoke. That does
+  not prove concurrency is bad globally, but it proves we need to sweep staging
+  independently on each target environment instead of assuming more downloads
+  always help.
+- For EKS/V100-class runs, this benchmark should run per instance family and
+  placement before choosing worker prefetch width and task batch size.

@@ -55,6 +55,22 @@ The repeatable local sweep command is:
 
 ```bash
 cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky benchmark-object-staging \
+  --manifest runs/manifest_smoke_v2_s3/frame_manifest.parquet \
+  --out-dir runs/object_staging_bench_s3_concurrency_smoke \
+  --cache-dir /tmp/luxquarry_object_staging_s3_concurrency_smoke \
+  --concurrency 1,2,4,8 \
+  --limit 10 \
+  --cache-mode per-concurrency \
+  --require-s3
+```
+
+Run the staging-only benchmark before the worker sweep on each target machine or
+instance type. It isolates S3/object-store and local-cache throughput from FITS
+read, GPU photometry, and parquet write costs.
+
+```bash
+cd luxquarry_allsky_engine
 .venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
   --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
   --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \

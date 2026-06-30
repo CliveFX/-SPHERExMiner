@@ -62,6 +62,7 @@ from .spectra import (
     validate_retry_dedup_assembly,
     validate_shard_order_independent_assembly,
 )
+from .staging_benchmark import ObjectStagingBenchmarkConfig, benchmark_object_staging
 from .status import DispatchStatusConfig, write_dispatch_status_snapshot
 from .task_queue import (
     GpuWorkerServiceConfig,
@@ -136,6 +137,30 @@ def main(argv: list[str] | None = None) -> int:
     dispatch_sweep.add_argument("--continue-on-error", action="store_true")
     dispatch_sweep.add_argument("--worker-only", action="store_true")
     dispatch_sweep.set_defaults(func=cmd_run_dispatch_benchmark_sweep)
+
+    staging_benchmark = sub.add_parser(
+        "benchmark-object-staging",
+        help="Benchmark local/S3 object staging from a frame manifest without running photometry.",
+    )
+    staging_benchmark.add_argument("--manifest", type=Path, required=True)
+    staging_benchmark.add_argument("--out-dir", type=Path, required=True)
+    staging_benchmark.add_argument("--cache-dir", type=Path, required=True)
+    staging_benchmark.add_argument("--concurrency", default="1,2,4")
+    staging_benchmark.add_argument("--limit", type=int)
+    staging_benchmark.add_argument("--source-column", default="path")
+    staging_benchmark.add_argument("--s3-region", default="us-east-1")
+    staging_benchmark.add_argument(
+        "--cache-mode",
+        choices=["shared", "per-concurrency"],
+        default="shared",
+        help="shared reuses one cache across all sweeps; per-concurrency isolates cache dirs.",
+    )
+    staging_benchmark.add_argument(
+        "--require-s3",
+        action="store_true",
+        help="Drop non-s3:// rows before running the benchmark.",
+    )
+    staging_benchmark.set_defaults(func=cmd_benchmark_object_staging)
 
     manifest = sub.add_parser("build-manifest", help="Scan FITS frames and write a frame manifest parquet.")
     manifest.add_argument("--input-root", type=Path, action="append", required=True)
@@ -886,6 +911,24 @@ def cmd_run_dispatch_benchmark_sweep(args: argparse.Namespace) -> int:
             status_snapshot_interval_sec=args.status_snapshot_interval_sec,
             continue_on_error=args.continue_on_error,
             worker_only=args.worker_only,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_benchmark_object_staging(args: argparse.Namespace) -> int:
+    summary = benchmark_object_staging(
+        ObjectStagingBenchmarkConfig(
+            manifest_path=args.manifest,
+            output_dir=args.out_dir,
+            cache_dir=args.cache_dir,
+            concurrency_values=_parse_int_tuple(args.concurrency, name="concurrency"),
+            limit=args.limit,
+            source_column=args.source_column,
+            s3_region=args.s3_region,
+            cache_mode=args.cache_mode,
+            require_s3=args.require_s3,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

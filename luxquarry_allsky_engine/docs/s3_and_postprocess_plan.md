@@ -150,6 +150,33 @@ Implementation options to benchmark:
 - KvikIO only after local NVMe staging is proven, because FITS decompression and
   Astropy file access may dominate before GPU direct storage matters.
 
+Current standalone staging benchmark:
+
+```bash
+luxquarry-allsky benchmark-object-staging \
+  --manifest runs/manifest_smoke_v2_s3/frame_manifest.parquet \
+  --out-dir runs/object_staging_bench_s3_concurrency_smoke \
+  --cache-dir /tmp/luxquarry_object_staging_s3_concurrency_smoke \
+  --concurrency 1,2 \
+  --limit 2 \
+  --cache-mode per-concurrency \
+  --require-s3
+```
+
+The command reads a frame manifest, stages the configured source column through
+the same `stage_input_file()` path used by workers, and writes:
+
+```text
+object_staging_summary.json
+object_staging_results.parquet
+```
+
+Use it before full photometry runs to separate object-store/network/cache
+behavior from FITS decompression, GPU kernels, and parquet writes. `shared`
+cache mode measures warm-cache behavior across sweeps; `per-concurrency` keeps
+each concurrency value in a separate cache subdirectory so cold-ish comparisons
+do not immediately reuse objects from the prior sweep.
+
 ## Assembly and Campaign Postprocess
 
 Assembly must be shard-order-independent. Workers may finish out of order, retry
