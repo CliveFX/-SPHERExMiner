@@ -271,6 +271,13 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                 "measurement_rows": int(worker_summary.get("measurement_rows") or 0),
                 "ok_measurement_rows": int(worker_summary.get("ok_measurement_rows") or 0),
                 "failed_frames": int(worker_summary.get("failed_frames") or 0),
+                "resident_calibration_count": int(worker_summary.get("resident_calibration_count") or 0),
+                "calibration_cache_hits": int(worker_summary.get("calibration_cache_hits") or 0),
+                "calibration_cache_misses": int(worker_summary.get("calibration_cache_misses") or 0),
+                "calibration_load_wall_sec": float(worker_summary.get("calibration_load_wall_sec") or 0.0),
+                "batch_calibration_cache_hits": int(worker_summary.get("batch_calibration_cache_hits") or 0),
+                "batch_calibration_cache_misses": int(worker_summary.get("batch_calibration_cache_misses") or 0),
+                "batch_calibration_load_wall_sec": float(worker_summary.get("batch_calibration_load_wall_sec") or 0.0),
                 "task_input_read_wall_sec": float(task.get("task_input_read_wall_sec") or 0.0),
                 "task_input_select_wall_sec": float(task.get("task_input_select_wall_sec") or 0.0),
                 "task_wall_sec": float(task.get("task_wall_sec") or 0.0),
@@ -295,6 +302,10 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                     "rows": int(shard.get("rows") or 0),
                     "ok_rows": int(shard.get("ok_rows") or 0),
                     "frame_count": int(shard.get("frame_count") or 0),
+                    "bytes": int(shard.get("bytes") or 0),
+                    "column_profile": shard.get("column_profile"),
+                    "column_count": int(shard.get("column_count") or 0),
+                    "parquet_compression": shard.get("parquet_compression"),
                     "frame_group_ids": ",".join(str(v) for v in shard.get("frame_group_ids") or []),
                     "image_ids": ",".join(str(v) for v in shard.get("image_ids") or []),
                     "write_wall_sec": float(shard.get("write_wall_sec") or 0.0),
@@ -315,6 +326,13 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                 "measurement_rows": 0,
                 "ok_measurement_rows": 0,
                 "failed_frames": 0,
+                "resident_calibration_count": 0,
+                "calibration_cache_hits": 0,
+                "calibration_cache_misses": 0,
+                "calibration_load_wall_sec": 0.0,
+                "batch_calibration_cache_hits": 0,
+                "batch_calibration_cache_misses": 0,
+                "batch_calibration_load_wall_sec": 0.0,
                 "task_input_read_wall_sec": 0.0,
                 "task_input_select_wall_sec": 0.0,
                 "task_wall_sec": float(task.get("task_wall_sec") or 0.0),
@@ -349,6 +367,12 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
     kernel_wall_total = sum(float(row["kernel_wall_sec"]) for row in frame_rows)
     frame_compute_wall_total = sum(float(row["frame_compute_wall_sec"]) for row in frame_rows)
     completed_frame_count = sum(int(row["completed_frames"]) for row in task_rows)
+    complete_worker_rows = [row for row in task_rows if row["status"] == "complete"]
+    worker_payload_rows = _worker_payload_rows(complete_worker_rows)
+    worker_payload_wall_values = [float(row["task_wall_sec"]) for row in worker_payload_rows]
+    worker_payload_sum_wall = sum(worker_payload_wall_values)
+    worker_payload_max_wall = max(worker_payload_wall_values, default=0.0)
+    measurement_rows = sum(int(row["measurement_rows"]) for row in task_rows)
     summary = {
         "created_utc": _utc_now(),
         "queue_dir": str(config.queue_dir),
@@ -358,9 +382,16 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
         "complete_tasks": complete_tasks,
         "failed_tasks": failed_tasks,
         "completed_frames": completed_frame_count,
-        "measurement_rows": sum(int(row["measurement_rows"]) for row in task_rows),
+        "measurement_rows": measurement_rows,
         "ok_measurement_rows": sum(int(row["ok_measurement_rows"]) for row in task_rows),
         "failed_frames": sum(int(row["failed_frames"]) for row in task_rows),
+        "calibration_cache_hits": sum(int(row.get("batch_calibration_cache_hits") or 0) for row in task_rows),
+        "calibration_cache_misses": sum(int(row.get("batch_calibration_cache_misses") or 0) for row in task_rows),
+        "calibration_load_wall_sec": sum(float(row.get("batch_calibration_load_wall_sec") or 0.0) for row in task_rows),
+        "max_worker_resident_calibration_count": max(
+            (int(row.get("resident_calibration_count") or 0) for row in task_rows),
+            default=0,
+        ),
         "frame_timing_rows": len(frame_rows),
         "payload_wait_wall_sec": payload_wait_total,
         "payload_wait_mean_wall_sec": payload_wait_total / completed_frame_count if completed_frame_count else 0.0,
@@ -370,8 +401,26 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
         "kernel_wall_sec": kernel_wall_total,
         "frame_compute_wall_sec": frame_compute_wall_total,
         "shard_count": len(shard_rows),
+        "shard_total_bytes": sum(int(row.get("bytes") or 0) for row in shard_rows),
+        "shard_bytes_per_measurement": (
+            sum(int(row.get("bytes") or 0) for row in shard_rows) / measurement_rows if measurement_rows else 0.0
+        ),
         "missing_shards": missing_shards,
         "worker_sum_wall_sec": sum(float(row["task_wall_sec"]) for row in task_rows),
+        "worker_payload_rows": worker_payload_rows,
+        "worker_payload_sum_wall_sec": worker_payload_sum_wall,
+        "worker_payload_max_wall_sec": worker_payload_max_wall,
+        "worker_parallel_efficiency": (
+            worker_payload_sum_wall / (len(worker_payload_rows) * worker_payload_max_wall)
+            if worker_payload_rows and worker_payload_max_wall > 0
+            else 0.0
+        ),
+        "measurements_per_sec_worker_payload": (
+            measurement_rows / worker_payload_max_wall if worker_payload_max_wall > 0 else 0.0
+        ),
+        "frames_per_sec_worker_payload": (
+            completed_frame_count / worker_payload_max_wall if worker_payload_max_wall > 0 else 0.0
+        ),
         "collect_wall_sec": time.perf_counter() - started,
         "shard_manifest_path": str(shard_manifest_path),
         "task_table_path": str(task_table_path),
@@ -381,6 +430,44 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
     }
     _write_json_atomic(config.output_path, summary)
     return summary
+
+
+def _worker_payload_rows(task_rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in task_rows:
+        worker_id = str(row.get("worker_id") or "unknown")
+        item = grouped.setdefault(
+            worker_id,
+            {
+                "worker_id": worker_id,
+                "task_count": 0,
+                "completed_frames": 0,
+                "measurement_rows": 0,
+                "ok_measurement_rows": 0,
+                "task_wall_sec": 0.0,
+                "fits_read_wall_sec": 0.0,
+                "frame_compute_wall_sec": 0.0,
+                "calibration_cache_hits": 0,
+                "calibration_cache_misses": 0,
+                "calibration_load_wall_sec": 0.0,
+                "resident_calibration_count": 0,
+            },
+        )
+        item["task_count"] += 1
+        item["completed_frames"] += int(row.get("completed_frames") or 0)
+        item["measurement_rows"] += int(row.get("measurement_rows") or 0)
+        item["ok_measurement_rows"] += int(row.get("ok_measurement_rows") or 0)
+        item["task_wall_sec"] += float(row.get("task_wall_sec") or 0.0)
+        item["fits_read_wall_sec"] += float(row.get("fits_read_wall_sec") or 0.0)
+        item["frame_compute_wall_sec"] += float(row.get("frame_compute_wall_sec") or 0.0)
+        item["calibration_cache_hits"] += int(row.get("batch_calibration_cache_hits") or 0)
+        item["calibration_cache_misses"] += int(row.get("batch_calibration_cache_misses") or 0)
+        item["calibration_load_wall_sec"] += float(row.get("batch_calibration_load_wall_sec") or 0.0)
+        item["resident_calibration_count"] = max(
+            int(item["resident_calibration_count"]),
+            int(row.get("resident_calibration_count") or 0),
+        )
+    return sorted(grouped.values(), key=lambda item: item["worker_id"])
 
 
 def _claim_next_task(queue_dir: Path, worker_id: str) -> tuple[Path, dict[str, Any]] | None:
@@ -457,6 +544,13 @@ def _compact_worker_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "total_wall_sec",
         "task_input_read_wall_sec",
         "task_input_select_wall_sec",
+        "resident_calibration_count",
+        "calibration_cache_hits",
+        "calibration_cache_misses",
+        "calibration_load_wall_sec",
+        "batch_calibration_cache_hits",
+        "batch_calibration_cache_misses",
+        "batch_calibration_load_wall_sec",
         "async_shard_write_wait_wall_sec",
         "queued_shard_writes",
     }

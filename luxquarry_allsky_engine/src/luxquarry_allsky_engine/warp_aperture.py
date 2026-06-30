@@ -65,6 +65,16 @@ class WarpFrameCalibrationDevice:
     device: str
 
 
+@dataclass(frozen=True)
+class WarpFrameDataDevice:
+    image: object
+    variance: object
+    flags: object
+    width: int
+    height: int
+    device: str
+
+
 if wp is not None:
 
     @wp.kernel
@@ -572,11 +582,37 @@ def upload_frame_calibration(
     )
 
 
+def upload_frame_data(
+    *,
+    image: np.ndarray,
+    variance: np.ndarray | None,
+    flags: np.ndarray | None,
+    device: str = "cuda:0",
+) -> WarpFrameDataDevice:
+    if wp is None:
+        raise RuntimeError(f"Warp is not available: {_WARP_IMPORT_ERROR}")
+    wp.init()
+    if variance is None:
+        variance = np.zeros_like(image, dtype=np.float32)
+    if flags is None:
+        flags = np.zeros_like(image, dtype=np.uint32)
+    height, width = image.shape
+    return WarpFrameDataDevice(
+        image=wp.array(_flat_float32(image), dtype=wp.float32, device=device),
+        variance=wp.array(_flat_float32(np.nan_to_num(variance, nan=0.0)), dtype=wp.float32, device=device),
+        flags=wp.array(_flat_uint32(flags), dtype=wp.uint32, device=device),
+        width=int(width),
+        height=int(height),
+        device=device,
+    )
+
+
 def run_warp_frame_aperture_resident_cupy(
     *,
     image: np.ndarray,
     variance: np.ndarray | None,
     flags: np.ndarray | None,
+    frame_data: WarpFrameDataDevice | None = None,
     calibration: WarpFrameCalibrationDevice,
     image_to_ujy_arcsec2: float,
     x_zero_based: np.ndarray,
@@ -597,22 +633,15 @@ def run_warp_frame_aperture_resident_cupy(
     x = np.asarray(x_zero_based, dtype=np.float32)
     y = np.asarray(y_zero_based, dtype=np.float32)
     n = len(x)
-    if variance is None:
-        variance = np.zeros_like(image, dtype=np.float32)
-    if flags is None:
-        flags = np.zeros_like(image, dtype=np.uint32)
-    height, width = image.shape
+    if frame_data is None:
+        frame_data = upload_frame_data(image=image, variance=variance, flags=flags, device=device)
+    if frame_data.device != device:
+        raise ValueError(f"Frame data lives on {frame_data.device}, requested {device}")
+    height, width = frame_data.height, frame_data.width
     if width != calibration.width or height != calibration.height:
         raise ValueError(f"Frame shape {(height, width)} does not match calibration {(calibration.height, calibration.width)}")
     bad_mask_value = sum(1 << int(bit) for bit in fatal_flag_bits)
 
-    image_dev = wp.array(_flat_float32(image), dtype=wp.float32, device=device)
-    variance_dev = wp.array(
-        _flat_float32(np.nan_to_num(variance, nan=0.0)),
-        dtype=wp.float32,
-        device=device,
-    )
-    flags_dev = wp.array(_flat_uint32(flags), dtype=wp.uint32, device=device)
     x_dev = wp.array(x, dtype=wp.float32, device=device)
     y_dev = wp.array(y, dtype=wp.float32, device=device)
     out_flux = wp.empty(n, dtype=wp.float32, device=device)
@@ -629,9 +658,9 @@ def run_warp_frame_aperture_resident_cupy(
         _frame_aperture_kernel,
         dim=n,
         inputs=[
-            image_dev,
-            variance_dev,
-            flags_dev,
+            frame_data.image,
+            frame_data.variance,
+            frame_data.flags,
             calibration.sapm,
             calibration.cwave,
             calibration.cband,

@@ -250,6 +250,386 @@ Notes:
 - The measured bottleneck has shifted to FITS reading and table/shard overhead;
   the aperture kernel is no longer the dominant cost on this smoke set.
 
+## 2026-06-29: GPU PSF Candidate-Grid Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_psf_gpu_offsets_profiled_smoke10 \
+  --run-id dispatch_psf_gpu_offsets_profiled_smoke10 \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 10 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 0 \
+  --worker-only \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
+  --status-snapshot-interval-sec 0
+```
+
+Result:
+
+```text
+frame_count: 10
+measurement_rows: 2,770
+psf_measurement_rows: 2,770
+ok_psf_rows: 2,770
+psf_candidate_count: 69,250
+total_wall_sec: 4.836
+worker_max_wall_sec: 2.013
+measurements_per_sec_worker_payload: 1,375.8
+psf_candidates_per_sec_device_submit_sync: 848,659.8
+```
+
+Profile rows:
+
+```text
+fits_read_wall_sec: 0.896
+frame_upload_wall_sec: 0.240
+aperture_kernel_wall_sec: 0.0277
+psf_candidate_grid_wall_sec: 0.000619
+psf_kernel_wall_sec: 0.449
+psf_device_submit_sync_wall_sec: 0.0816
+psf_spline_coeff_wall_sec: 0.141
+psf_upload_wall_sec: 0.00761
+psf_gather_wall_sec: 0.0568
+write_wall_sec: 0.309
+```
+
+Notes:
+
+- PSF candidate coordinates are no longer expanded into a full CPU-side
+  target-by-grid array. The worker uploads target pixel arrays and the small
+  subpixel offset bank; the Warp kernels compute candidate coordinates by
+  indexing `(target_index, offset_index)`.
+- A direct one-frame correctness check against the previous shared-frame PSF
+  implementation matched key aperture and PSF columns exactly for the smoke
+  frame: `psf_flux_uJy`, `psf_flux_unc_uJy`, `psf_x_fit`, `psf_y_fit`,
+  `psf_fit_offset_pix`, `psf_grid_best_score`, and `aperture_flux_uJy`.
+- On this small workload, the GPU-offset change is a modest end-to-end payload
+  gain because FITS read, PSF spline coefficient setup, frame upload, PSF
+  kernel/gather, and shard writes dominate. It does remove candidate-grid
+  setup as a CPU bottleneck: `psf_candidate_grid_wall_sec` is about 0.6 ms
+  total across 10 frames.
+
+## 2026-06-29: Dense Galactic-Plane PSF Occupancy Smoke
+
+The sparse smoke set had only about 277 selected targets per frame, which
+underfed the PSF grid kernels. To test the GPU work shape under a more realistic
+dense field, we built a full local QR2 frame manifest and selected the 20
+available frames closest to the Galactic center. The local QR2 cache does not
+hit the Galactic center directly; the nearest frames are about 15.5 degrees
+away, around RA 269-270 deg and Dec -13.7 deg.
+
+Manifest build:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky build-manifest \
+  --input-root /mnt/niroseti/spherex_cache/raw/qr2/level2 \
+  --out runs/manifest_qr2_local_all/frame_manifest.parquet \
+  --campaign-id manifest_qr2_local_all
+```
+
+Result:
+
+```text
+frame_count: 8,035
+fits_total_bytes: 575,589,729,600
+discover_fits: 1.384 sec
+read_headers: 258.133 sec
+write_manifest: 0.029 sec
+total_wall_sec: 259.578 sec
+```
+
+Notes:
+
+- Header/WCS manifest generation is a setup-stage cost, not a hot worker-path
+  cost. It should be prebuilt and reused for distributed runs.
+- The nearest-20 Galactic-plane manifest was written to
+  `runs/manifest_galactic_core_nearest20/frame_manifest.parquet`.
+
+Catalog and projection:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky build-frame-targets \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --out runs/frame_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets.parquet \
+  --catalog all \
+  --gaia-g-min 11 \
+  --gaia-g-max 16 \
+  --twomass-mag-min 11 \
+  --twomass-mag-max 16 \
+  --max-sources-per-frame 20000
+
+.venv/bin/luxquarry-allsky project-frame-targets \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --frame-targets runs/frame_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets.parquet \
+  --out runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet
+```
+
+Result:
+
+```text
+frame_count: 20
+frame_target_rows: 400,000
+unique_target_count: 32,648
+in_frame_projected_rows: 360,394
+typical selected rows per frame: 17,000-18,000
+catalog_query_wall_sec: 36.253
+projection_wall_sec: 1.741
+```
+
+PSF worker-only benchmark:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_psf_gc_dense_real_smoke10 \
+  --run-id dispatch_psf_gc_dense_real_smoke10 \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 10 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 0 \
+  --worker-only \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
+  --status-snapshot-interval-sec 0
+```
+
+Result:
+
+```text
+measurement_rows: 178,705
+ok_psf_rows: 176,860
+psf_candidate_count: 4,467,625
+worker_max_wall_sec: 3.621
+measurements_per_sec_worker_payload: 49,349
+psf_candidates_per_sec_device_submit_sync: 6,843,324
+psf_candidate_grid_wall_sec: 0.000694
+```
+
+Sparse vs dense comparison:
+
+```text
+sparse10:    2,770 measurements,    69,250 PSF candidates,  1,376 measurements/sec payload, 0.85M PSF candidates/sec device
+gc_dense2:  35,717 measurements,   892,925 PSF candidates,  7,926 measurements/sec payload, 6.78M PSF candidates/sec device
+gc_dense5:  89,211 measurements, 2,230,275 PSF candidates, 37,712 measurements/sec payload, 6.88M PSF candidates/sec device
+gc_dense10:178,705 measurements, 4,467,625 PSF candidates, 49,349 measurements/sec payload, 6.84M PSF candidates/sec device
+```
+
+Dense 10-frame profile:
+
+```text
+fits_read_wall_sec: 1.228
+frame_upload_wall_sec: 0.153
+aperture_kernel_wall_sec: 0.0310
+psf_candidate_grid_wall_sec: 0.000694
+psf_kernel_wall_sec: 1.040
+psf_device_submit_sync_wall_sec: 0.653
+psf_spline_coeff_wall_sec: 0.148
+psf_upload_wall_sec: 0.00520
+psf_gather_wall_sec: 0.0610
+write_wall_sec: 0.690
+```
+
+Notes:
+
+- The previous sparse PSF benchmark was strongly underfeeding the GPU. Dense
+  real catalog fields moved device-side PSF candidate throughput from about
+  0.85M candidates/sec to about 6.8M candidates/sec.
+- Aperture work is effectively free compared with PSF and I/O at this density:
+  178,705 aperture measurements took about 31 ms of kernel time.
+- The next measured hot paths are FITS read, PSF kernel work, and parquet shard
+  writes. Candidate-grid setup remains negligible.
+
+## 2026-06-29: Dense PSF Multi-GPU Dispatch Smoke
+
+After adding worker balance metrics to dispatch aggregation, the same dense
+Galactic-plane-adjacent workload was run as an 18-frame balanced comparison on
+one GPU and three GPUs.
+
+Commands:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_psf_gc_dense_real_1gpu18 \
+  --run-id dispatch_psf_gc_dense_real_1gpu18 \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 18 \
+  --shard-batch-frames 6 \
+  --prefetch-frames 0 \
+  --worker-only \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline
+
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_psf_gc_dense_real_3gpu18 \
+  --run-id dispatch_psf_gc_dense_real_3gpu18 \
+  --devices cuda:0,cuda:1,cuda:2 \
+  --workers-per-device 1 \
+  --limit-frames 18 \
+  --shard-batch-frames 6 \
+  --prefetch-frames 0 \
+  --worker-only \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline
+```
+
+Same-workload comparison:
+
+```text
+1gpu18: 320,768 measurements, payload 5.094 sec, total 8.634 sec, payload throughput 62,969 measurements/sec
+3gpu18: 320,768 measurements, payload 3.351 sec, total 7.435 sec, payload throughput 95,711 measurements/sec
+
+payload speedup: 1.52x
+end-to-end speedup: 1.16x
+3-GPU worker parallel efficiency: 95.7%
+3-GPU worker wall skew ratio: 1.074
+```
+
+3-GPU worker split:
+
+```text
+cuda:0: 6 frames, 106,248 rows, 3.153 sec wall, 0.969 sec FITS read, 0.745 sec PSF
+cuda:1: 6 frames, 107,214 rows, 3.122 sec wall, 1.005 sec FITS read, 0.737 sec PSF
+cuda:2: 6 frames, 107,306 rows, 3.351 sec wall, 1.044 sec FITS read, 0.741 sec PSF
+```
+
+Notes:
+
+- The frame modulo partitioning and materialized worker inputs balance cleanly
+  across three GPUs on this workload.
+- GPU math throughput remains stable: PSF device submit/sync is about
+  6.4M-6.7M candidates/sec.
+- Scaling is not linear because concurrent FITS reads and parquet shard writes
+  become a larger fraction of wall time. The next allsky-engine optimization
+  should target local object staging/NVMe cache, asynchronous write pressure,
+  and larger worker batches before further PSF kernel tuning.
+
+## 2026-06-29: Dense PSF Local Cache and Prefetch Smoke
+
+The 18-frame, 3-GPU dense workload was rerun with critical-path worker metrics
+and with local FITS staging/prefetch variants.
+
+Commands used the same inputs as the previous section and varied only:
+
+```text
+uncached_p0:             --prefetch-frames 0
+prefetch2_nocache:       --prefetch-frames 2
+cache_prefetch2_cold:    --prefetch-frames 2 --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2
+cache_prefetch2_warm:    repeat cache_prefetch2_cold with the same populated cache dir
+```
+
+Comparison:
+
+```text
+uncached_p0:          payload 2.915 sec, total 7.182 sec, 110,046 measurements/sec payload
+prefetch2_nocache:    payload 2.791 sec, total 7.192 sec, 114,942 measurements/sec payload
+cache_prefetch2_cold: payload 2.829 sec, total 7.195 sec, 113,372 measurements/sec payload
+cache_prefetch2_warm: payload 2.177 sec, total 6.446 sec, 147,362 measurements/sec payload
+
+warm-cache payload speedup vs uncached: 1.34x
+warm-cache end-to-end speedup vs uncached: 1.11x
+```
+
+Critical-path max-worker timings:
+
+```text
+                 max_payload_wait  max_staging  max_fits_read  max_psf_kernel  max_write_wait  max_shard_write
+uncached_p0              0.726        0.000         0.726          0.730           0.473           0.479
+prefetch2_nocache        0.285        0.000         1.348          0.795           0.496           0.501
+cache_prefetch2_cold     0.382        1.765         0.137          0.780           0.466           0.473
+cache_prefetch2_warm     0.032        0.024         0.144          0.777           0.513           0.519
+```
+
+Notes:
+
+- Prefetch reduces worker payload wait, but without a populated local cache it
+  mainly moves NAS read work off the critical wait path rather than reducing
+  total I/O work.
+- Warm local cache plus prefetch is the best measured shape so far. It nearly
+  removes payload wait and FITS-read critical-path cost.
+- After warm cache/prefetch, the longest worker-path stages are PSF kernel work
+  and async shard-write wait. That makes write combining/output strategy the
+  next measured systems bottleneck.
+- The new benchmark schema records both summed stage timings and critical-path
+  max-worker timings. For multi-GPU runs, use max-worker timings to reason
+  about wall time; summed timings represent total work across workers.
+
+## 2026-06-29: Dense PSF No-Write Bound
+
+To isolate parquet shard write overhead from photometry and FITS staging, the
+warm local-cache/prefetch benchmark was rerun with:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_psf_gc_dense_real_3gpu18_cache_prefetch2_discard_warm \
+  --run-id dispatch_psf_gc_dense_real_3gpu18_cache_prefetch2_discard_warm \
+  --devices cuda:0,cuda:1,cuda:2 \
+  --workers-per-device 1 \
+  --limit-frames 18 \
+  --shard-batch-frames 6 \
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2 \
+  --worker-only \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
+  --discard-measurement-shards
+```
+
+`--discard-measurement-shards` is a benchmark-only mode. It counts measurement
+rows and keeps normal photometry execution, but drops frame results before
+parquet shard flush. Do not use it for science runs or finalize runs.
+
+Comparison:
+
+```text
+warm_write:   payload 2.177 sec, total 6.446 sec, 147,362 measurements/sec payload
+warm_discard: payload 1.659 sec, total 5.931 sec, 193,371 measurements/sec payload
+
+payload speedup without writes: 1.31x
+end-to-end speedup without writes: 1.09x
+critical-path write cost: ~0.518 sec
+```
+
+Critical-path max-worker timings:
+
+```text
+              max_psf_kernel  max_write_wait  max_shard_write  max_payload_wait
+warm_write        0.777          0.513           0.519             0.032
+warm_discard      0.761          0.000           0.000             0.028
+```
+
+Notes:
+
+- The no-write run establishes a practical upper bound for the current worker
+  shape on this workload: about 193k measurements/sec payload across 3 GPUs.
+- Parquet shard output is the largest removable critical-path cost after warm
+  local-cache/prefetch.
+- Next production work should preserve durable output while reducing this cost:
+  larger shard batches, fewer/wider shards, per-node writer processes, KvikIO
+  evaluation on local NVMe, or writing compact column subsets for first-pass
+  mining.
+
 ## 2026-06-29: Batched Shards and FITS Prefetch
 
 Command:
@@ -2615,3 +2995,772 @@ Notes:
   always help.
 - For EKS/V100-class runs, this benchmark should run per instance family and
   placement before choosing worker prefetch width and task batch size.
+
+## 2026-06-29: Persistent GPU PSF Grid Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-persistent-gpu-worker \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/persistent_gpu_worker_psf_smoke10 \
+  --run-id persistent_psf_smoke10 \
+  --device cuda:0 \
+  --limit-frames 10 \
+  --batch-table-assembly \
+  --shard-batch-frames 5 \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline
+```
+
+Result:
+
+```text
+frame_count: 10
+measurement_rows: 2,770
+ok_measurement_rows: 2,766
+psf_measurement_rows: 2,770
+ok_psf_rows: 2,770
+failed_frames: 0
+total_wall_sec: 2.325
+measurements_per_sec: 1,191
+```
+
+PSF timing summary:
+
+```text
+psf_grid_offsets: 25
+psf_candidate_count_total: ~69,250
+psf_device_submit_sync_wall_sec_sum: 0.0787
+psf_candidates_per_gpu_submit_sync_sec: ~880,000
+psf_kernel_wall_sec_sum: 0.6348
+psf_spline_coeff_wall_sec_sum: 0.1501
+psf_upload_wall_sec_sum: 0.1658
+fits_read_wall_sec_sum: 0.9533
+```
+
+Notes:
+
+- The allsky worker now supports GPU local-grid PSF photometry via
+  `--enable-psf`.
+- Aperture geometry is explicit at both run level and row level:
+  `aperture_radius_pix`, `annulus_inner_pix`, `annulus_outer_pix`, and
+  `edge_margin_pix` are written to `run_summary.json` and every measurement
+  row. `plan-gpu-dispatch` and `run-local-dispatch` forward these settings to
+  generated workers.
+- The PSF path is candidate-parallel: each target expands into a local grid of
+  shifted PSF candidates, each candidate is fit independently on GPU, then a GPU
+  reduction picks the best candidate per target.
+- The default production/correctness mode is `--psf-kernel-build-mode
+  gpu_spline`, which CPU-builds cubic spline coefficients from the FITS PSF cube
+  and samples shifted PSFs on GPU.
+- This smoke is intentionally tiny, with only ~250-300 selected targets per
+  frame. It underfeeds high-end GPUs. The device math is not the dominant cost;
+  FITS read, upload, spline setup, and shard work dominate the wall clock.
+- For A100/H100/B300-class nodes, the next benchmark must use large per-frame
+  source counts and/or multiple queued frame tasks per GPU so occupancy reflects
+  the intended survey workload.
+
+## 2026-06-29: PSF Dispatch Benchmark Harness Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_psf_worker_only_smoke10_writefix \
+  --run-id dispatch_psf_worker_only_smoke10_writefix \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 10 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 0 \
+  --worker-only \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
+  --status-snapshot-interval-sec 0
+```
+
+Result:
+
+```text
+completed_frames: 10
+measurement_rows: 2,770
+psf_measurement_rows: 2,770
+ok_psf_rows: 2,770
+psf_candidate_count: 69,250
+psf_candidates_per_sec_device_submit_sync: 879,484
+measurements_per_sec_worker_payload: 1,251
+worker_max_wall_sec: 2.214
+total_wall_sec: 5.086
+```
+
+Profile rows above 5% total wall:
+
+```text
+worker_phase: 98.4%
+fits_read: 17.5%
+psf_kernel_total: 12.4%
+write_measurement_shards: 6.0%
+aperture_kernel: 5.5%
+```
+
+Notes:
+
+- The dispatch benchmark sweep now accepts `--enable-psf` and PSF grid options.
+- `collect-dispatch-run` aggregates PSF rows, candidate counts, and PSF timing
+  fields from worker `frame_timings`.
+- `sweep_results.parquet` and `perf_summary.json` now include PSF occupancy
+  metrics, including `psf_candidates_per_sec_device_submit_sync`.
+- `profile_summary.parquet` emits separate rows for FITS read, aperture kernel,
+  PSF total, PSF device submit/sync, PSF spline setup, PSF upload, PSF gather,
+  shard writes, and collect.
+
+## 2026-06-29: Shared GPU Frame Buffer Smoke
+
+Change:
+
+```text
+Before:
+  aperture uploaded IMAGE/VARIANCE/FLAGS
+  PSF uploaded IMAGE/VARIANCE/FLAGS again
+
+After:
+  worker uploads IMAGE/VARIANCE/FLAGS once as a resident frame object
+  aperture and PSF both consume that frame object
+```
+
+Benchmark command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_psf_worker_only_shared_frame_smoke10 \
+  --run-id dispatch_psf_worker_only_shared_frame_smoke10 \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 10 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 0 \
+  --worker-only \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
+  --status-snapshot-interval-sec 0
+```
+
+Before/after against the previous PSF benchmark smoke:
+
+```text
+worker_max_wall_sec: 2.214 -> 2.037  (-8.0%)
+measurements_per_sec_worker_payload: 1,251 -> 1,360  (+8.7%)
+psf_kernel_wall_sec: 0.632 -> 0.471  (-25.6%)
+psf_upload_wall_sec: 0.169 -> 0.009  (-94.6%)
+aperture_kernel_wall_sec: 0.281 -> 0.029  (-89.9%)
+frame_upload_wall_sec: 0.248  (new shared upload metric)
+psf_candidates_per_sec_device_submit_sync: ~879k -> ~882k
+```
+
+Notes:
+
+- `frame_upload_wall_sec` now records the one shared frame upload.
+- `aperture_kernel_wall_sec` now reflects mostly aperture device work and target
+  array setup, not raw frame upload.
+- `psf_upload_wall_sec` now reflects PSF-specific uploads only.
+- The device math throughput is effectively unchanged; the win is less duplicate
+  transfer/setup work around the kernels.
+
+## 2026-06-29/30: Dense Galactic-Core PSF Throughput and Output Bounds
+
+Workload:
+
+```text
+manifest: runs/manifest_galactic_core_nearest20/frame_manifest.parquet
+projected targets: runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet
+frames: 18
+devices: cuda:0,cuda:1,cuda:2
+workers/device: 1
+prefetch: 2
+shard_batch_frames: 6
+photometry: aperture + GPU local-grid PSF
+PSF kernel build: gpu_spline
+```
+
+Warm local-cache durable-output run:
+
+```text
+measurement_rows: 320,768
+worker_max_wall_sec: 2.233
+measurements_per_sec_worker_payload: 143,661
+total_wall_sec: 6.700
+write_wall_sec summed across workers: 1.442
+max_worker_shard_write_wall_sec: 0.485
+max_worker_async_shard_write_wait_wall_sec: 0.478
+shard_total_bytes: 33,305,757
+shard_bytes_per_measurement: 103.83
+```
+
+No-write bound on the same warm workload:
+
+```text
+measurement_rows: 320,768
+worker_max_wall_sec: 1.659
+measurements_per_sec_worker_payload: 193,371
+total_wall_sec: 5.931
+write_wall_sec: 0.000
+```
+
+Interpretation:
+
+- The GPU math path is no longer the only visible bottleneck. With dense real
+  fields, PSF candidate math reaches about 6.7M candidates/sec in the device
+  submit/sync section.
+- Durable output costs about 0.5 sec on the critical worker path for this
+  18-frame test. That is large enough to matter for cloud GPU economics.
+- `--discard-measurement-shards` is a benchmark-only upper bound. It must not be
+  used for science output because spectra assembly and candidate review require
+  durable per-measurement rows.
+
+Compact output profile:
+
+```text
+--measurement-column-profile compact
+```
+
+The first compact 18-frame run was not materially faster:
+
+```text
+full profile payload:    2.233 sec, 143,661 measurements/sec, 103.83 bytes/row
+compact profile payload: 2.240 sec, 143,225 measurements/sec, 103.70 bytes/row
+```
+
+So compact output is not a write-throughput fix by itself on this workload. It
+is still useful as a schema-control mechanism.
+
+A follow-up compact smoke was patched and verified to preserve per-point audit
+provenance:
+
+```text
+rows: 35,717
+columns: 53
+kept: frame_group_id, image_id, fits_path, detector, release
+kept: aperture_radius_pix, annulus_inner_pix, annulus_outer_pix, edge_margin_pix
+kept: wavelength_source, wavelength_calibration_file, sapm_file
+kept: cwave_um, cband_um, flags_summary
+kept: aperture_flux_uJy, aperture_flux_unc_uJy
+kept: psf_flux_uJy, psf_flux_unc_uJy, PSF fit diagnostics
+dropped: local_fits_path
+```
+
+`local_fits_path` is intentionally omitted from compact output because it is an
+ephemeral local-cache/staging path. The durable provenance key is `fits_path`,
+plus `frame_group_id` and `image_id`.
+
+Next performance move:
+
+```text
+keep workers alive
+feed them frame-batch tasks
+write wider/fewer shards
+evaluate NVMe/KvikIO or a dedicated writer path
+```
+
+Process launch and output draining still consume enough wall time that small
+runs are not representative of steady-state cloud throughput.
+
+## 2026-06-29/30: Task-Queue Worker Service Smoke
+
+Purpose:
+
+```text
+Verify the persistent worker-service path, not just one-shot dispatch.
+```
+
+Queue command:
+
+```bash
+luxquarry_allsky_engine/.venv/bin/luxquarry-allsky write-task-queue \
+  --manifest luxquarry_allsky_engine/runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets luxquarry_allsky_engine/runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir luxquarry_allsky_engine/runs/task_queue_gc_dense_smoke_verify \
+  --campaign-id task_queue_gc_dense_smoke_verify \
+  --frames-per-task 2 \
+  --limit-frames 4
+```
+
+Queue result:
+
+```text
+frame_count: 4
+task_count: 2
+projected_target_rows: 400,000 source rows
+task projected rows: 40,000 per task
+```
+
+Worker command:
+
+```bash
+luxquarry_allsky_engine/.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir luxquarry_allsky_engine/runs/task_queue_gc_dense_smoke_verify \
+  --out-dir luxquarry_allsky_engine/runs/task_queue_gc_dense_smoke_verify/worker_cuda0 \
+  --run-id task_queue_gc_dense_smoke_verify \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --shard-batch-frames 2 \
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2 \
+  --measurement-column-profile compact \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline
+```
+
+Worker-service result:
+
+```text
+tasks_completed: 2
+tasks_failed: 0
+frames_completed: 4
+measurement_rows: 71,319
+ok_measurement_rows: 69,613
+total_wall_sec: 2.99
+column_profile: compact
+column_count: 53
+```
+
+Collection and downstream checks:
+
+```text
+collect-task-queue-run:
+  complete: true
+  shard_count: 2
+  missing_shards: 0
+  measurement_rows: 71,319
+
+assemble-spectra:
+  input_measurement_rows: 71,319
+  spectra_measurement_rows: 71,319
+  target_count: 18,914
+  total_wall_sec: 1.41
+
+score-spectra-candidates:
+  input_measurement_rows: 71,319
+  filtered_measurement_rows: 69,613
+  target_count: 18,770
+  candidate_count: 0
+  total_wall_sec: 1.27
+```
+
+This proves the current queue shape can claim tasks, run persistent GPU
+photometry, collect out-of-order worker shards, assemble spectra, and score
+candidates from compact output. It is still a local smoke, not a production EKS
+run, but it validates the data-product contract we need for horizontal scaling.
+
+## 2026-06-29/30: Resident Source-Input Queue Smoke
+
+Purpose:
+
+```text
+Avoid per-task parquet input materialization and expose calibration cache reuse.
+```
+
+Queue command:
+
+```bash
+luxquarry_allsky_engine/.venv/bin/luxquarry-allsky write-task-queue \
+  --manifest luxquarry_allsky_engine/runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets luxquarry_allsky_engine/runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir luxquarry_allsky_engine/runs/task_queue_gc_dense_resident_verify \
+  --campaign-id task_queue_gc_dense_resident_verify \
+  --frames-per-task 2 \
+  --limit-frames 8 \
+  --no-materialize-task-inputs
+```
+
+Worker command:
+
+```bash
+luxquarry_allsky_engine/.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir luxquarry_allsky_engine/runs/task_queue_gc_dense_resident_verify \
+  --out-dir luxquarry_allsky_engine/runs/task_queue_gc_dense_resident_verify/worker_cuda0 \
+  --run-id task_queue_gc_dense_resident_verify \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --shard-batch-frames 2 \
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2 \
+  --measurement-column-profile compact \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline
+```
+
+Result:
+
+```text
+materialized_task_inputs: false
+resident_source_inputs: true
+source_input_load_wall_sec: 0.157
+task_count: 4
+frames_completed: 8
+tasks_completed: 4
+tasks_failed: 0
+measurement_rows: 142,906
+ok_measurement_rows: 140,291
+worker service total_wall_sec: 4.19
+```
+
+Collected queue summary:
+
+```text
+complete: true
+shard_count: 4
+missing_shards: 0
+calibration_cache_hits: 2
+calibration_cache_misses: 6
+calibration_load_wall_sec: 0.571
+max_worker_resident_calibration_count: 6
+```
+
+The first two tasks used four unique release/detector calibrations and missed
+the cache. Later tasks reused detector 3 and detector 6 and produced cache hits.
+That verifies that one worker service keeps calibration maps resident across
+claimed tasks.
+
+Downstream spectra assembly:
+
+```text
+input_measurement_rows: 142,906
+spectra_measurement_rows: 142,906
+target_count: 23,915
+shard_count: 4
+total_wall_sec: 1.46
+```
+
+This is the preferred local shape for the next benchmark phase: queue once,
+load source tables once per worker service, keep calibration resident, process
+claimed frame batches, collect shards, then reduce spectra.
+
+## 2026-06-29/30: 3-GPU Resident Queue Scale Smoke
+
+Purpose:
+
+```text
+Verify that multiple persistent GPU services can drain one queue and produce
+collectable out-of-order shards.
+```
+
+Workload:
+
+```text
+frames: 18
+targets: dense Galactic-core projected target table
+photometry: aperture + GPU local-grid PSF
+source inputs: resident per worker service
+workers: cuda:0, cuda:1, cuda:2
+measurement profile: compact
+async shard writes: enabled
+```
+
+Variant A used six tasks of three frames each:
+
+```text
+queue_dir: runs/task_queue_gc_dense_resident_3gpu18_verify
+frames_per_task: 3
+task_count: 6
+completed_frames: 18
+complete_tasks: 6
+failed_tasks: 0
+measurement_rows: 320,768
+ok_measurement_rows: 315,754
+shard_count: 6
+missing_shards: 0
+worker_payload_max_wall_sec: 2.407
+measurements_per_sec_worker_payload: 133,268
+worker_parallel_efficiency: 0.968
+calibration_cache_hits: 4
+calibration_cache_misses: 14
+calibration_load_wall_sec: 1.452
+spectra_measurement_rows: 320,768
+target_count: 29,500
+spectra_total_wall_sec: 1.536
+```
+
+Variant B used three tasks of six frames each:
+
+```text
+queue_dir: runs/task_queue_gc_dense_resident_3gpu18_fpt6_verify
+frames_per_task: 6
+task_count: 3
+completed_frames: 18
+complete_tasks: 3
+failed_tasks: 0
+measurement_rows: 320,768
+ok_measurement_rows: 315,754
+shard_count: 3
+missing_shards: 0
+worker_payload_max_wall_sec: 2.421
+measurements_per_sec_worker_payload: 132,509
+worker_parallel_efficiency: 0.990
+calibration_cache_hits: 2
+calibration_cache_misses: 16
+calibration_load_wall_sec: 1.973
+spectra_measurement_rows: 320,768
+target_count: 29,500
+spectra_total_wall_sec: 1.559
+```
+
+Comparison against one-shot dispatch on the same 18-frame dense workload:
+
+```text
+dispatch compact warm:
+  worker_payload_max_wall_sec: 2.240
+  measurements_per_sec_worker_payload: 143,225
+  worker_parallel_efficiency: 0.955
+
+resident queue, 6 x 3-frame tasks:
+  worker_payload_max_wall_sec: 2.407
+  measurements_per_sec_worker_payload: 133,268
+  worker_parallel_efficiency: 0.968
+
+resident queue, 3 x 6-frame tasks:
+  worker_payload_max_wall_sec: 2.421
+  measurements_per_sec_worker_payload: 132,509
+  worker_parallel_efficiency: 0.990
+
+dispatch no-write warm bound:
+  worker_payload_max_wall_sec: 1.659
+  measurements_per_sec_worker_payload: 193,371
+```
+
+Interpretation:
+
+- The queue system now proves horizontal local execution: multiple worker
+  services claimed tasks concurrently and the collector assembled out-of-order
+  shards without missing outputs.
+- The queue path is currently about 7-8% slower than one-shot compact dispatch
+  on this small 18-frame test.
+- Larger six-frame tasks reduced shard count and improved worker balance, but
+  did not improve throughput. Startup/finalization/source-table service costs
+  and calibration loading are still visible at this small scale.
+- The no-write bound remains far ahead. Output/table/write architecture is
+  still the dominant next optimization target.
+- For production-scale cloud runs, this queue shape is still directionally
+  right because it decouples task claiming from workers and supports many nodes;
+  it simply needs larger steady-state queues where setup costs are amortized.
+
+## 2026-06-29/30: First-Class Local Queue Runner Smoke
+
+The ad hoc Python subprocess launcher was promoted to a CLI command:
+
+```text
+run-local-task-queue
+```
+
+Smoke command:
+
+```bash
+luxquarry_allsky_engine/.venv/bin/luxquarry-allsky run-local-task-queue \
+  --manifest luxquarry_allsky_engine/runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets luxquarry_allsky_engine/runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir luxquarry_allsky_engine/runs/local_task_queue_runner_smoke_2gpu4 \
+  --run-id local_task_queue_runner_smoke_2gpu4 \
+  --devices cuda:0,cuda:1 \
+  --frames-per-task 2 \
+  --limit-frames 4 \
+  --shard-batch-frames 2 \
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2 \
+  --measurement-column-profile compact \
+  --async-shard-writes \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
+  --assemble-spectra \
+  --score-baseline
+```
+
+Result:
+
+```text
+status: complete
+worker_count: 2
+failed_workers: 0
+frames: 4
+measurement_rows: 71,319
+ok_measurement_rows: 69,613
+shard_count: 2
+missing_shards: 0
+worker_payload_max_wall_sec: 1.027
+measurements_per_sec_worker_payload: 69,456
+worker_parallel_efficiency: 0.994
+spectra_measurement_rows: 71,319
+target_count: 18,914
+baseline_candidate_count: 0
+```
+
+This is now the preferred local test harness for the next-gen allsky path. It
+uses separate worker-service subprocesses per GPU, which keeps the local runner
+aligned with the eventual Kubernetes/EKS execution model.
+
+## 2026-06-29/30: Batch Table Assembly Queue Benchmark
+
+Purpose:
+
+```text
+Move cuDF table construction out of the per-frame critical section and do it at
+shard flush.
+```
+
+Command shape:
+
+```bash
+luxquarry_allsky_engine/.venv/bin/luxquarry-allsky run-local-task-queue \
+  --manifest luxquarry_allsky_engine/runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets luxquarry_allsky_engine/runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir luxquarry_allsky_engine/runs/local_task_queue_gc_dense_3gpu18_batch_table_verify \
+  --run-id local_task_queue_gc_dense_3gpu18_batch_table_verify \
+  --devices cuda:0,cuda:1,cuda:2 \
+  --frames-per-task 6 \
+  --limit-frames 18 \
+  --shard-batch-frames 6 \
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2 \
+  --measurement-column-profile compact \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
+  --assemble-spectra
+```
+
+Result:
+
+```text
+completed_frames: 18
+measurement_rows: 320,768
+ok_measurement_rows: 315,754
+shard_count: 3
+missing_shards: 0
+worker_payload_max_wall_sec: 2.288
+measurements_per_sec_worker_payload: 140,213
+worker_parallel_efficiency: 0.954
+spectra_measurement_rows: 320,768
+spectra_total_wall_sec: 1.368
+```
+
+Comparison:
+
+```text
+queue resident, no batch table assembly:
+  worker_payload_max_wall_sec: 2.421
+  measurements_per_sec_worker_payload: 132,509
+  summed frame table_wall_sec: 1.297
+  summed frame_compute_wall_sec: 6.319
+
+queue resident, batch table assembly:
+  worker_payload_max_wall_sec: 2.288
+  measurements_per_sec_worker_payload: 140,213
+  summed frame table_wall_sec: 0.076
+  summed frame_compute_wall_sec: 4.666
+
+one-shot compact dispatch:
+  worker_payload_max_wall_sec: 2.240
+  measurements_per_sec_worker_payload: 143,225
+
+no-write bound:
+  worker_payload_max_wall_sec: 1.659
+  measurements_per_sec_worker_payload: 193,371
+```
+
+Interpretation:
+
+- Batch table assembly recovers most of the queue-mode throughput gap.
+- It moves table construction into shard flush, so shard `write_wall_sec`
+  includes both table assembly and parquet write. That is acceptable because the
+  high-level target is critical-path payload time, not making one metric look
+  smaller.
+- `run-local-task-queue` now defaults to batch table assembly. The lower-level
+  `run-gpu-worker-service` keeps its explicit flag so debugging remains
+  straightforward.
+- The durable-output gap remains: even after batch table assembly, the no-write
+  bound is still much faster.
+
+## 2026-06-29: Measurement Parquet Compression Check
+
+After batch table assembly moved table construction out of the per-frame hot
+path, the next question was whether parquet compression itself was a major
+durable-output cost. The same dense 18-frame, 3-GPU resident queue workload was
+run with compact measurement columns and no parquet compression.
+
+Command:
+
+```bash
+luxquarry_allsky_engine/.venv/bin/luxquarry-allsky run-local-task-queue \
+  --manifest luxquarry_allsky_engine/runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets luxquarry_allsky_engine/runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir luxquarry_allsky_engine/runs/local_task_queue_gc_dense_3gpu18_batch_table_nocompress_verify \
+  --run-id local_task_queue_gc_dense_3gpu18_batch_table_nocompress_verify \
+  --devices cuda:0,cuda:1,cuda:2 \
+  --frames-per-task 6 \
+  --limit-frames 18 \
+  --shard-batch-frames 6 \
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2 \
+  --measurement-column-profile compact \
+  --measurement-parquet-compression none \
+  --async-shard-writes \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
+  --assemble-spectra
+```
+
+Result:
+
+```text
+completed_frames: 18
+measurement_rows: 320,768
+ok_measurement_rows: 315,754
+shard_count: 3
+missing_shards: 0
+worker_payload_max_wall_sec: 2.258
+measurements_per_sec_worker_payload: 142,079
+worker_parallel_efficiency: 0.946
+spectra_measurement_rows: 320,768
+spectra_target_count: 29,500
+spectra_total_wall_sec: 1.349
+shard_total_bytes: 34,997,955
+shard_bytes_per_measurement: 109.1
+summed_shard_write_wall_sec: 1.220
+```
+
+Comparison:
+
+```text
+compact + snappy:
+  worker_payload_max_wall_sec: 2.288
+  measurements_per_sec_worker_payload: 140,213
+  summed_shard_write_wall_sec: 1.449
+
+compact + no compression:
+  worker_payload_max_wall_sec: 2.258
+  measurements_per_sec_worker_payload: 142,079
+  summed_shard_write_wall_sec: 1.220
+
+no-write bound:
+  worker_payload_max_wall_sec: 1.659
+  measurements_per_sec_worker_payload: 193,371
+```
+
+Interpretation:
+
+- Disabling parquet compression helped only modestly on this workload: about
+  1.3% better payload throughput than compact snappy output.
+- The durable-output gap remains large. The remaining cost is not just snappy;
+  it is the combined table-to-parquet write path and filesystem durability.
+- Keep `snappy` as the default for normal runs because it preserves portable,
+  compressed durable artifacts. Use `--measurement-parquet-compression none`
+  for targeted write-path benchmarks or if downstream storage bandwidth is
+  known to be cheaper than compression CPU time.

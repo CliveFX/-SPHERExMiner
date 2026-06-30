@@ -72,6 +72,7 @@ from .task_queue import (
     run_gpu_worker_service,
     write_task_queue,
 )
+from .target_inflation import ProjectedTargetInflationConfig, inflate_projected_targets
 
 
 OPTIONAL_MODULES = [
@@ -128,7 +129,33 @@ def main(argv: list[str] | None = None) -> int:
     dispatch_sweep.add_argument("--finalize-device", default="cuda:0")
     dispatch_sweep.add_argument("--no-async-shard-writes", action="store_true")
     dispatch_sweep.add_argument("--no-batch-table-assembly", action="store_true")
+    dispatch_sweep.add_argument(
+        "--discard-measurement-shards",
+        action="store_true",
+        help="Benchmark-only: count measurements but do not write parquet measurement shards.",
+    )
+    dispatch_sweep.add_argument(
+        "--measurement-column-profile",
+        choices=["full", "compact"],
+        default="full",
+        help="Column set written to measurement shards. compact keeps spectra/scoring columns and drops repeated provenance strings.",
+    )
+    dispatch_sweep.add_argument("--measurement-parquet-compression", choices=["snappy", "none"], default="snappy")
     dispatch_sweep.add_argument("--no-materialize-worker-inputs", action="store_true")
+    dispatch_sweep.add_argument("--aperture-radius-pix", type=float, default=2.0)
+    dispatch_sweep.add_argument("--annulus-inner-pix", type=float, default=4.0)
+    dispatch_sweep.add_argument("--annulus-outer-pix", type=float, default=6.0)
+    dispatch_sweep.add_argument("--edge-margin-pix", type=float, default=6.0)
+    dispatch_sweep.add_argument("--enable-psf", action="store_true")
+    dispatch_sweep.add_argument(
+        "--psf-kernel-build-mode",
+        choices=["gpu_spline", "gpu_bilinear"],
+        default="gpu_spline",
+    )
+    dispatch_sweep.add_argument("--psf-kernel-radius-native", type=int, default=5)
+    dispatch_sweep.add_argument("--psf-grid-half-range-pix", type=float, default=1.0)
+    dispatch_sweep.add_argument("--psf-grid-step-pix", type=float, default=0.5)
+    dispatch_sweep.add_argument("--psf-grid-metric", choices=["snr", "chi2"], default="snr")
     dispatch_sweep.add_argument("--score-baseline", action="store_true")
     dispatch_sweep.add_argument("--candidate-min-abs-zscore", type=float, default=5.0)
     dispatch_sweep.add_argument("--candidate-min-measurements", type=int, default=10)
@@ -201,6 +228,18 @@ def main(argv: list[str] | None = None) -> int:
     project_targets.add_argument("--limit-frames", type=int)
     project_targets.set_defaults(func=cmd_project_frame_targets)
 
+    inflate_targets = sub.add_parser(
+        "inflate-projected-targets",
+        help="Multiply a projected-target parquet for benchmark-only GPU occupancy tests.",
+    )
+    inflate_targets.add_argument("--projected-targets", type=Path, required=True)
+    inflate_targets.add_argument("--out", type=Path, required=True)
+    inflate_targets.add_argument("--repeat-factor", type=int, required=True)
+    inflate_targets.add_argument("--jitter-pix", type=float, default=0.0)
+    inflate_targets.add_argument("--seed", type=int, default=0)
+    inflate_targets.add_argument("--preserve-original-ids", action="store_true")
+    inflate_targets.set_defaults(func=cmd_inflate_projected_targets)
+
     aperture = sub.add_parser("run-cpu-aperture", help="Run calibrated CPU aperture photometry for projected targets.")
     aperture.add_argument("--manifest", type=Path, required=True)
     aperture.add_argument("--projected-targets", type=Path, required=True)
@@ -254,6 +293,18 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Defer cuDF measurement table assembly until shard flush instead of once per frame.",
     )
+    persistent.add_argument(
+        "--discard-measurement-shards",
+        action="store_true",
+        help="Benchmark-only: count measurements but do not write parquet measurement shards.",
+    )
+    persistent.add_argument(
+        "--measurement-column-profile",
+        choices=["full", "compact"],
+        default="full",
+        help="Column set written to measurement shards.",
+    )
+    persistent.add_argument("--measurement-parquet-compression", choices=["snappy", "none"], default="snappy")
     persistent.add_argument("--shard-batch-frames", type=int, default=1)
     persistent.add_argument("--prefetch-frames", type=int, default=0)
     persistent.add_argument("--status-interval-frames", type=int, default=1)
@@ -266,6 +317,17 @@ def main(argv: list[str] | None = None) -> int:
     persistent.add_argument("--annulus-inner-pix", type=float, default=4.0)
     persistent.add_argument("--annulus-outer-pix", type=float, default=6.0)
     persistent.add_argument("--edge-margin-pix", type=float, default=6.0)
+    persistent.add_argument("--enable-psf", action="store_true", help="Also run GPU local-grid PSF photometry.")
+    persistent.add_argument(
+        "--psf-kernel-build-mode",
+        choices=["gpu_spline", "gpu_bilinear"],
+        default="gpu_spline",
+        help="How to build shifted PSF kernels on GPU.",
+    )
+    persistent.add_argument("--psf-kernel-radius-native", type=int, default=5)
+    persistent.add_argument("--psf-grid-half-range-pix", type=float, default=1.0)
+    persistent.add_argument("--psf-grid-step-pix", type=float, default=0.5)
+    persistent.add_argument("--psf-grid-metric", choices=["snr", "chi2"], default="snr")
     persistent.add_argument("--limit-frames", type=int)
     persistent.set_defaults(func=cmd_run_persistent_gpu_worker)
 
@@ -300,6 +362,9 @@ def main(argv: list[str] | None = None) -> int:
     worker_service.add_argument("--no-rmm-pool", action="store_true")
     worker_service.add_argument("--async-shard-writes", action="store_true")
     worker_service.add_argument("--batch-table-assembly", action="store_true")
+    worker_service.add_argument("--discard-measurement-shards", action="store_true")
+    worker_service.add_argument("--measurement-column-profile", choices=["full", "compact"], default="full")
+    worker_service.add_argument("--measurement-parquet-compression", choices=["snappy", "none"], default="snappy")
     worker_service.add_argument("--shard-batch-frames", type=int, default=1)
     worker_service.add_argument("--prefetch-frames", type=int, default=0)
     worker_service.add_argument("--status-interval-frames", type=int, default=1)
@@ -308,6 +373,16 @@ def main(argv: list[str] | None = None) -> int:
     worker_service.add_argument("--annulus-inner-pix", type=float, default=4.0)
     worker_service.add_argument("--annulus-outer-pix", type=float, default=6.0)
     worker_service.add_argument("--edge-margin-pix", type=float, default=6.0)
+    worker_service.add_argument("--enable-psf", action="store_true", help="Also run GPU local-grid PSF photometry.")
+    worker_service.add_argument(
+        "--psf-kernel-build-mode",
+        choices=["gpu_spline", "gpu_bilinear"],
+        default="gpu_spline",
+    )
+    worker_service.add_argument("--psf-kernel-radius-native", type=int, default=5)
+    worker_service.add_argument("--psf-grid-half-range-pix", type=float, default=1.0)
+    worker_service.add_argument("--psf-grid-step-pix", type=float, default=0.5)
+    worker_service.add_argument("--psf-grid-metric", choices=["snr", "chi2"], default="snr")
     worker_service.set_defaults(func=cmd_run_gpu_worker_service)
 
     collect_task_queue = sub.add_parser(
@@ -317,6 +392,69 @@ def main(argv: list[str] | None = None) -> int:
     collect_task_queue.add_argument("--queue-dir", type=Path, required=True)
     collect_task_queue.add_argument("--out", type=Path, required=True)
     collect_task_queue.set_defaults(func=cmd_collect_task_queue_run)
+
+    local_task_queue = sub.add_parser(
+        "run-local-task-queue",
+        help="Write a task queue, launch one persistent GPU worker service per device, and collect shards.",
+    )
+    local_task_queue.add_argument("--manifest", type=Path, required=True)
+    local_task_queue.add_argument("--projected-targets", type=Path, required=True)
+    local_task_queue.add_argument("--out-dir", type=Path, required=True)
+    local_task_queue.add_argument("--run-id", required=True)
+    local_task_queue.add_argument("--cache-root", type=Path, default=Path("/mnt/niroseti/spherex_cache"))
+    local_task_queue.add_argument("--devices", default="cuda:0")
+    local_task_queue.add_argument("--frames-per-task", type=int, default=25)
+    local_task_queue.add_argument("--limit-frames", type=int)
+    local_task_queue.add_argument(
+        "--materialize-task-inputs",
+        action="store_true",
+        help="Write per-task manifest/target parquets. Default is resident source inputs per worker service.",
+    )
+    local_task_queue.add_argument("--executable")
+    local_task_queue.add_argument("--no-rmm-pool", action="store_true")
+    local_task_queue.add_argument("--async-shard-writes", action="store_true")
+    local_task_queue.add_argument(
+        "--batch-table-assembly",
+        dest="batch_table_assembly",
+        action="store_true",
+        help="Defer cuDF table assembly to shard flush. Enabled by default for this high-level runner.",
+    )
+    local_task_queue.add_argument(
+        "--no-batch-table-assembly",
+        dest="batch_table_assembly",
+        action="store_false",
+        help="Build cuDF tables per frame instead of at shard flush.",
+    )
+    local_task_queue.set_defaults(batch_table_assembly=True)
+    local_task_queue.add_argument("--discard-measurement-shards", action="store_true")
+    local_task_queue.add_argument("--measurement-column-profile", choices=["full", "compact"], default="full")
+    local_task_queue.add_argument("--measurement-parquet-compression", choices=["snappy", "none"], default="snappy")
+    local_task_queue.add_argument("--shard-batch-frames", type=int, default=1)
+    local_task_queue.add_argument("--prefetch-frames", type=int, default=0)
+    local_task_queue.add_argument("--status-interval-frames", type=int, default=1)
+    local_task_queue.add_argument("--local-cache-dir", type=Path)
+    local_task_queue.add_argument("--aperture-radius-pix", type=float, default=2.0)
+    local_task_queue.add_argument("--annulus-inner-pix", type=float, default=4.0)
+    local_task_queue.add_argument("--annulus-outer-pix", type=float, default=6.0)
+    local_task_queue.add_argument("--edge-margin-pix", type=float, default=6.0)
+    local_task_queue.add_argument("--enable-psf", action="store_true")
+    local_task_queue.add_argument(
+        "--psf-kernel-build-mode",
+        choices=["gpu_spline", "gpu_bilinear"],
+        default="gpu_spline",
+    )
+    local_task_queue.add_argument("--psf-kernel-radius-native", type=int, default=5)
+    local_task_queue.add_argument("--psf-grid-half-range-pix", type=float, default=1.0)
+    local_task_queue.add_argument("--psf-grid-step-pix", type=float, default=0.5)
+    local_task_queue.add_argument("--psf-grid-metric", choices=["snr", "chi2"], default="snr")
+    local_task_queue.add_argument("--assemble-spectra", action="store_true")
+    local_task_queue.add_argument("--spectra-out-dir", type=Path)
+    local_task_queue.add_argument("--spectra-run-id")
+    local_task_queue.add_argument("--score-baseline", action="store_true")
+    local_task_queue.add_argument("--candidate-dir", type=Path)
+    local_task_queue.add_argument("--candidate-min-abs-zscore", type=float, default=5.0)
+    local_task_queue.add_argument("--candidate-min-measurements", type=int, default=10)
+    local_task_queue.set_defaults(func=cmd_run_local_task_queue)
 
     dispatch = sub.add_parser(
         "plan-gpu-dispatch",
@@ -341,6 +479,13 @@ def main(argv: list[str] | None = None) -> int:
         help="Pass --batch-table-assembly to every persistent worker.",
     )
     dispatch.add_argument(
+        "--discard-measurement-shards",
+        action="store_true",
+        help="Benchmark-only: pass --discard-measurement-shards to every persistent worker.",
+    )
+    dispatch.add_argument("--measurement-column-profile", choices=["full", "compact"], default="full")
+    dispatch.add_argument("--measurement-parquet-compression", choices=["snappy", "none"], default="snappy")
+    dispatch.add_argument(
         "--materialize-worker-inputs",
         action="store_true",
         help="Write per-worker manifest/target parquets and point workers at their own input slices.",
@@ -355,6 +500,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     dispatch.add_argument("--limit-frames", type=int)
     dispatch.add_argument("--executable", default=".venv/bin/luxquarry-allsky")
+    dispatch.add_argument("--aperture-radius-pix", type=float, default=2.0)
+    dispatch.add_argument("--annulus-inner-pix", type=float, default=4.0)
+    dispatch.add_argument("--annulus-outer-pix", type=float, default=6.0)
+    dispatch.add_argument("--edge-margin-pix", type=float, default=6.0)
+    dispatch.add_argument("--enable-psf", action="store_true", help="Pass --enable-psf to every worker.")
+    dispatch.add_argument(
+        "--psf-kernel-build-mode",
+        choices=["gpu_spline", "gpu_bilinear"],
+        default="gpu_spline",
+    )
+    dispatch.add_argument("--psf-kernel-radius-native", type=int, default=5)
+    dispatch.add_argument("--psf-grid-half-range-pix", type=float, default=1.0)
+    dispatch.add_argument("--psf-grid-step-pix", type=float, default=0.5)
+    dispatch.add_argument("--psf-grid-metric", choices=["snr", "chi2"], default="snr")
     dispatch.set_defaults(func=cmd_plan_gpu_dispatch)
 
     local_dispatch = sub.add_parser(
@@ -370,6 +529,9 @@ def main(argv: list[str] | None = None) -> int:
     local_dispatch.add_argument("--workers-per-device", type=int, default=1)
     local_dispatch.add_argument("--async-shard-writes", action="store_true")
     local_dispatch.add_argument("--batch-table-assembly", action="store_true")
+    local_dispatch.add_argument("--discard-measurement-shards", action="store_true")
+    local_dispatch.add_argument("--measurement-column-profile", choices=["full", "compact"], default="full")
+    local_dispatch.add_argument("--measurement-parquet-compression", choices=["snappy", "none"], default="snappy")
     local_dispatch.add_argument("--no-materialize-worker-inputs", action="store_true")
     local_dispatch.add_argument("--shard-batch-frames", type=int, default=1)
     local_dispatch.add_argument("--prefetch-frames", type=int, default=0)
@@ -377,6 +539,20 @@ def main(argv: list[str] | None = None) -> int:
     local_dispatch.add_argument("--local-cache-dir", type=Path)
     local_dispatch.add_argument("--limit-frames", type=int)
     local_dispatch.add_argument("--executable")
+    local_dispatch.add_argument("--aperture-radius-pix", type=float, default=2.0)
+    local_dispatch.add_argument("--annulus-inner-pix", type=float, default=4.0)
+    local_dispatch.add_argument("--annulus-outer-pix", type=float, default=6.0)
+    local_dispatch.add_argument("--edge-margin-pix", type=float, default=6.0)
+    local_dispatch.add_argument("--enable-psf", action="store_true", help="Also run GPU local-grid PSF photometry.")
+    local_dispatch.add_argument(
+        "--psf-kernel-build-mode",
+        choices=["gpu_spline", "gpu_bilinear"],
+        default="gpu_spline",
+    )
+    local_dispatch.add_argument("--psf-kernel-radius-native", type=int, default=5)
+    local_dispatch.add_argument("--psf-grid-half-range-pix", type=float, default=1.0)
+    local_dispatch.add_argument("--psf-grid-step-pix", type=float, default=0.5)
+    local_dispatch.add_argument("--psf-grid-metric", choices=["snr", "chi2"], default="snr")
     local_dispatch.add_argument("--finalize-device", default="cuda:0")
     local_dispatch.add_argument("--spectra-out-dir", type=Path)
     local_dispatch.add_argument("--spectra-run-id")
@@ -902,7 +1078,20 @@ def cmd_run_dispatch_benchmark_sweep(args: argparse.Namespace) -> int:
             executable=executable,
             async_shard_writes=not args.no_async_shard_writes,
             batch_table_assembly=not args.no_batch_table_assembly,
+            discard_measurement_shards=args.discard_measurement_shards,
+            measurement_column_profile=args.measurement_column_profile,
+            measurement_parquet_compression=args.measurement_parquet_compression,
             materialize_worker_inputs=not args.no_materialize_worker_inputs,
+            aperture_radius_pix=args.aperture_radius_pix,
+            annulus_inner_pix=args.annulus_inner_pix,
+            annulus_outer_pix=args.annulus_outer_pix,
+            edge_margin_pix=args.edge_margin_pix,
+            enable_psf=args.enable_psf,
+            psf_kernel_build_mode=args.psf_kernel_build_mode,
+            psf_kernel_radius_native=args.psf_kernel_radius_native,
+            psf_grid_half_range_pix=args.psf_grid_half_range_pix,
+            psf_grid_step_pix=args.psf_grid_step_pix,
+            psf_grid_metric=args.psf_grid_metric,
             finalize_device=args.finalize_device,
             score_baseline=args.score_baseline,
             candidate_min_abs_zscore=args.candidate_min_abs_zscore,
@@ -990,6 +1179,21 @@ def cmd_project_frame_targets(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_inflate_projected_targets(args: argparse.Namespace) -> int:
+    summary = inflate_projected_targets(
+        ProjectedTargetInflationConfig(
+            input_path=args.projected_targets,
+            output_path=args.out,
+            repeat_factor=args.repeat_factor,
+            jitter_pix=args.jitter_pix,
+            seed=args.seed,
+            preserve_original_ids=args.preserve_original_ids,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_run_cpu_aperture(args: argparse.Namespace) -> int:
     summary = run_cpu_aperture(
         manifest_path=args.manifest,
@@ -1058,10 +1262,19 @@ def cmd_run_persistent_gpu_worker(args: argparse.Namespace) -> int:
             rmm_pool=not args.no_rmm_pool,
             async_shard_writes=args.async_shard_writes,
             batch_table_assembly=args.batch_table_assembly,
+            discard_measurement_shards=args.discard_measurement_shards,
+            measurement_column_profile=args.measurement_column_profile,
+            measurement_parquet_compression=args.measurement_parquet_compression,
             shard_batch_frames=args.shard_batch_frames,
             prefetch_frames=args.prefetch_frames,
             status_interval_frames=args.status_interval_frames,
             local_cache_dir=args.local_cache_dir,
+            enable_psf=args.enable_psf,
+            psf_kernel_build_mode=args.psf_kernel_build_mode,
+            psf_kernel_radius_native=args.psf_kernel_radius_native,
+            psf_grid_half_range_pix=args.psf_grid_half_range_pix,
+            psf_grid_step_pix=args.psf_grid_step_pix,
+            psf_grid_metric=args.psf_grid_metric,
         ),
         limit_frames=args.limit_frames,
         status_path=args.status_path,
@@ -1118,10 +1331,19 @@ def cmd_run_gpu_worker_service(args: argparse.Namespace) -> int:
                 rmm_pool=not args.no_rmm_pool,
                 async_shard_writes=args.async_shard_writes,
                 batch_table_assembly=args.batch_table_assembly,
+                discard_measurement_shards=args.discard_measurement_shards,
+                measurement_column_profile=args.measurement_column_profile,
+                measurement_parquet_compression=args.measurement_parquet_compression,
                 shard_batch_frames=args.shard_batch_frames,
                 prefetch_frames=args.prefetch_frames,
                 status_interval_frames=args.status_interval_frames,
                 local_cache_dir=args.local_cache_dir,
+                enable_psf=args.enable_psf,
+                psf_kernel_build_mode=args.psf_kernel_build_mode,
+                psf_kernel_radius_native=args.psf_kernel_radius_native,
+                psf_grid_half_range_pix=args.psf_grid_half_range_pix,
+                psf_grid_step_pix=args.psf_grid_step_pix,
+                psf_grid_metric=args.psf_grid_metric,
             ),
         )
     )
@@ -1140,6 +1362,219 @@ def cmd_collect_task_queue_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_run_local_task_queue(args: argparse.Namespace) -> int:
+    devices = tuple(part.strip() for part in args.devices.split(",") if part.strip())
+    if not devices:
+        raise ValueError("--devices must list at least one device")
+    if args.frames_per_task <= 0:
+        raise ValueError("--frames-per-task must be positive")
+    if args.shard_batch_frames <= 0:
+        raise ValueError("--shard-batch-frames must be positive")
+    if args.prefetch_frames < 0:
+        raise ValueError("--prefetch-frames must be non-negative")
+    if args.status_interval_frames <= 0:
+        raise ValueError("--status-interval-frames must be positive")
+
+    started = time.perf_counter()
+    out_dir = args.out_dir
+    out_dir.mkdir(parents=True, exist_ok=True)
+    log_dir = out_dir / "worker_logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    executable = args.executable or sys.argv[0]
+
+    queue_summary = write_task_queue(
+        TaskQueueWriteConfig(
+            manifest_path=args.manifest,
+            projected_targets_path=args.projected_targets,
+            output_dir=out_dir,
+            campaign_id=args.run_id,
+            frames_per_task=args.frames_per_task,
+            limit_frames=args.limit_frames,
+            materialize_task_inputs=args.materialize_task_inputs,
+        )
+    )
+
+    worker_rows: list[dict[str, Any]] = []
+    procs: list[tuple[str, subprocess.Popen, Any, float]] = []
+    for worker_index, device in enumerate(devices):
+        worker_id = f"worker-{_safe_token(device)}"
+        worker_out = out_dir / worker_id
+        cmd = _local_task_queue_worker_command(
+            executable=executable,
+            queue_dir=out_dir,
+            out_dir=worker_out,
+            run_id=args.run_id,
+            worker_id=worker_id,
+            device=device,
+            args=args,
+        )
+        log_path = log_dir / f"{worker_id}.log"
+        log_handle = log_path.open("w", encoding="utf-8")
+        launch_started = time.perf_counter()
+        proc = subprocess.Popen(cmd, stdout=log_handle, stderr=subprocess.STDOUT, text=True)
+        procs.append((worker_id, proc, log_handle, launch_started))
+        worker_rows.append(
+            {
+                "worker_id": worker_id,
+                "device": device,
+                "command": cmd,
+                "log_path": str(log_path),
+                "output_dir": str(worker_out),
+                "pid": proc.pid,
+            }
+        )
+
+    failed_workers = 0
+    for worker_id, proc, log_handle, launch_started in procs:
+        return_code = proc.wait()
+        log_handle.close()
+        if return_code != 0:
+            failed_workers += 1
+        for row in worker_rows:
+            if row["worker_id"] == worker_id:
+                row["return_code"] = return_code
+                row["worker_process_wall_sec"] = time.perf_counter() - launch_started
+                summary_path = out_dir / worker_id / f"{worker_id}.service_summary.json"
+                row["service_summary_path"] = str(summary_path)
+                if summary_path.exists():
+                    service_summary = json.loads(summary_path.read_text(encoding="utf-8"))
+                    row["tasks_completed"] = int(service_summary.get("tasks_completed") or 0)
+                    row["tasks_failed"] = int(service_summary.get("tasks_failed") or 0)
+                    row["frames_completed"] = int(service_summary.get("frames_completed") or 0)
+                    row["measurement_rows"] = int(service_summary.get("measurement_rows") or 0)
+                    row["source_input_load_wall_sec"] = float(
+                        service_summary.get("source_input_load_wall_sec") or 0.0
+                    )
+                    row["service_total_wall_sec"] = float(service_summary.get("total_wall_sec") or 0.0)
+                break
+
+    collect_summary = collect_task_queue_run(
+        TaskQueueCollectConfig(
+            queue_dir=out_dir,
+            output_path=out_dir / "task_queue_collect_summary.json",
+        )
+    )
+
+    spectra_summary: dict[str, Any] | None = None
+    candidate_summary: dict[str, Any] | None = None
+    if args.assemble_spectra or args.score_baseline:
+        spectra_out_dir = args.spectra_out_dir or out_dir / "spectra"
+        spectra_run_id = args.spectra_run_id or args.run_id
+        spectra_summary = assemble_spectra_from_shards(
+            SpectraAssemblyConfig(
+                shard_manifest_path=Path(collect_summary["shard_manifest_path"]),
+                output_dir=spectra_out_dir,
+                run_id=spectra_run_id,
+                device=devices[0],
+            )
+        )
+        if args.score_baseline:
+            candidate_summary = score_spectra_candidates(
+                CandidateScoringConfig(
+                    spectra_path=Path(spectra_summary["spectra_measurements_path"]),
+                    output_dir=args.candidate_dir or out_dir / "candidates",
+                    run_id=spectra_run_id,
+                    device=devices[0],
+                    min_abs_zscore=args.candidate_min_abs_zscore,
+                    min_measurements=args.candidate_min_measurements,
+                )
+            )
+
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "backend": "luxquarry_local_task_queue_runner",
+        "run_id": args.run_id,
+        "output_dir": str(out_dir),
+        "devices": list(devices),
+        "worker_count": len(devices),
+        "failed_workers": failed_workers,
+        "status": "complete" if failed_workers == 0 and collect_summary.get("complete") else "failed",
+        "total_wall_sec": time.perf_counter() - started,
+        "queue_summary": queue_summary,
+        "worker_rows": worker_rows,
+        "collect_summary": collect_summary,
+        "spectra_summary": spectra_summary,
+        "candidate_summary": candidate_summary,
+    }
+    summary_path = out_dir / "local_task_queue_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0 if summary["status"] == "complete" else 1
+
+
+def _local_task_queue_worker_command(
+    *,
+    executable: str,
+    queue_dir: Path,
+    out_dir: Path,
+    run_id: str,
+    worker_id: str,
+    device: str,
+    args: argparse.Namespace,
+) -> list[str]:
+    cmd = [
+        executable,
+        "run-gpu-worker-service",
+        "--queue-dir",
+        str(queue_dir),
+        "--out-dir",
+        str(out_dir),
+        "--run-id",
+        run_id,
+        "--worker-id",
+        worker_id,
+        "--cache-root",
+        str(args.cache_root),
+        "--device",
+        device,
+        "--shard-batch-frames",
+        str(args.shard_batch_frames),
+        "--prefetch-frames",
+        str(args.prefetch_frames),
+        "--status-interval-frames",
+        str(args.status_interval_frames),
+        "--measurement-column-profile",
+        args.measurement_column_profile,
+        "--measurement-parquet-compression",
+        args.measurement_parquet_compression,
+        "--aperture-radius-pix",
+        str(args.aperture_radius_pix),
+        "--annulus-inner-pix",
+        str(args.annulus_inner_pix),
+        "--annulus-outer-pix",
+        str(args.annulus_outer_pix),
+        "--edge-margin-pix",
+        str(args.edge_margin_pix),
+        "--psf-kernel-build-mode",
+        args.psf_kernel_build_mode,
+        "--psf-kernel-radius-native",
+        str(args.psf_kernel_radius_native),
+        "--psf-grid-half-range-pix",
+        str(args.psf_grid_half_range_pix),
+        "--psf-grid-step-pix",
+        str(args.psf_grid_step_pix),
+        "--psf-grid-metric",
+        args.psf_grid_metric,
+    ]
+    if args.no_rmm_pool:
+        cmd.append("--no-rmm-pool")
+    if args.async_shard_writes:
+        cmd.append("--async-shard-writes")
+    if args.batch_table_assembly:
+        cmd.append("--batch-table-assembly")
+    if args.discard_measurement_shards:
+        cmd.append("--discard-measurement-shards")
+    if args.local_cache_dir:
+        cmd.extend(["--local-cache-dir", str(args.local_cache_dir)])
+    if args.enable_psf:
+        cmd.append("--enable-psf")
+    return cmd
+
+
+def _safe_token(value: str) -> str:
+    return "".join(ch if ch.isalnum() else "-" for ch in value).strip("-") or "worker"
+
+
 def cmd_plan_gpu_dispatch(args: argparse.Namespace) -> int:
     devices = tuple(part.strip() for part in args.devices.split(",") if part.strip())
     plan = build_dispatch_plan(
@@ -1155,11 +1590,24 @@ def cmd_plan_gpu_dispatch(args: argparse.Namespace) -> int:
             executable=args.executable,
             async_shard_writes=args.async_shard_writes,
             batch_table_assembly=args.batch_table_assembly,
+            discard_measurement_shards=args.discard_measurement_shards,
+            measurement_column_profile=args.measurement_column_profile,
+            measurement_parquet_compression=args.measurement_parquet_compression,
             materialize_worker_inputs=args.materialize_worker_inputs,
             shard_batch_frames=args.shard_batch_frames,
             prefetch_frames=args.prefetch_frames,
             status_interval_frames=args.status_interval_frames,
             local_cache_dir=args.local_cache_dir,
+            aperture_radius_pix=args.aperture_radius_pix,
+            annulus_inner_pix=args.annulus_inner_pix,
+            annulus_outer_pix=args.annulus_outer_pix,
+            edge_margin_pix=args.edge_margin_pix,
+            enable_psf=args.enable_psf,
+            psf_kernel_build_mode=args.psf_kernel_build_mode,
+            psf_kernel_radius_native=args.psf_kernel_radius_native,
+            psf_grid_half_range_pix=args.psf_grid_half_range_pix,
+            psf_grid_step_pix=args.psf_grid_step_pix,
+            psf_grid_metric=args.psf_grid_metric,
         )
     )
     write_dispatch_plan(plan, args.plan_out)
@@ -1198,7 +1646,20 @@ def cmd_run_local_dispatch(args: argparse.Namespace) -> int:
             local_cache_dir=args.local_cache_dir,
             async_shard_writes=args.async_shard_writes,
             batch_table_assembly=args.batch_table_assembly,
+            discard_measurement_shards=args.discard_measurement_shards,
+            measurement_column_profile=args.measurement_column_profile,
+            measurement_parquet_compression=args.measurement_parquet_compression,
             materialize_worker_inputs=not args.no_materialize_worker_inputs,
+            aperture_radius_pix=args.aperture_radius_pix,
+            annulus_inner_pix=args.annulus_inner_pix,
+            annulus_outer_pix=args.annulus_outer_pix,
+            edge_margin_pix=args.edge_margin_pix,
+            enable_psf=args.enable_psf,
+            psf_kernel_build_mode=args.psf_kernel_build_mode,
+            psf_kernel_radius_native=args.psf_kernel_radius_native,
+            psf_grid_half_range_pix=args.psf_grid_half_range_pix,
+            psf_grid_step_pix=args.psf_grid_step_pix,
+            psf_grid_metric=args.psf_grid_metric,
             finalize_device=args.finalize_device,
             spectra_out_dir=args.spectra_out_dir,
             spectra_run_id=args.spectra_run_id,

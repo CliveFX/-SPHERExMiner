@@ -23,7 +23,69 @@ from .object_store import is_s3_uri, stage_input_file
 from .warp_aperture import (
     WarpFrameCalibrationDevice,
     run_warp_frame_aperture_resident_cupy,
+    upload_frame_data,
     upload_frame_calibration,
+)
+from .warp_psf import run_warp_frame_psf_grid_resident_cupy
+
+
+MEASUREMENT_COLUMN_PROFILES = ("full", "compact")
+MEASUREMENT_PARQUET_COMPRESSIONS = ("snappy", "none")
+
+COMPACT_MEASUREMENT_COLUMNS = (
+    "frame_group_id",
+    "image_id",
+    "catalog",
+    "target_id",
+    "source_id",
+    "ra_deg",
+    "dec_deg",
+    "mag_primary",
+    "mag_primary_band",
+    "x_pix",
+    "y_pix",
+    "fits_path",
+    "edge_distance_pix",
+    "detector",
+    "release",
+    "aperture_radius_pix",
+    "annulus_inner_pix",
+    "annulus_outer_pix",
+    "edge_margin_pix",
+    "wavelength_source",
+    "wavelength_calibration_file",
+    "wavelength_calibration_collection",
+    "sapm_file",
+    "aperture_flux_uJy",
+    "aperture_flux_unc_uJy",
+    "aperture_area_pix",
+    "background_uJy_per_pix",
+    "background_unc_uJy_per_pix",
+    "n_bad_aperture_pixels",
+    "flags_summary",
+    "cwave_um",
+    "cband_um",
+    "psf_flux_uJy",
+    "psf_flux_unc_uJy",
+    "psf_background_uJy_per_pix",
+    "psf_chi2",
+    "psf_reduced_chi2",
+    "psf_dof",
+    "psf_n_valid",
+    "psf_sector",
+    "psf_grid_n_valid",
+    "psf_grid_best_score",
+    "psf_x_fit",
+    "psf_y_fit",
+    "psf_fit_offset_pix",
+    "psf_kernel_sum",
+    "psf_grid_n_trials",
+    "psf_kernel_shape_y",
+    "psf_kernel_shape_x",
+    "psf_status_code",
+    "aperture_flux_unit",
+    "aperture_status_code",
+    "psf_flux_unit",
 )
 
 
@@ -41,6 +103,15 @@ class PersistentWorkerConfig:
     local_cache_dir: Path | None = None
     async_shard_writes: bool = False
     batch_table_assembly: bool = False
+    discard_measurement_shards: bool = False
+    measurement_column_profile: str = "full"
+    measurement_parquet_compression: str = "snappy"
+    enable_psf: bool = False
+    psf_kernel_build_mode: str = "gpu_spline"
+    psf_kernel_radius_native: int = 5
+    psf_grid_half_range_pix: float = 1.0
+    psf_grid_step_pix: float = 0.5
+    psf_grid_metric: str = "snr"
 
 
 @dataclass(frozen=True)
@@ -60,6 +131,8 @@ class FramePayload:
     image: np.ndarray
     variance: np.ndarray | None
     flags: np.ndarray | None
+    psf_cube: np.ndarray | None
+    psf_oversamp: int | None
     unit_scale: float
     staging_wall_sec: float
     fits_read_wall_sec: float
@@ -89,6 +162,9 @@ class PersistentGpuFrameWorker:
     def __init__(self, config: PersistentWorkerConfig):
         self.config = config
         self._calibration: dict[tuple[str, int], ResidentCalibration] = {}
+        self._calibration_cache_hits = 0
+        self._calibration_cache_misses = 0
+        self._calibration_load_wall_sec = 0.0
         self._cudf = None
         self._init_gpu_runtime()
 
@@ -134,10 +210,25 @@ class PersistentGpuFrameWorker:
         started = time.perf_counter()
         if self.config.write_combined_output and self.config.batch_table_assembly:
             raise ValueError("--write-combined-output is not supported with --batch-table-assembly yet")
+        if self.config.write_combined_output and self.config.discard_measurement_shards:
+            raise ValueError("--write-combined-output cannot be combined with --discard-measurement-shards")
+        if self.config.measurement_column_profile not in MEASUREMENT_COLUMN_PROFILES:
+            raise ValueError(
+                f"measurement_column_profile must be one of {MEASUREMENT_COLUMN_PROFILES}: "
+                f"{self.config.measurement_column_profile!r}"
+            )
+        if self.config.measurement_parquet_compression not in MEASUREMENT_PARQUET_COMPRESSIONS:
+            raise ValueError(
+                f"measurement_parquet_compression must be one of {MEASUREMENT_PARQUET_COMPRESSIONS}: "
+                f"{self.config.measurement_parquet_compression!r}"
+            )
         output_dir.mkdir(parents=True, exist_ok=True)
         shards_dir = output_dir / "measurement_shards"
         shards_dir.mkdir(exist_ok=True)
         status_path = status_path or output_dir / "run_status.json"
+        calibration_start_hits = self._calibration_cache_hits
+        calibration_start_misses = self._calibration_cache_misses
+        calibration_start_load_wall = self._calibration_load_wall_sec
 
         manifest = manifest.reset_index(drop=True).copy()
         targets = targets.copy()
@@ -162,11 +253,32 @@ class PersistentGpuFrameWorker:
             "measurement_rows": 0,
             "ok_measurement_rows": 0,
             "failed_frames": 0,
-            "calibration_upload_count": 0,
+            "calibration_upload_count": len(self._calibration),
+            "resident_calibration_count": len(self._calibration),
+            "calibration_cache_hits": self._calibration_cache_hits,
+            "calibration_cache_misses": self._calibration_cache_misses,
+            "calibration_load_wall_sec": self._calibration_load_wall_sec,
+            "batch_calibration_cache_hits": 0,
+            "batch_calibration_cache_misses": 0,
+            "batch_calibration_load_wall_sec": 0.0,
             "backend": "persistent_warp_frame_kernel_plus_cudf_shards",
             "local_cache_dir": str(self.config.local_cache_dir) if self.config.local_cache_dir else None,
             "async_shard_writes": self.config.async_shard_writes,
             "batch_table_assembly": self.config.batch_table_assembly,
+            "discard_measurement_shards": self.config.discard_measurement_shards,
+            "measurement_column_profile": self.config.measurement_column_profile,
+            "measurement_parquet_compression": self.config.measurement_parquet_compression,
+            "aperture_radius_pix": float(self.config.aperture.aperture_radius_pix),
+            "annulus_inner_pix": float(self.config.aperture.annulus_inner_pix),
+            "annulus_outer_pix": float(self.config.aperture.annulus_outer_pix),
+            "edge_margin_pix": float(self.config.aperture.edge_margin_pix),
+            "enable_psf": self.config.enable_psf,
+            "psf_kernel_build_mode": self.config.psf_kernel_build_mode if self.config.enable_psf else None,
+            "psf_grid_half_range_pix": self.config.psf_grid_half_range_pix if self.config.enable_psf else None,
+            "psf_grid_step_pix": self.config.psf_grid_step_pix if self.config.enable_psf else None,
+            "psf_grid_metric": self.config.psf_grid_metric if self.config.enable_psf else None,
+            "psf_measurement_rows": 0,
+            "ok_psf_rows": 0,
             "frame_timings": [],
             "shards": [],
         }
@@ -201,22 +313,29 @@ class PersistentGpuFrameWorker:
                     ok_count = int(frame_stats["ok_count"])
                     summary["measurement_rows"] += rows
                     summary["ok_measurement_rows"] += ok_count
-                    pending_gdfs.append(measurement)
-                    shard_group.append(
-                        {
-                            "frame_group_id": frame_group_id,
-                            "image_id": frame.get("image_id"),
-                            "rows": rows,
-                            "ok_rows": ok_count,
-                        }
-                    )
+                    summary["psf_measurement_rows"] += int(frame_stats.get("psf_measurement_count", 0))
+                    summary["ok_psf_rows"] += int(frame_stats.get("ok_psf_count", 0))
+                    if self.config.discard_measurement_shards:
+                        summary["discarded_measurement_rows"] = int(
+                            summary.get("discarded_measurement_rows", 0)
+                        ) + rows
+                    else:
+                        pending_gdfs.append(measurement)
+                        shard_group.append(
+                            {
+                                "frame_group_id": frame_group_id,
+                                "image_id": frame.get("image_id"),
+                                "rows": rows,
+                                "ok_rows": ok_count,
+                            }
+                        )
                     if self.config.write_combined_output:
                         shard_frames.append(measurement)
                     write_wall = 0.0
                     shard_submit_wall = 0.0
                     async_write_queued = False
                     shard_path = None
-                    if len(pending_gdfs) >= self.config.shard_batch_frames:
+                    if (not self.config.discard_measurement_shards) and len(pending_gdfs) >= self.config.shard_batch_frames:
                         shard_path, flush_wall, async_write_queued = self._flush_shard_batch(
                             pending_gdfs=pending_gdfs,
                             shard_group=shard_group,
@@ -261,7 +380,12 @@ class PersistentGpuFrameWorker:
                             "error": f"{type(exc).__name__}: {exc}",
                         }
                     )
-                summary["calibration_upload_count"] = len(self._calibration)
+                self._update_calibration_summary(
+                    summary,
+                    start_hits=calibration_start_hits,
+                    start_misses=calibration_start_misses,
+                    start_load_wall=calibration_start_load_wall,
+                )
                 summary["completed_frames"] = len(summary["frame_timings"])
                 summary["queued_shard_writes"] = len(pending_shard_writes)
                 summary["total_wall_sec"] = time.perf_counter() - started
@@ -285,6 +409,12 @@ class PersistentGpuFrameWorker:
                     summary,
                 )
                 summary["queued_shard_writes"] = 0
+            self._update_calibration_summary(
+                summary,
+                start_hits=calibration_start_hits,
+                start_misses=calibration_start_misses,
+                start_load_wall=calibration_start_load_wall,
+            )
         finally:
             if writer_pool is not None:
                 writer_pool.shutdown(wait=True)
@@ -296,6 +426,12 @@ class PersistentGpuFrameWorker:
             summary["combined_output_path"] = str(combined_path)
             summary["combined_write_wall_sec"] = time.perf_counter() - tw
 
+        self._update_calibration_summary(
+            summary,
+            start_hits=calibration_start_hits,
+            start_misses=calibration_start_misses,
+            start_load_wall=calibration_start_load_wall,
+        )
         summary["total_wall_sec"] = time.perf_counter() - started
         summary["completed_utc"] = datetime.now(timezone.utc).isoformat()
         summary_path = output_dir / "run_summary.json"
@@ -323,11 +459,21 @@ class PersistentGpuFrameWorker:
         y_selected = y_zero[selected]
         selection_wall = time.perf_counter() - t_select
 
+        t_frame_upload = time.perf_counter()
+        frame_data = upload_frame_data(
+            image=payload.image,
+            variance=payload.variance,
+            flags=payload.flags,
+            device=self.config.device,
+        )
+        frame_upload_wall = time.perf_counter() - t_frame_upload
+
         t_kernel = time.perf_counter()
         batch = run_warp_frame_aperture_resident_cupy(
             image=payload.image,
             variance=payload.variance,
             flags=payload.flags,
+            frame_data=frame_data,
             calibration=calibration.device_arrays,
             image_to_ujy_arcsec2=payload.unit_scale,
             x_zero_based=x_selected,
@@ -339,6 +485,37 @@ class PersistentGpuFrameWorker:
             device=self.config.device,
         )
         kernel_wall = time.perf_counter() - t_kernel
+        psf_kernel_wall = 0.0
+        psf_ok_count = 0
+        psf_timings: dict[str, float] = {}
+        if self.config.enable_psf:
+            if payload.psf_cube is None:
+                raise ValueError(f"PSF photometry requested but FITS frame has no PSF HDU: {payload.read_path}")
+            t_psf = time.perf_counter()
+            psf_batch = run_warp_frame_psf_grid_resident_cupy(
+                image=payload.image,
+                variance=payload.variance,
+                flags=payload.flags,
+                frame_data=frame_data,
+                sapm=calibration.device_arrays.sapm,
+                psf_cube=payload.psf_cube,
+                image_to_ujy_arcsec2=payload.unit_scale,
+                x_zero_based=x_selected,
+                y_zero_based=y_selected,
+                fatal_flag_bits=self.config.aperture.fatal_flag_bits,
+                kernel_radius_native=self.config.psf_kernel_radius_native,
+                half_range_pix=self.config.psf_grid_half_range_pix,
+                step_pix=self.config.psf_grid_step_pix,
+                metric=self.config.psf_grid_metric,
+                kernel_build_mode=self.config.psf_kernel_build_mode,
+                oversamp=payload.psf_oversamp,
+                device=self.config.device,
+            )
+            psf_kernel_wall = time.perf_counter() - t_psf
+            batch.columns.update(psf_batch.columns)
+            batch.columns["psf_status_code"] = psf_batch.status
+            psf_ok_count = int((psf_batch.status == 0).sum().get())
+            psf_timings = {f"psf_{name}": float(value) for name, value in psf_batch.timings.items()}
 
         t_table = time.perf_counter()
         metadata = self._measurement_metadata(
@@ -347,6 +524,7 @@ class PersistentGpuFrameWorker:
             selected_edge=selected_edge,
             payload=payload,
             calibration=calibration,
+            aperture=self.config.aperture,
         )
         ok_count = int((batch.status == 0).sum().get())
         if self.config.batch_table_assembly:
@@ -371,7 +549,13 @@ class PersistentGpuFrameWorker:
             "staging_wall_sec": payload.staging_wall_sec,
             "staged_bytes": payload.staged_bytes,
             "selection_wall_sec": selection_wall,
+            "frame_upload_wall_sec": frame_upload_wall,
             "kernel_wall_sec": kernel_wall,
+            "aperture_kernel_wall_sec": kernel_wall,
+            "psf_kernel_wall_sec": psf_kernel_wall,
+            "psf_measurement_count": int(len(selected_targets)) if self.config.enable_psf else 0,
+            "ok_psf_count": psf_ok_count,
+            **psf_timings,
             "table_wall_sec": table_wall,
             "frame_compute_wall_sec": time.perf_counter() - frame_started,
         }
@@ -384,6 +568,7 @@ class PersistentGpuFrameWorker:
         selected_edge: np.ndarray,
         payload: FramePayload,
         calibration: ResidentCalibration,
+        aperture: ApertureConfig,
     ) -> pd.DataFrame:
         detector = int(frame["detector"])
         release = str(frame.get("release") or "qr2")
@@ -407,6 +592,10 @@ class PersistentGpuFrameWorker:
         metadata["edge_distance_pix"] = selected_edge.astype(np.float32, copy=False)
         metadata["detector"] = detector
         metadata["release"] = release
+        metadata["aperture_radius_pix"] = float(aperture.aperture_radius_pix)
+        metadata["annulus_inner_pix"] = float(aperture.annulus_inner_pix)
+        metadata["annulus_outer_pix"] = float(aperture.annulus_outer_pix)
+        metadata["edge_margin_pix"] = float(aperture.edge_margin_pix)
         metadata["wavelength_source"] = "spectral_wcs_CWAVE_CBAND"
         metadata["wavelength_calibration_file"] = calibration.wavelength_path
         metadata["wavelength_calibration_collection"] = SPECTRAL_WCS_COLLECTION
@@ -432,27 +621,52 @@ class PersistentGpuFrameWorker:
         gdf["aperture_status_code"] = status
         gdf["aperture_status"] = "ok"
         gdf.loc[gdf["aperture_status_code"] != 0, "aperture_status"] = "bad_background"
+        if "psf_status_code" in gdf.columns:
+            gdf["psf_flux_unit"] = "uJy"
+            gdf["psf_status"] = "ok"
+            gdf.loc[gdf["psf_status_code"] != 0, "psf_status"] = "bad_fit"
         return gdf
 
     def _get_calibration(self, *, release: str, detector: int) -> ResidentCalibration:
         key = (release, int(detector))
         cached = self._calibration.get(key)
         if cached is not None:
+            self._calibration_cache_hits += 1
             return cached
+        self._calibration_cache_misses += 1
         t0 = time.perf_counter()
         sapm, _sapm_header, sapm_path = load_sapm(str(self.config.aperture.cache_root), release, detector)
         cwave, cband, wavelength_path = load_spectral_wcs_maps(str(self.config.aperture.cache_root), release, detector)
         device_arrays = upload_frame_calibration(sapm=sapm, cwave=cwave, cband=cband, device=self.config.device)
+        load_wall_sec = time.perf_counter() - t0
+        self._calibration_load_wall_sec += load_wall_sec
         cached = ResidentCalibration(
             release=release,
             detector=int(detector),
             sapm_path=sapm_path,
             wavelength_path=wavelength_path,
             device_arrays=device_arrays,
-            upload_wall_sec=time.perf_counter() - t0,
+            upload_wall_sec=load_wall_sec,
         )
         self._calibration[key] = cached
         return cached
+
+    def _update_calibration_summary(
+        self,
+        summary: dict[str, Any],
+        *,
+        start_hits: int,
+        start_misses: int,
+        start_load_wall: float,
+    ) -> None:
+        summary["calibration_upload_count"] = len(self._calibration)
+        summary["resident_calibration_count"] = len(self._calibration)
+        summary["calibration_cache_hits"] = int(self._calibration_cache_hits)
+        summary["calibration_cache_misses"] = int(self._calibration_cache_misses)
+        summary["calibration_load_wall_sec"] = float(self._calibration_load_wall_sec)
+        summary["batch_calibration_cache_hits"] = int(self._calibration_cache_hits - start_hits)
+        summary["batch_calibration_cache_misses"] = int(self._calibration_cache_misses - start_misses)
+        summary["batch_calibration_load_wall_sec"] = float(self._calibration_load_wall_sec - start_load_wall)
 
     def _iter_frame_payloads(self, frames: list[dict[str, Any]]):
         if self.config.prefetch_frames <= 0:
@@ -486,14 +700,26 @@ class PersistentGpuFrameWorker:
                 )
 
     @staticmethod
-    def _read_fits_arrays(path: Path) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, float]:
+    def _read_fits_arrays(
+        path: Path,
+        *,
+        include_psf: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray | None, np.ndarray | None, np.ndarray | None, int | None, float]:
         with fits.open(path, memmap=True) as hdul:
             image_hdu = hdul["IMAGE"]
             image = np.asarray(image_hdu.data, dtype=np.float32)
             variance = np.asarray(hdul["VARIANCE"].data, dtype=np.float32) if "VARIANCE" in hdul else None
             flags = np.asarray(hdul["FLAGS"].data, dtype=np.uint32) if "FLAGS" in hdul else None
+            psf_cube = None
+            psf_oversamp = None
+            if include_psf:
+                if "PSF" not in hdul:
+                    raise ValueError(f"FITS file has no PSF extension: {path}")
+                psf_hdu = hdul["PSF"]
+                psf_cube = np.asarray(psf_hdu.data, dtype=np.float32)
+                psf_oversamp = int(psf_hdu.header.get("OVERSAMP", image_hdu.header.get("OVERSAMP", 0)) or 0) or None
             unit_scale = image_to_ujy_arcsec2_scale(image_hdu.header)
-        return image, variance, flags, unit_scale
+        return image, variance, flags, psf_cube, psf_oversamp, unit_scale
 
     def _read_frame_payload(self, frame: dict[str, Any]) -> FramePayload:
         source_uri = str(frame["path"])
@@ -507,13 +733,18 @@ class PersistentGpuFrameWorker:
             read_path, staged_bytes = self._stage_fits(source_uri, self.config.local_cache_dir)
             staging_wall = time.perf_counter() - t_stage
         t_read = time.perf_counter()
-        image, variance, flags, unit_scale = self._read_fits_arrays(read_path)
+        image, variance, flags, psf_cube, psf_oversamp, unit_scale = self._read_fits_arrays(
+            read_path,
+            include_psf=self.config.enable_psf,
+        )
         return FramePayload(
             source_path=source_uri,
             read_path=str(read_path),
             image=image,
             variance=variance,
             flags=flags,
+            psf_cube=psf_cube,
+            psf_oversamp=psf_oversamp,
             unit_scale=unit_scale,
             staging_wall_sec=staging_wall,
             fits_read_wall_sec=time.perf_counter() - t_read,
@@ -553,6 +784,8 @@ class PersistentGpuFrameWorker:
                 shards_dir,
                 run_id,
                 self.config.device,
+                self.config.measurement_column_profile,
+                self.config.measurement_parquet_compression,
             )
             pending_writes.append(future)
             return shard_path, time.perf_counter() - tw, True
@@ -563,6 +796,8 @@ class PersistentGpuFrameWorker:
             shards_dir,
             run_id,
             self.config.device,
+            self.config.measurement_column_profile,
+            self.config.measurement_parquet_compression,
         )
         summary["shards"].append(result)
         return Path(result["path"]), float(result["write_wall_sec"]), False
@@ -580,6 +815,8 @@ class PersistentGpuFrameWorker:
         shards_dir: Path,
         run_id: str,
         device: str,
+        column_profile: str = "full",
+        parquet_compression: str = "snappy",
     ) -> dict[str, Any]:
         import cudf
         import cupy as cp
@@ -592,7 +829,11 @@ class PersistentGpuFrameWorker:
         )
         tw = time.perf_counter()
         out = PersistentGpuFrameWorker._assemble_shard_table(measurements, device=device)
-        out.to_parquet(shard_path, index=False)
+        out = PersistentGpuFrameWorker._apply_measurement_column_profile(out, column_profile)
+        compression_arg = None if parquet_compression == "none" else parquet_compression
+        out.to_parquet(shard_path, index=False, compression=compression_arg)
+        write_wall_sec = time.perf_counter() - tw
+        byte_count = shard_path.stat().st_size if shard_path.exists() else 0
         return {
             "path": str(shard_path),
             "frame_group_ids": [row["frame_group_id"] for row in shard_group],
@@ -600,7 +841,11 @@ class PersistentGpuFrameWorker:
             "rows": int(sum(row["rows"] for row in shard_group)),
             "ok_rows": int(sum(row["ok_rows"] for row in shard_group)),
             "frame_count": len(shard_group),
-            "write_wall_sec": time.perf_counter() - tw,
+            "column_profile": column_profile,
+            "column_count": int(len(out.columns)),
+            "parquet_compression": parquet_compression,
+            "bytes": int(byte_count),
+            "write_wall_sec": write_wall_sec,
         }
 
     @staticmethod
@@ -627,6 +872,15 @@ class PersistentGpuFrameWorker:
             status=status,
             device=device,
         )
+
+    @staticmethod
+    def _apply_measurement_column_profile(table: Any, column_profile: str):
+        if column_profile == "full":
+            return table
+        if column_profile != "compact":
+            raise ValueError(f"Unknown measurement column profile: {column_profile!r}")
+        columns = [column for column in COMPACT_MEASUREMENT_COLUMNS if column in table.columns]
+        return table[columns]
 
     @staticmethod
     def _collect_shard_writes(pending_writes: list[Future[dict[str, Any]]], summary: dict[str, Any]) -> float:

@@ -34,9 +34,11 @@ The persistent worker uses this frame-level GPU path:
 
 ```text
 read FITS IMAGE/VARIANCE/FLAGS
+optionally read FITS PSF cube
 optionally stage FITS onto local SSD/NVMe
 load/reuse resident SAPM + CWAVE + CBAND maps on GPU
-launch one Warp kernel per frame
+upload IMAGE + VARIANCE + FLAGS once as a resident frame object
+launch aperture and optional PSF Warp work per frame
 emit device columns through DLPack to CuPy/cuDF
 optionally assemble cuDF tables once per shard batch
 queue or write independent cuDF parquet shard
@@ -52,6 +54,61 @@ The kernel performs:
 - annulus background
 - uncertainty
 - aperture flag summary
+
+With `--enable-psf`, the worker also performs local-grid PSF photometry:
+
+- upload target pixel arrays and a compact subpixel offset bank
+- generate the target x subpixel-grid candidate coordinates inside the GPU
+  kernels
+- build shifted PSF kernels from the frame PSF cube
+- fit every candidate on GPU using the shared resident image/variance/flags
+  frame object and resident SAPM data
+- reduce to one best candidate per target
+- emit `psf_*` columns next to the aperture columns
+
+Default photometry geometry:
+
+```text
+--aperture-radius-pix 2.0
+--annulus-inner-pix 4.0
+--annulus-outer-pix 6.0
+--edge-margin-pix 6.0
+--psf-kernel-radius-native 5
+--psf-grid-half-range-pix 1.0
+--psf-grid-step-pix 0.5
+--psf-grid-metric snr
+```
+
+The aperture settings are written into both run summaries and every
+measurement row. `plan-gpu-dispatch` and `run-local-dispatch` forward these
+settings into generated worker argv.
+
+Measurement output has two column profiles:
+
+```text
+--measurement-column-profile full
+--measurement-column-profile compact
+```
+
+`full` keeps every emitted column, including verbose repeated provenance strings.
+`compact` keeps the columns needed for spectra assembly, candidate scoring, and
+point-level audit:
+
+```text
+frame_group_id, image_id, fits_path
+catalog, target_id, source_id, ra_deg, dec_deg
+detector, release
+aperture geometry
+wavelength source, wavelength calibration file, SAPM file
+cwave_um, cband_um
+flags_summary
+aperture flux/uncertainty/background/status
+PSF flux/uncertainty/background/fit diagnostics/status
+```
+
+`local_fits_path` is intentionally excluded from compact output because it is an
+ephemeral staging/cache path. `fits_path` is the durable source-object
+provenance and may be a NAS path or S3 URI depending on the manifest.
 
 ## Dispatch Plan
 
@@ -70,6 +127,11 @@ cd luxquarry_allsky_engine
   --prefetch-frames 2 \
   --async-shard-writes \
   --batch-table-assembly \
+  --aperture-radius-pix 2.0 \
+  --annulus-inner-pix 4.0 \
+  --annulus-outer-pix 6.0 \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
   --materialize-worker-inputs \
   --status-interval-frames 25 \
   --local-cache-dir /tmp/luxquarry_stage_smoke \
@@ -123,6 +185,8 @@ cd luxquarry_allsky_engine
   --local-cache-dir /tmp/luxquarry_stage_smoke \
   --async-shard-writes \
   --batch-table-assembly \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
   --finalize-device cuda:0
 ```
 
@@ -163,6 +227,137 @@ cd luxquarry_allsky_engine
 
 Resume mode still rebuilds the plan and finalizes the run, but complete workers
 are not relaunched. Missing, incomplete, or failed workers are launched normally.
+
+## Task Queue Worker Service
+
+For persistent local workers, or as the model for Kubernetes Jobs, materialize a
+task queue:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-task-queue \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/task_queue_gc_dense_smoke \
+  --campaign-id task_queue_gc_dense_smoke \
+  --frames-per-task 2 \
+  --limit-frames 4
+```
+
+Then launch one or more workers against the queue:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir runs/task_queue_gc_dense_smoke \
+  --out-dir runs/task_queue_gc_dense_smoke/worker_cuda0 \
+  --run-id task_queue_gc_dense_smoke \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --shard-batch-frames 2 \
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2 \
+  --measurement-column-profile compact \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline
+```
+
+This path is closer to the desired steady-state miner than one-shot dispatch:
+
+```text
+queue contains independent frame-batch tasks
+workers claim tasks atomically
+each worker keeps RAPIDS/Warp initialized across tasks
+each worker writes independent shard outputs and status JSON
+reducers assemble spectra after enough shards exist
+```
+
+The queue worker is the local control-plane analogue for EKS. The hot-path goal
+is still frame-level GPU work: load one frame, process all in-frame targets,
+emit durable measurement rows, and avoid per-target setup.
+
+For local workstation runs, use the one-command queue runner:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-local-task-queue \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/local_task_queue_gc_dense \
+  --run-id local_task_queue_gc_dense \
+  --devices cuda:0,cuda:1,cuda:2 \
+  --frames-per-task 6 \
+  --limit-frames 18 \
+  --shard-batch-frames 6 \
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2 \
+  --measurement-column-profile compact \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
+  --assemble-spectra \
+  --score-baseline
+```
+
+This command performs the local horizontal workflow in one reproducible step:
+
+```text
+write queue
+launch one run-gpu-worker-service subprocess per listed device
+wait for workers
+collect task queue shards
+optionally assemble spectra
+optionally score baseline candidates
+write local_task_queue_summary.json
+```
+
+It defaults to resident source inputs and batch table assembly. Use
+`--materialize-task-inputs` only when per-task manifest/target parquets are
+wanted for debugging or for a deployment shape that cannot keep the source
+tables resident in each worker service. Use `--no-batch-table-assembly` only for
+debugging the per-frame cuDF table path.
+
+Normal runs write compact durable parquet shards with snappy compression by
+default. For output-path benchmarks, pass
+`--measurement-parquet-compression none`. The current dense smoke result shows
+that disabling compression is only a small throughput win, so the remaining
+durable-output gap is the broader table/parquet/filesystem path rather than
+snappy alone.
+
+For larger queues, prefer resident source inputs:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-task-queue \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/task_queue_gc_dense_resident \
+  --campaign-id task_queue_gc_dense_resident \
+  --frames-per-task 2 \
+  --limit-frames 8 \
+  --no-materialize-task-inputs
+```
+
+In this mode, tasks contain only frame IDs. The worker service loads the source
+manifest and projected-target table once, then slices in memory for each claimed
+task. This avoids writing and rereading per-task parquet inputs. Worker summaries
+report:
+
+```text
+resident_source_inputs
+source_input_load_wall_sec
+calibration_cache_hits
+calibration_cache_misses
+calibration_load_wall_sec
+resident_calibration_count
+batch_calibration_cache_hits
+batch_calibration_cache_misses
+batch_calibration_load_wall_sec
+```
+
+Those fields are the evidence that a service is actually behaving like a
+persistent miner instead of repeatedly paying setup cost.
 
 ## Status Snapshots
 

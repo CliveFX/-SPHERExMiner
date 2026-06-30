@@ -30,7 +30,20 @@ class LocalDispatchRunConfig:
     local_cache_dir: Path | None = None
     async_shard_writes: bool = False
     batch_table_assembly: bool = False
+    discard_measurement_shards: bool = False
+    measurement_column_profile: str = "full"
+    measurement_parquet_compression: str = "snappy"
     materialize_worker_inputs: bool = True
+    aperture_radius_pix: float = 2.0
+    annulus_inner_pix: float = 4.0
+    annulus_outer_pix: float = 6.0
+    edge_margin_pix: float = 6.0
+    enable_psf: bool = False
+    psf_kernel_build_mode: str = "gpu_spline"
+    psf_kernel_radius_native: int = 5
+    psf_grid_half_range_pix: float = 1.0
+    psf_grid_step_pix: float = 0.5
+    psf_grid_metric: str = "snr"
     finalize_device: str = "cuda:0"
     spectra_out_dir: Path | None = None
     spectra_run_id: str | None = None
@@ -88,7 +101,20 @@ def run_local_dispatch(config: LocalDispatchRunConfig) -> dict[str, Any]:
             local_cache_dir=config.local_cache_dir,
             async_shard_writes=config.async_shard_writes,
             batch_table_assembly=config.batch_table_assembly,
+            discard_measurement_shards=config.discard_measurement_shards,
+            measurement_column_profile=config.measurement_column_profile,
+            measurement_parquet_compression=config.measurement_parquet_compression,
             materialize_worker_inputs=config.materialize_worker_inputs,
+            aperture_radius_pix=config.aperture_radius_pix,
+            annulus_inner_pix=config.annulus_inner_pix,
+            annulus_outer_pix=config.annulus_outer_pix,
+            edge_margin_pix=config.edge_margin_pix,
+            enable_psf=config.enable_psf,
+            psf_kernel_build_mode=config.psf_kernel_build_mode,
+            psf_kernel_radius_native=config.psf_kernel_radius_native,
+            psf_grid_half_range_pix=config.psf_grid_half_range_pix,
+            psf_grid_step_pix=config.psf_grid_step_pix,
+            psf_grid_metric=config.psf_grid_metric,
         )
     )
     write_dispatch_plan(plan, plan_path)

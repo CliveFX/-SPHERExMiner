@@ -89,6 +89,207 @@ Add `--worker-only` to skip spectra assembly, scoring, and campaign
 finalization. Worker-only sweeps are the correct tool for isolating worker
 process launch overhead from persistent GPU worker payload throughput.
 
+For PSF occupancy work, run the same sweep with PSF enabled:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_psf_worker_only \
+  --run-id dispatch_psf_worker_only \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 10,100 \
+  --shard-batch-frames 5,10 \
+  --prefetch-frames 0,2 \
+  --worker-only \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline
+```
+
+PSF-enabled sweep rows include:
+
+```text
+psf_measurement_rows
+ok_psf_rows
+psf_candidate_count
+worker_min_wall_sec
+worker_avg_wall_sec
+worker_max_wall_sec
+worker_parallel_efficiency
+worker_wall_skew_ratio
+staging_wall_sec
+payload_wait_wall_sec
+fits_read_wall_sec
+frame_upload_wall_sec
+psf_candidate_grid_wall_sec
+psf_kernel_wall_sec
+psf_device_submit_sync_wall_sec
+psf_spline_coeff_wall_sec
+psf_upload_wall_sec
+psf_gather_wall_sec
+table_wall_sec
+shard_submit_wall_sec
+async_shard_write_wait_wall_sec
+write_wall_sec
+max_worker_payload_wait_wall_sec
+max_worker_staging_wall_sec
+max_worker_fits_read_wall_sec
+max_worker_psf_kernel_wall_sec
+max_worker_async_shard_write_wait_wall_sec
+max_worker_shard_write_wall_sec
+psf_candidates_per_sec_device_submit_sync
+```
+
+`psf_candidates_per_sec_device_submit_sync` is the closest current proxy for
+GPU PSF math throughput. Total and worker-payload candidate/sec include process
+launch, FITS read, table assembly, and parquet overhead, so use them for cost
+modeling rather than kernel occupancy.
+
+For multi-GPU runs, the summed stage timings show total work across workers,
+not critical wall time. Use the `max_worker_*` columns to identify what actually
+limits elapsed worker payload. The first dense 3-GPU local-cache sweep showed
+that warm local cache plus prefetch reduces max-worker payload wait from about
+0.73 sec to about 0.03 sec on the 18-frame test. After that, PSF kernel work
+and async shard-write wait are the measured critical-path costs.
+
+To bound write overhead, run the same worker-only benchmark with
+`--discard-measurement-shards`. This is not a science-output mode; it exists to
+measure photometry throughput without parquet shard flush:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_psf_gc_dense_real_3gpu18_cache_prefetch2_discard_warm \
+  --run-id dispatch_psf_gc_dense_real_3gpu18_cache_prefetch2_discard_warm \
+  --devices cuda:0,cuda:1,cuda:2 \
+  --workers-per-device 1 \
+  --limit-frames 18 \
+  --shard-batch-frames 6 \
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2 \
+  --worker-only \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
+  --discard-measurement-shards
+```
+
+The first no-write bound saved about 0.52 sec of max-worker critical path and
+raised payload throughput from about 147k to about 193k measurements/sec across
+3 GPUs. Production work must recover as much of that gap as possible while
+still writing durable parquet shards.
+
+To test schema pressure separately from write/no-write pressure, use:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_psf_gc_dense_compact \
+  --run-id dispatch_psf_gc_dense_compact \
+  --devices cuda:0,cuda:1,cuda:2 \
+  --workers-per-device 1 \
+  --limit-frames 18 \
+  --shard-batch-frames 6 \
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2 \
+  --worker-only \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline \
+  --measurement-column-profile compact
+```
+
+`compact` is not allowed to drop science audit provenance. It keeps per-point
+`fits_path`, `frame_group_id`, `image_id`, detector, wavelength calibration,
+SAPM calibration, aperture geometry, wavelength, flags, aperture flux, and PSF
+flux/diagnostics. It drops ephemeral staging-only fields such as
+`local_fits_path`.
+
+The first compact/full comparison showed nearly identical bytes per row and
+payload time on the dense 18-frame workload. Treat compact as schema control,
+not as the current solution to output write pressure.
+
+For persistent-worker validation, use the task-queue path instead of repeatedly
+paying launch/setup cost:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-task-queue \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/task_queue_gc_dense_smoke \
+  --campaign-id task_queue_gc_dense_smoke \
+  --frames-per-task 2 \
+  --limit-frames 4
+
+.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir runs/task_queue_gc_dense_smoke \
+  --out-dir runs/task_queue_gc_dense_smoke/worker_cuda0 \
+  --run-id task_queue_gc_dense_smoke \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --shard-batch-frames 2 \
+  --prefetch-frames 2 \
+  --local-cache-dir /tmp/luxquarry_gc_dense_cache_prefetch2 \
+  --measurement-column-profile compact \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline
+```
+
+The task-queue service is the local analogue of the eventual Kubernetes worker:
+claim frame batches, keep GPU runtime initialized, write independent
+measurement shards, and let a reducer assemble spectra afterward.
+
+Use dense real fields when possible. The sparse 10-frame smoke set has only a
+few hundred selected targets per frame and underfeeds the PSF kernels. A better
+occupancy smoke is the Galactic-plane-adjacent set:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_psf_gc_dense_real_smoke10 \
+  --run-id dispatch_psf_gc_dense_real_smoke10 \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 10 \
+  --shard-batch-frames 5 \
+  --prefetch-frames 0 \
+  --worker-only \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_spline
+```
+
+If a real field is still too sparse, create a benchmark-only target-density
+ladder by multiplying a projected-target parquet:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky inflate-projected-targets \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out runs/projected_targets_smoke_current/frame_targets_projected_x10.parquet \
+  --repeat-factor 10 \
+  --jitter-pix 0.05
+```
+
+Inflated target parquets are synthetic benchmark inputs only. They preserve the
+frame geometry and add `benchmark_inflated`, `benchmark_repeat_index`, and
+`benchmark_parent_target_id` columns so they cannot be confused with a science
+catalog.
+
+`frame_upload_wall_sec` is the shared upload of FITS `IMAGE`, `VARIANCE`, and
+`FLAGS` to GPU. Aperture and PSF both consume this resident frame object.
+`psf_upload_wall_sec` should stay small; it covers PSF-specific buffers such as
+the shifted-kernel source data and subpixel offset bank, not a second copy of
+the raw frame. `psf_candidate_grid_wall_sec` should be near zero because the
+PSF candidate grid is represented as target arrays plus a small offset table;
+the full target-by-offset coordinates are generated inside the GPU kernels.
+
 It writes:
 
 ```text

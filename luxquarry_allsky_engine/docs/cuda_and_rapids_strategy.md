@@ -105,6 +105,148 @@ Use custom CUDA/Warp for:
 These operations encode SPHEREx-specific math and calibration choices. They
 should be directly testable against the current miner.
 
+For PSF photometry, the production work shape is not "one target equals one
+kernel." It is:
+
+```text
+one frame + all in-frame targets
+  -> expand targets to target x local_subpixel_grid candidates
+  -> build shifted PSF kernels on GPU
+  -> fit every candidate independently on GPU
+  -> reduce to one best fit per target
+```
+
+That candidate-parallel shape is what can fill A100/H100/B300-class devices.
+Small smoke tests with only a few hundred targets per frame are useful for
+correctness, but they are not representative occupancy tests.
+
+The 2026-06-29 dense Galactic-plane benchmark confirms this. Sparse smoke
+frames delivered only about 0.85M PSF candidates/sec in the device submit/sync
+section; dense real fields delivered about 6.8M candidates/sec. On one local
+node, 18 dense frames split across three RTX 6000 Ada GPUs showed good worker
+balance:
+
+```text
+worker_parallel_efficiency: 95.7%
+worker_wall_skew_ratio: 1.074
+payload speedup vs one GPU: 1.52x
+end-to-end speedup vs one GPU: 1.16x
+```
+
+The frame-worker partitioning is therefore viable, but the measured limit is
+now feeding and draining workers: FITS reads, local/object staging, and parquet
+shard writes. Future performance work should treat NVMe/S3 staging and write
+combining as GPU-utilization features, not as secondary plumbing.
+
+A follow-up 18-frame, 3-GPU local-cache sweep measured the first I/O mitigation:
+
+```text
+uncached payload: 2.915 sec
+warm local cache + prefetch=2 payload: 2.177 sec
+payload speedup: 1.34x
+end-to-end speedup: 1.11x
+max payload wait: 0.726 sec -> 0.032 sec
+```
+
+This confirms that local object staging and prefetch are part of the GPU
+utilization strategy. Once reads are hidden, async shard-write wait remains a
+critical-path cost, so output shard batching/combining should be optimized
+before spending effort on small PSF kernel micro-optimizations.
+
+The first no-write bound used `--discard-measurement-shards` on the same
+warm-cache workload:
+
+```text
+warm cache with parquet writes: 2.177 sec payload, 147k measurements/sec
+warm cache with writes discarded: 1.659 sec payload, 193k measurements/sec
+critical-path output cost: ~0.52 sec
+```
+
+This flag is benchmark-only. The production target is not to drop data; it is
+to preserve durable parquet outputs while closing that 0.52 sec critical-path
+gap through wider shards, write combining, KvikIO/NVMe evaluation, or compact
+first-pass output schemas.
+
+The first compact schema test did not close that gap:
+
+```text
+full warm payload:    2.233 sec, 143.7k measurements/sec, 103.83 bytes/row
+compact warm payload: 2.240 sec, 143.2k measurements/sec, 103.70 bytes/row
+```
+
+Compact output still matters for schema discipline, but the current durable
+write bottleneck is not solved by dropping a handful of repeated string
+columns. Future output work should therefore prioritize:
+
+- fewer and wider shard writes
+- writer-process or writer-thread isolation
+- local NVMe/KvikIO experiments
+- reducer paths that tolerate out-of-order shards
+- avoiding tiny-run process launch overhead by using task queues and
+  long-lived workers
+
+Per-measurement provenance remains mandatory. Even compact science output must
+preserve enough columns to trace each spectral point back to the source FITS
+object and calibration choices:
+
+```text
+fits_path
+frame_group_id
+image_id
+detector
+wavelength_calibration_file
+sapm_file
+aperture geometry
+cwave_um/cband_um
+flags_summary
+aperture and PSF flux/status columns
+```
+
+Ephemeral local staging paths are not mandatory provenance and can be omitted
+from compact output.
+
+The first 3-GPU resident task-queue smoke validates the horizontal control
+plane, but not a throughput win yet:
+
+```text
+one-shot compact dispatch:        ~143k measurements/sec payload
+resident queue, 6 x 3-frame task: ~133k measurements/sec payload
+resident queue, 3 x 6-frame task: ~133k measurements/sec payload
+no-write bound:                   ~193k measurements/sec payload
+```
+
+This is useful evidence. The queue architecture is correct for scale-out
+because workers can claim frame batches concurrently and reducers can assemble
+out-of-order shards. The small-run throughput result says the next optimization
+is not another scheduler abstraction; it is amortizing setup over longer-lived
+workers and reducing output/table write pressure.
+
+Batch table assembly is now the queue-runner baseline:
+
+```text
+resident queue without batch table assembly: ~132.5k measurements/sec
+resident queue with batch table assembly:    ~140.2k measurements/sec
+one-shot compact dispatch:                   ~143.2k measurements/sec
+no-write bound:                              ~193.4k measurements/sec
+```
+
+This confirms that per-frame cuDF table construction was a material hot-path
+cost. The next target is the combined shard flush path, where deferred table
+assembly and parquet write now live together.
+
+Parquet compression is not the dominant remaining output cost on the dense
+18-frame/3-GPU smoke:
+
+```text
+compact + snappy:         ~140.2k measurements/sec payload
+compact + no compression: ~142.1k measurements/sec payload
+no-write bound:           ~193.4k measurements/sec payload
+```
+
+`snappy` stays the default because normal runs should preserve compact portable
+artifacts. `--measurement-parquet-compression none` is useful for isolating
+write-path cost, but it does not close the durable-output gap by itself.
+
 ## CPU Remains Allowed
 
 Do not force fragile science transforms onto the GPU before correctness is
@@ -159,6 +301,9 @@ Required metrics:
 - catalog query time
 - CPU WCS/projection time
 - GPU photometry kernel time
+- PSF candidate count and candidates/sec
+- PSF spline coefficient wall time
+- PSF upload wall time
 - cuDF table construction time
 - cuDF filter/group/sort time
 - parquet write time

@@ -36,7 +36,20 @@ class DispatchBenchmarkSweepConfig:
     executable: str = ".venv/bin/luxquarry-allsky"
     async_shard_writes: bool = True
     batch_table_assembly: bool = True
+    discard_measurement_shards: bool = False
+    measurement_column_profile: str = "full"
+    measurement_parquet_compression: str = "snappy"
     materialize_worker_inputs: bool = True
+    aperture_radius_pix: float = 2.0
+    annulus_inner_pix: float = 4.0
+    annulus_outer_pix: float = 6.0
+    edge_margin_pix: float = 6.0
+    enable_psf: bool = False
+    psf_kernel_build_mode: str = "gpu_spline"
+    psf_kernel_radius_native: int = 5
+    psf_grid_half_range_pix: float = 1.0
+    psf_grid_step_pix: float = 0.5
+    psf_grid_metric: str = "snr"
     finalize_device: str = "cuda:0"
     score_baseline: bool = False
     candidate_min_abs_zscore: float = 5.0
@@ -115,7 +128,20 @@ def _run_trial(
             local_cache_dir=config.local_cache_dir,
             async_shard_writes=config.async_shard_writes,
             batch_table_assembly=config.batch_table_assembly,
+            discard_measurement_shards=config.discard_measurement_shards,
+            measurement_column_profile=config.measurement_column_profile,
+            measurement_parquet_compression=config.measurement_parquet_compression,
             materialize_worker_inputs=config.materialize_worker_inputs,
+            aperture_radius_pix=config.aperture_radius_pix,
+            annulus_inner_pix=config.annulus_inner_pix,
+            annulus_outer_pix=config.annulus_outer_pix,
+            edge_margin_pix=config.edge_margin_pix,
+            enable_psf=config.enable_psf,
+            psf_kernel_build_mode=config.psf_kernel_build_mode,
+            psf_kernel_radius_native=config.psf_kernel_radius_native,
+            psf_grid_half_range_pix=config.psf_grid_half_range_pix,
+            psf_grid_step_pix=config.psf_grid_step_pix,
+            psf_grid_metric=config.psf_grid_metric,
             finalize_device=config.finalize_device,
             score_baseline=config.score_baseline,
             candidate_min_abs_zscore=config.candidate_min_abs_zscore,
@@ -153,7 +179,20 @@ def _run_worker_only_trial(
             local_cache_dir=config.local_cache_dir,
             async_shard_writes=config.async_shard_writes,
             batch_table_assembly=config.batch_table_assembly,
+            discard_measurement_shards=config.discard_measurement_shards,
+            measurement_column_profile=config.measurement_column_profile,
+            measurement_parquet_compression=config.measurement_parquet_compression,
             materialize_worker_inputs=config.materialize_worker_inputs,
+            aperture_radius_pix=config.aperture_radius_pix,
+            annulus_inner_pix=config.annulus_inner_pix,
+            annulus_outer_pix=config.annulus_outer_pix,
+            edge_margin_pix=config.edge_margin_pix,
+            enable_psf=config.enable_psf,
+            psf_kernel_build_mode=config.psf_kernel_build_mode,
+            psf_kernel_radius_native=config.psf_kernel_radius_native,
+            psf_grid_half_range_pix=config.psf_grid_half_range_pix,
+            psf_grid_step_pix=config.psf_grid_step_pix,
+            psf_grid_metric=config.psf_grid_metric,
         )
     )
     write_dispatch_plan(plan, plan_path)
@@ -253,6 +292,8 @@ def _trial_row(
     total_wall = _num(summary.get("total_wall_sec")) or elapsed
     worker_max_wall = _num(aggregate.get("worker_max_wall_sec"))
     worker_launch_overhead = max(0.0, worker_wall - worker_max_wall)
+    psf_candidate_count = _num(aggregate.get("psf_candidate_count"))
+    psf_device_submit_sync_wall = _num(aggregate.get("psf_device_submit_sync_wall_sec"))
     return {
         "trial_index": trial_index,
         "run_id": trial_run_id,
@@ -269,14 +310,31 @@ def _trial_row(
         "prefetch_frames": int(settings["prefetch_frames"]),
         "repetition": int(settings["repetition"]),
         "measurement_rows": measurement_rows,
+        "psf_measurement_rows": int(aggregate.get("psf_measurement_rows") or 0),
+        "ok_psf_rows": int(aggregate.get("ok_psf_rows") or 0),
+        "psf_candidate_count": psf_candidate_count,
         "target_count": int(finalize.get("target_count") or 0),
+        "enable_psf": bool(config.enable_psf),
+        "discard_measurement_shards": bool(config.discard_measurement_shards),
+        "measurement_column_profile": config.measurement_column_profile,
+        "measurement_parquet_compression": config.measurement_parquet_compression,
+        "aperture_radius_pix": float(config.aperture_radius_pix),
+        "annulus_inner_pix": float(config.annulus_inner_pix),
+        "annulus_outer_pix": float(config.annulus_outer_pix),
+        "psf_kernel_build_mode": config.psf_kernel_build_mode if config.enable_psf else None,
+        "psf_grid_half_range_pix": float(config.psf_grid_half_range_pix) if config.enable_psf else 0.0,
+        "psf_grid_step_pix": float(config.psf_grid_step_pix) if config.enable_psf else 0.0,
         "plan_wall_sec": _num(summary.get("plan_wall_sec")),
         "worker_wall_sec": worker_wall,
         "finalize_wall_sec": finalize_wall,
         "total_wall_sec": total_wall,
         "collect_wall_sec": _num(aggregate.get("collect_wall_sec")),
+        "worker_min_wall_sec": _num(aggregate.get("worker_min_wall_sec")),
+        "worker_avg_wall_sec": _num(aggregate.get("worker_avg_wall_sec")),
         "worker_max_wall_sec": worker_max_wall,
         "worker_sum_wall_sec": _num(aggregate.get("worker_sum_wall_sec")),
+        "worker_parallel_efficiency": _num(aggregate.get("worker_parallel_efficiency")),
+        "worker_wall_skew_ratio": _num(aggregate.get("worker_wall_skew_ratio")),
         "worker_launch_overhead_sec": worker_launch_overhead,
         "read_shards_wall_sec": _num(spectra.get("read_shards_wall_sec")),
         "sort_wall_sec": _num(spectra.get("sort_wall_sec")),
@@ -285,6 +343,42 @@ def _trial_row(
         "spectra_total_wall_sec": _num(spectra.get("total_wall_sec")),
         "baseline_score_wall_sec": _num(baseline_scoring.get("total_wall_sec")),
         "baseline_candidate_count": int(baseline_scoring.get("candidate_count") or 0),
+        "staging_wall_sec": _num(aggregate.get("staging_wall_sec")),
+        "payload_wait_wall_sec": _num(aggregate.get("payload_wait_wall_sec")),
+        "frame_upload_wall_sec": _num(aggregate.get("frame_upload_wall_sec")),
+        "aperture_kernel_wall_sec": _num(aggregate.get("aperture_kernel_wall_sec")),
+        "fits_read_wall_sec": _num(aggregate.get("fits_read_wall_sec")),
+        "selection_wall_sec": _num(aggregate.get("selection_wall_sec")),
+        "table_wall_sec": _num(aggregate.get("table_wall_sec")),
+        "frame_compute_wall_sec": _num(aggregate.get("frame_compute_wall_sec")),
+        "shard_submit_wall_sec": _num(aggregate.get("shard_submit_wall_sec")),
+        "async_shard_write_wait_wall_sec": _num(aggregate.get("async_shard_write_wait_wall_sec")),
+        "write_wall_sec": _num(aggregate.get("shard_write_wall_sec") or aggregate.get("write_wall_sec")),
+        "shard_total_bytes": _num(aggregate.get("shard_total_bytes")),
+        "shard_bytes_per_measurement": _num(aggregate.get("shard_bytes_per_measurement")),
+        "max_worker_staging_wall_sec": _num(aggregate.get("max_worker_staging_wall_sec")),
+        "max_worker_payload_wait_wall_sec": _num(aggregate.get("max_worker_payload_wait_wall_sec")),
+        "max_worker_fits_read_wall_sec": _num(aggregate.get("max_worker_fits_read_wall_sec")),
+        "max_worker_frame_upload_wall_sec": _num(aggregate.get("max_worker_frame_upload_wall_sec")),
+        "max_worker_aperture_kernel_wall_sec": _num(aggregate.get("max_worker_aperture_kernel_wall_sec")),
+        "max_worker_psf_kernel_wall_sec": _num(aggregate.get("max_worker_psf_kernel_wall_sec")),
+        "max_worker_psf_device_submit_sync_wall_sec": _num(
+            aggregate.get("max_worker_psf_device_submit_sync_wall_sec")
+        ),
+        "max_worker_psf_spline_coeff_wall_sec": _num(aggregate.get("max_worker_psf_spline_coeff_wall_sec")),
+        "max_worker_psf_gather_wall_sec": _num(aggregate.get("max_worker_psf_gather_wall_sec")),
+        "max_worker_table_wall_sec": _num(aggregate.get("max_worker_table_wall_sec")),
+        "max_worker_shard_write_wall_sec": _num(aggregate.get("max_worker_shard_write_wall_sec")),
+        "max_worker_shard_bytes": _num(aggregate.get("max_worker_shard_bytes")),
+        "max_worker_async_shard_write_wait_wall_sec": _num(
+            aggregate.get("max_worker_async_shard_write_wait_wall_sec")
+        ),
+        "psf_candidate_grid_wall_sec": _num(aggregate.get("psf_candidate_grid_wall_sec")),
+        "psf_kernel_wall_sec": _num(aggregate.get("psf_kernel_wall_sec")),
+        "psf_device_submit_sync_wall_sec": psf_device_submit_sync_wall,
+        "psf_spline_coeff_wall_sec": _num(aggregate.get("psf_spline_coeff_wall_sec")),
+        "psf_upload_wall_sec": _num(aggregate.get("psf_upload_wall_sec")),
+        "psf_gather_wall_sec": _num(aggregate.get("psf_gather_wall_sec")),
         "measurements_per_sec_total": _rate(measurement_rows, total_wall),
         "measurements_per_sec_worker_phase": _rate(measurement_rows, worker_wall),
         "measurements_per_sec_worker_payload": _rate(measurement_rows, worker_max_wall),
@@ -293,6 +387,9 @@ def _trial_row(
         "frames_per_sec_total": _rate(completed_frames, total_wall),
         "frames_per_sec_worker_phase": _rate(completed_frames, worker_wall),
         "frames_per_sec_worker_payload": _rate(completed_frames, worker_max_wall),
+        "psf_candidates_per_sec_total": _rate(psf_candidate_count, total_wall),
+        "psf_candidates_per_sec_worker_payload": _rate(psf_candidate_count, worker_max_wall),
+        "psf_candidates_per_sec_device_submit_sync": _rate(psf_candidate_count, psf_device_submit_sync_wall),
     }
 
 
@@ -326,6 +423,22 @@ def _profile_rows_for_trial(row: dict[str, Any], summary: dict[str, Any]) -> lis
     stages = [
         ("plan_dispatch", row.get("plan_wall_sec"), 0, 0),
         ("worker_phase", row.get("worker_wall_sec"), 0, row.get("measurement_rows")),
+        ("staging", row.get("staging_wall_sec"), 0, row.get("measurement_rows")),
+        ("payload_wait", row.get("payload_wait_wall_sec"), 0, row.get("measurement_rows")),
+        ("fits_read", row.get("fits_read_wall_sec"), 0, row.get("measurement_rows")),
+        ("selection", row.get("selection_wall_sec"), row.get("measurement_rows"), row.get("measurement_rows")),
+        ("frame_upload", row.get("frame_upload_wall_sec"), row.get("measurement_rows"), row.get("measurement_rows")),
+        ("aperture_kernel", row.get("aperture_kernel_wall_sec"), row.get("measurement_rows"), row.get("measurement_rows")),
+        ("psf_candidate_grid", row.get("psf_candidate_grid_wall_sec"), row.get("psf_measurement_rows"), row.get("psf_candidate_count")),
+        ("psf_kernel_total", row.get("psf_kernel_wall_sec"), row.get("measurement_rows"), row.get("psf_measurement_rows")),
+        ("psf_device_submit_sync", row.get("psf_device_submit_sync_wall_sec"), row.get("psf_candidate_count"), row.get("psf_measurement_rows")),
+        ("psf_spline_coeff", row.get("psf_spline_coeff_wall_sec"), row.get("psf_measurement_rows"), row.get("psf_measurement_rows")),
+        ("psf_upload", row.get("psf_upload_wall_sec"), row.get("psf_measurement_rows"), row.get("psf_candidate_count")),
+        ("psf_gather", row.get("psf_gather_wall_sec"), row.get("psf_candidate_count"), row.get("psf_measurement_rows")),
+        ("table_assembly", row.get("table_wall_sec"), row.get("measurement_rows"), row.get("measurement_rows")),
+        ("shard_submit", row.get("shard_submit_wall_sec"), row.get("measurement_rows"), row.get("measurement_rows")),
+        ("async_shard_write_wait", row.get("async_shard_write_wait_wall_sec"), row.get("measurement_rows"), row.get("measurement_rows")),
+        ("write_measurement_shards", row.get("write_wall_sec"), row.get("measurement_rows"), row.get("measurement_rows")),
         ("finalize_total", row.get("finalize_wall_sec"), row.get("measurement_rows"), row.get("measurement_rows")),
         ("collect_shards", row.get("collect_wall_sec"), 0, row.get("measurement_rows")),
         ("assemble_spectra", row.get("spectra_total_wall_sec"), row.get("measurement_rows"), row.get("measurement_rows")),
@@ -366,6 +479,16 @@ def _stage_backend(stage: str, summary: dict[str, Any]) -> str:
             or "cudf_simple_target_zscore_scorer"
         )
     if stage == "worker_phase":
+        return "persistent_gpu_frame_worker"
+    if stage.startswith("psf_"):
+        return "warp_gpu_psf_grid"
+    if stage == "aperture_kernel":
+        return "warp_gpu_aperture"
+    if stage in {"fits_read", "staging", "write_measurement_shards", "shard_submit", "async_shard_write_wait"}:
+        return "fits_parquet_io"
+    if stage == "frame_upload":
+        return "warp_frame_device_upload"
+    if stage in {"payload_wait", "selection", "table_assembly"}:
         return "persistent_gpu_frame_worker"
     return "luxquarry_local_dispatch_runner"
 
@@ -454,14 +577,31 @@ def _result_columns() -> list[str]:
         "prefetch_frames",
         "repetition",
         "measurement_rows",
+        "psf_measurement_rows",
+        "ok_psf_rows",
+        "psf_candidate_count",
         "target_count",
+        "enable_psf",
+        "discard_measurement_shards",
+        "measurement_column_profile",
+        "measurement_parquet_compression",
+        "aperture_radius_pix",
+        "annulus_inner_pix",
+        "annulus_outer_pix",
+        "psf_kernel_build_mode",
+        "psf_grid_half_range_pix",
+        "psf_grid_step_pix",
         "plan_wall_sec",
         "worker_wall_sec",
         "finalize_wall_sec",
         "total_wall_sec",
         "collect_wall_sec",
+        "worker_min_wall_sec",
+        "worker_avg_wall_sec",
         "worker_max_wall_sec",
         "worker_sum_wall_sec",
+        "worker_parallel_efficiency",
+        "worker_wall_skew_ratio",
         "worker_launch_overhead_sec",
         "read_shards_wall_sec",
         "sort_wall_sec",
@@ -470,6 +610,38 @@ def _result_columns() -> list[str]:
         "spectra_total_wall_sec",
         "baseline_score_wall_sec",
         "baseline_candidate_count",
+        "staging_wall_sec",
+        "payload_wait_wall_sec",
+        "frame_upload_wall_sec",
+        "aperture_kernel_wall_sec",
+        "fits_read_wall_sec",
+        "selection_wall_sec",
+        "table_wall_sec",
+        "frame_compute_wall_sec",
+        "shard_submit_wall_sec",
+        "async_shard_write_wait_wall_sec",
+        "write_wall_sec",
+        "shard_total_bytes",
+        "shard_bytes_per_measurement",
+        "max_worker_staging_wall_sec",
+        "max_worker_payload_wait_wall_sec",
+        "max_worker_fits_read_wall_sec",
+        "max_worker_frame_upload_wall_sec",
+        "max_worker_aperture_kernel_wall_sec",
+        "max_worker_psf_kernel_wall_sec",
+        "max_worker_psf_device_submit_sync_wall_sec",
+        "max_worker_psf_spline_coeff_wall_sec",
+        "max_worker_psf_gather_wall_sec",
+        "max_worker_table_wall_sec",
+        "max_worker_shard_write_wall_sec",
+        "max_worker_shard_bytes",
+        "max_worker_async_shard_write_wait_wall_sec",
+        "psf_candidate_grid_wall_sec",
+        "psf_kernel_wall_sec",
+        "psf_device_submit_sync_wall_sec",
+        "psf_spline_coeff_wall_sec",
+        "psf_upload_wall_sec",
+        "psf_gather_wall_sec",
         "measurements_per_sec_total",
         "measurements_per_sec_worker_phase",
         "measurements_per_sec_worker_payload",
@@ -478,6 +650,9 @@ def _result_columns() -> list[str]:
         "frames_per_sec_total",
         "frames_per_sec_worker_phase",
         "frames_per_sec_worker_payload",
+        "psf_candidates_per_sec_total",
+        "psf_candidates_per_sec_worker_payload",
+        "psf_candidates_per_sec_device_submit_sync",
     ]
 
 
