@@ -96,14 +96,6 @@ class PersistentGpuFrameWorker:
         limit_frames: int | None = None,
         status_path: Path | None = None,
     ) -> dict[str, Any]:
-        started = time.perf_counter()
-        if self.config.write_combined_output and self.config.batch_table_assembly:
-            raise ValueError("--write-combined-output is not supported with --batch-table-assembly yet")
-        output_dir.mkdir(parents=True, exist_ok=True)
-        shards_dir = output_dir / "measurement_shards"
-        shards_dir.mkdir(exist_ok=True)
-        status_path = status_path or output_dir / "run_status.json"
-
         manifest = pd.read_parquet(manifest_path)
         if limit_frames is not None:
             manifest = manifest.head(limit_frames).copy()
@@ -112,6 +104,37 @@ class PersistentGpuFrameWorker:
             [i for i in range(len(manifest)) if i % self.config.worker_count == self.config.worker_index]
         ].copy()
         targets = pd.read_parquet(projected_targets_path)
+        return self.process_frame_batch(
+            manifest=manifest,
+            targets=targets,
+            output_dir=output_dir,
+            run_id=run_id,
+            manifest_path=manifest_path,
+            projected_targets_path=projected_targets_path,
+            status_path=status_path,
+        )
+
+    def process_frame_batch(
+        self,
+        *,
+        manifest: pd.DataFrame,
+        targets: pd.DataFrame,
+        output_dir: Path,
+        run_id: str,
+        manifest_path: Path | str | None = None,
+        projected_targets_path: Path | str | None = None,
+        status_path: Path | None = None,
+    ) -> dict[str, Any]:
+        started = time.perf_counter()
+        if self.config.write_combined_output and self.config.batch_table_assembly:
+            raise ValueError("--write-combined-output is not supported with --batch-table-assembly yet")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        shards_dir = output_dir / "measurement_shards"
+        shards_dir.mkdir(exist_ok=True)
+        status_path = status_path or output_dir / "run_status.json"
+
+        manifest = manifest.reset_index(drop=True).copy()
+        targets = targets.copy()
         frame_ids = set(manifest["frame_group_id"].astype(str))
         targets = targets[targets["frame_group_id"].astype(str).isin(frame_ids)].copy()
         targets_by_frame = {
@@ -122,8 +145,8 @@ class PersistentGpuFrameWorker:
         summary: dict[str, Any] = {
             "created_utc": datetime.now(timezone.utc).isoformat(),
             "run_id": run_id,
-            "manifest_path": str(manifest_path),
-            "projected_targets_path": str(projected_targets_path),
+            "manifest_path": str(manifest_path) if manifest_path is not None else None,
+            "projected_targets_path": str(projected_targets_path) if projected_targets_path is not None else None,
             "output_dir": str(output_dir),
             "device": self.config.device,
             "worker_index": self.config.worker_index,

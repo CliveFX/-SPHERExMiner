@@ -146,13 +146,22 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
         task_status_path = output_dir / "status" / "tasks" / f"{task_id}.json"
         task_run_id = f"{config.run_id}.{task_id}.{config.worker_id}"
         try:
-            task_summary = worker.run(
-                manifest_path=Path(str(task["manifest_path"])),
-                projected_targets_path=Path(str(task["projected_targets_path"])),
+            input_read_started = time.perf_counter()
+            task_manifest_path = Path(str(task["manifest_path"]))
+            task_targets_path = Path(str(task["projected_targets_path"]))
+            manifest = pd.read_parquet(task_manifest_path)
+            targets = pd.read_parquet(task_targets_path)
+            input_read_wall = time.perf_counter() - input_read_started
+            task_summary = worker.process_frame_batch(
+                manifest=manifest,
+                targets=targets,
                 output_dir=task_out,
                 run_id=task_run_id,
+                manifest_path=task_manifest_path,
+                projected_targets_path=task_targets_path,
                 status_path=task_status_path,
             )
+            task_summary["task_input_read_wall_sec"] = input_read_wall
             completed = {
                 **task,
                 "status": "complete",
@@ -160,6 +169,7 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
                 "worker_id": config.worker_id,
                 "task_output_dir": str(task_out),
                 "summary_path": str(task_out / "run_summary.json"),
+                "task_input_read_wall_sec": input_read_wall,
                 "task_wall_sec": time.perf_counter() - task_started,
                 "worker_summary": _compact_worker_summary(task_summary),
             }
@@ -215,6 +225,7 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                 "measurement_rows": int(worker_summary.get("measurement_rows") or 0),
                 "ok_measurement_rows": int(worker_summary.get("ok_measurement_rows") or 0),
                 "failed_frames": int(worker_summary.get("failed_frames") or 0),
+                "task_input_read_wall_sec": float(task.get("task_input_read_wall_sec") or 0.0),
                 "task_wall_sec": float(task.get("task_wall_sec") or 0.0),
                 "summary_path": task.get("summary_path"),
             }
@@ -250,6 +261,7 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                 "measurement_rows": 0,
                 "ok_measurement_rows": 0,
                 "failed_frames": 0,
+                "task_input_read_wall_sec": 0.0,
                 "task_wall_sec": float(task.get("task_wall_sec") or 0.0),
                 "summary_path": None,
                 "error": task.get("error"),
@@ -329,6 +341,7 @@ def _compact_worker_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "async_shard_writes",
         "batch_table_assembly",
         "total_wall_sec",
+        "task_input_read_wall_sec",
         "async_shard_write_wait_wall_sec",
         "queued_shard_writes",
     }

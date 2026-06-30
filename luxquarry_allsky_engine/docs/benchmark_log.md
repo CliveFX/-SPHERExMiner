@@ -1507,3 +1507,98 @@ Notes:
 - This prototype still materializes per-task parquet inputs and calls the
   existing worker run method per task. It proves the service contract, not the
   final monolithic frame miner.
+
+## 2026-06-29: Service Frame-Batch API Smoke
+
+Change:
+
+- `PersistentGpuFrameWorker.run()` now delegates to a reusable
+  `process_frame_batch()` method.
+- `run-gpu-worker-service` reads each task's parquet inputs and calls
+  `process_frame_batch()` directly, so the service has a lower-level resident
+  worker API to build on.
+
+Command shape:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky write-task-queue \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/service_queue_smoke_v2/queue \
+  --campaign-id service_queue_smoke_v2 \
+  --frames-per-task 1 \
+  --limit-frames 2
+
+.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir runs/service_queue_smoke_v2/queue \
+  --out-dir runs/service_queue_smoke_v2 \
+  --run-id service_queue_smoke_v2 \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --local-cache-dir /tmp/luxquarry_stage_service_smoke \
+  --max-tasks 2 \
+  --async-shard-writes \
+  --batch-table-assembly \
+  --shard-batch-frames 1
+```
+
+Result:
+
+```text
+worker_service:
+  tasks_completed: 2
+  tasks_failed: 0
+  frames_completed: 2
+  measurement_rows: 573
+  ok_measurement_rows: 572
+  summary_total_wall_sec: 1.688
+  shell_observed_wall_sec: 2.927
+  task_wall_sum_sec: 0.466
+
+task_000000:
+  task_input_read_wall_sec: 0.016
+  task_wall_sec: 0.389
+  frame_compute_wall_sec: 0.190
+  staging_wall_sec: 0.005
+  kernel_wall_sec: 0.033
+  table_wall_sec: 0.060
+  write_wall_sec: 0.156
+
+task_000001:
+  task_input_read_wall_sec: 0.005
+  task_wall_sec: 0.077
+  frame_compute_wall_sec: 0.028
+  staging_wall_sec: 0.002
+  kernel_wall_sec: 0.026
+  table_wall_sec: 0.002
+  write_wall_sec: 0.023
+
+collect:
+  complete: true
+  shard_count: 2
+  collect_wall_sec: 0.009
+
+assemble_spectra:
+  input_measurement_rows: 573
+  target_count: 310
+  total_wall_sec: 1.258
+```
+
+Comparison to previous service smoke:
+
+```text
+service summary wall: 1.942 sec -> 1.688 sec
+task wall sum:        0.682 sec -> 0.466 sec
+shell observed wall:  3.199 sec -> 2.927 sec
+measurement rows:    unchanged at 573
+target spectra:      unchanged at 310
+```
+
+Notes:
+
+- The warm second task is now roughly 77 ms wall time in this tiny smoke.
+- FITS staging is near zero because the same local SSD cache path was warm.
+- This still is not the final frame miner: per-task parquet slices remain, and
+  the next target is a service-owned manifest/target index plus larger frame
+  batches so the worker is not constantly reopening tiny parquet files.
