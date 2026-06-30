@@ -184,3 +184,56 @@ The postprocess Job should run after worker Jobs complete. It executes
 `finalize-dispatch-run`, which collects worker outputs, assembles spectra with
 cuDF, and writes the campaign contract. The command refuses incomplete dispatch
 runs unless `--allow-incomplete` is passed.
+
+## Reducer Fanout Handoff
+
+For larger campaigns, do not use a single postprocess Job to assemble all
+spectra. Use the two-stage reducer path:
+
+```bash
+.venv/bin/luxquarry-allsky partition-measurement-shards \
+  --shard-manifest runs/<run_id>/measurement_shard_manifest.parquet \
+  --out-dir runs/<run_id>/measurement_partitions \
+  --run-id <run_id>_measurement_partitions \
+  --device cuda:0 \
+  --partition-count 1024 \
+  --drop-duplicate-measurements
+
+.venv/bin/luxquarry-allsky write-reducer-plan \
+  --partition-manifest runs/<run_id>/measurement_partitions/<run_id>_measurement_partitions.measurement_partition_manifest.parquet \
+  --out-dir runs/<run_id>/reducers \
+  --run-id <run_id>_reducers \
+  --plan-out runs/<run_id>/reducers/reducer_plan.json \
+  --devices cuda:0
+
+.venv/bin/luxquarry-allsky write-k8s-reducer-jobs \
+  --reducer-plan runs/<run_id>/reducers/reducer_plan.json \
+  --out-dir runs/<run_id>/reducers/k8s \
+  --image <ecr-image-uri> \
+  --namespace luxquarry \
+  --container-executable luxquarry-allsky \
+  --working-dir /workspace/luxquarry_allsky_engine \
+  --device cuda:0 \
+  --pvc-name luxquarry-data \
+  --mount-path /workspace
+```
+
+`write-reducer-plan` is also useful locally because it writes
+`reducer_plan.sh`. The plan distributes reducer tasks across the listed devices
+round-robin. For Kubernetes one-GPU pods, `write-k8s-reducer-jobs --device
+cuda:0` rewrites each reducer command to use `cuda:0` inside the container, even
+if the local plan was built with `cuda:0,cuda:1,...`.
+
+The all-sky postprocess sequence should become:
+
+```text
+worker Jobs
+  -> collect measurement shard manifest
+  -> GPU measurement partition shuffle
+  -> reducer fanout Jobs
+  -> scorer fanout / candidate aggregation
+  -> viewer-index load
+```
+
+ClickHouse or another serving database belongs in the final viewer-index load,
+not in the worker or reducer hot path.

@@ -2252,3 +2252,54 @@ Notes:
   file for every bucket.
 - This creates the desired horizontal reducer shape:
   photometry shards -> one GPU shuffle -> many independent spectra reducers.
+
+## 2026-06-29: Reducer Fanout Plan and Kubernetes Jobs
+
+Change:
+
+- Added `luxquarry-allsky write-reducer-plan`.
+- Added `luxquarry-allsky write-k8s-reducer-jobs`.
+- Reducer plans consume the measurement partition manifest and emit one
+  `assemble-spectra` task per non-empty target bucket.
+- Kubernetes reducer jobs default to `--device cuda:0` inside one-GPU pods,
+  even when the local reducer plan was built with multiple local device names.
+
+Reducer plan smoke:
+
+```text
+input partition manifest:
+  runs/service_queue_smoke_v3/measurement_partition_smoke/service_queue_smoke_v3_measurement_partitions.measurement_partition_manifest.parquet
+max_partitions: 3
+devices: cuda:0,cuda:1
+reducer_count: 3
+total_measurement_rows: 417
+
+part00000: cuda:0, 140 measurements
+part00001: cuda:1, 130 measurements
+part00002: cuda:0, 147 measurements
+```
+
+Generated files:
+
+```text
+runs/service_queue_smoke_v3/reducer_plan_smoke/reducer_plan.json
+runs/service_queue_smoke_v3/reducer_plan_smoke/reducer_plan.sh
+```
+
+Kubernetes reducer job smoke:
+
+```text
+image: luxquarry-allsky:test
+namespace: luxquarry
+job_count: 3
+gpu request per job: 1
+container command: luxquarry-allsky
+container args: assemble-spectra ...
+device override inside pod: cuda:0
+```
+
+Generated file:
+
+```text
+runs/service_queue_smoke_v3/reducer_plan_smoke/k8s_device_override/service_queue_smoke_v3_reducers.reducer-jobs.yaml
+```

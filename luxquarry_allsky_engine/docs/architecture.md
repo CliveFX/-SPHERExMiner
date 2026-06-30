@@ -152,6 +152,19 @@ target_summary.parquet
 spectrum_quality.parquet
 ```
 
+At all-sky scale this should run as:
+
+```text
+measurement shards
+  -> GPU target-hash shuffle
+  -> partitioned measurement buckets
+  -> independent spectra reducers
+```
+
+The target-hash shuffle is intentionally separate from the frame workers. Frame
+workers stay append-only and retryable; reducer jobs can be fanned out across
+nodes and GPUs without asking every reducer to reread every original shard.
+
 ### 4. Candidate Scorer
 
 Runs narrowband scoring and optional ML filters.
@@ -187,3 +200,44 @@ Use RAPIDS where it fits naturally:
 - cuSpatial: candidate for footprint filtering if it proves clean.
 
 Custom CUDA/Warp kernels remain appropriate for aperture/PSF photometry.
+
+## Serving and Viewer Indexes
+
+The compute path should not write directly to an interactive database. The
+durable source of truth remains immutable parquet/JSON shards. A separate
+serving/index stage can load selected products into ClickHouse or another
+columnar serving store for dashboards and drilldown.
+
+Likely ClickHouse tables:
+
+```text
+campaign_runs
+frame_status
+measurement_partitions
+target_summary
+spectrum_quality
+narrowband_candidates
+candidate_line_scores
+injection_truth
+recovery_summary
+```
+
+This keeps viewer latency independent of worker throughput. It also lets us
+rebuild the viewer index from parquet if the serving schema changes.
+
+## GPU Target Class
+
+The current hot path is not obviously H100/B300-only work. The core operations
+are:
+
+- FITS/object staging.
+- WCS/projection and target selection.
+- aperture/PSF CUDA kernels.
+- cuDF filtering/hash/groupby/sort.
+- parquet shard IO.
+
+V100-class datacenter GPUs are credible for worker and reducer nodes, especially
+when many nodes are available. Newer GPUs should help, but the architecture must
+not rely on premium training accelerators to be economical. Benchmark decisions
+should be driven by measurements per dollar, object-store bandwidth, local SSD
+bandwidth, and parquet/groupby throughput, not peak tensor performance.

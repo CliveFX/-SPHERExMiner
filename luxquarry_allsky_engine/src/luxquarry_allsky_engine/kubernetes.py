@@ -67,6 +67,26 @@ class KubernetesPostprocessJobConfig:
     env: dict[str, str] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class KubernetesReducerJobConfig:
+    reducer_plan_path: Path
+    output_dir: Path
+    image: str
+    namespace: str = "default"
+    service_account: str | None = None
+    container_executable: str = "luxquarry-allsky"
+    working_dir: str | None = None
+    device: str | None = "cuda:0"
+    gpu_limit: int = 1
+    cpu_request: str = "2"
+    memory_request: str = "8Gi"
+    restart_policy: str = "Never"
+    backoff_limit: int = 1
+    pvc_name: str | None = None
+    mount_path: str | None = None
+    env: dict[str, str] = field(default_factory=dict)
+
+
 def write_kubernetes_jobs(config: KubernetesJobConfig) -> dict[str, Any]:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     plan = json.loads(config.plan_path.read_text(encoding="utf-8"))
@@ -109,6 +129,30 @@ def write_kubernetes_postprocess_job(config: KubernetesPostprocessJobConfig) -> 
         "job_name": job["metadata"]["name"],
     }
     summary_path = config.output_dir / "k8s_postprocess_job_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return summary
+
+
+def write_kubernetes_reducer_jobs(config: KubernetesReducerJobConfig) -> dict[str, Any]:
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    plan = json.loads(config.reducer_plan_path.read_text(encoding="utf-8"))
+    jobs = [_reducer_job(plan, reducer, config) for reducer in plan.get("reducers") or []]
+    run_id = str(plan.get("run_id") or "luxquarry-reducers")
+    manifest_path = config.output_dir / f"{run_id}.reducer-jobs.yaml"
+    manifest_path.write_text(_as_yaml_documents(jobs), encoding="utf-8")
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "backend": "kubernetes_reducer_job_manifest_generator",
+        "reducer_plan_path": str(config.reducer_plan_path),
+        "run_id": run_id,
+        "namespace": config.namespace,
+        "image": config.image,
+        "job_count": len(jobs),
+        "manifest_path": str(manifest_path),
+        "total_measurement_rows": int(plan.get("total_measurement_rows") or 0),
+        "worker_names": [job["metadata"]["name"] for job in jobs],
+    }
+    summary_path = config.output_dir / "k8s_reducer_jobs_summary.json"
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
 
@@ -157,6 +201,57 @@ def _worker_job(plan: dict[str, Any], worker: dict[str, Any], config: Kubernetes
         "kind": "Job",
         "metadata": {
             "name": _job_name(worker_id),
+            "namespace": config.namespace,
+            "labels": labels,
+        },
+        "spec": {
+            "backoffLimit": config.backoff_limit,
+            "template": {
+                "metadata": {"labels": labels},
+                "spec": pod_spec,
+            },
+        },
+    }
+
+
+def _reducer_job(plan: dict[str, Any], reducer: dict[str, Any], config: KubernetesReducerJobConfig) -> dict[str, Any]:
+    run_id = str(plan.get("run_id") or "reducers")
+    reducer_id = str(reducer["reducer_id"])
+    argv = list(reducer["argv"])
+    args = argv[1:] if argv else []
+    if config.device:
+        args = _replace_option(args, "--device", config.device)
+    labels = {
+        "app.kubernetes.io/name": "luxquarry-allsky",
+        "luxquarry/run-id": _label_value(run_id),
+        "luxquarry/job-role": "spectra-reducer",
+        "luxquarry/partition-index": str(reducer.get("partition_index", 0)),
+    }
+    container = _container(
+        name="luxquarry-reducer",
+        image=config.image,
+        command=[config.container_executable],
+        args=args,
+        env=config.env,
+        working_dir=config.working_dir,
+        gpu_limit=config.gpu_limit,
+        cpu_request=config.cpu_request,
+        memory_request=config.memory_request,
+        pvc_name=config.pvc_name,
+        mount_path=config.mount_path,
+    )
+    pod_spec = _pod_spec(
+        container=container,
+        restart_policy=config.restart_policy,
+        service_account=config.service_account,
+        pvc_name=config.pvc_name,
+        mount_path=config.mount_path,
+    )
+    return {
+        "apiVersion": "batch/v1",
+        "kind": "Job",
+        "metadata": {
+            "name": _job_name(reducer_id),
             "namespace": config.namespace,
             "labels": labels,
         },
@@ -334,3 +429,16 @@ def _job_name(value: str) -> str:
 def _label_value(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-")
     return cleaned[:63].rstrip("-")
+
+
+def _replace_option(args: list[str], option: str, value: str) -> list[str]:
+    out = list(args)
+    for idx, item in enumerate(out):
+        if item == option:
+            if idx + 1 < len(out):
+                out[idx + 1] = value
+                return out
+            out.append(value)
+            return out
+    out.extend([option, value])
+    return out

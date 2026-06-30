@@ -19,14 +19,17 @@ from .gpu_worker import PersistentWorkerConfig, run_persistent_gpu_worker
 from .kubernetes import (
     KubernetesJobConfig,
     KubernetesPostprocessJobConfig,
+    KubernetesReducerJobConfig,
     write_kubernetes_jobs,
     write_kubernetes_postprocess_job,
+    write_kubernetes_reducer_jobs,
 )
 from .local_runner import LocalDispatchRunConfig, LocalPlanWorkerRunConfig, run_dispatch_plan_workers, run_local_dispatch
 from .manifest import build_frame_manifest, rewrite_manifest_paths_to_uri
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
 from .recovery import InjectionRecoveryConfig, score_injection_recovery
+from .reducer import ReducerPlanConfig, build_reducer_plan, write_reducer_plan
 from .scoring import CandidateScoringConfig, score_spectra_candidates
 from .spectra import (
     MeasurementPartitionConfig,
@@ -517,6 +520,38 @@ def main(argv: list[str] | None = None) -> int:
     )
     k8s_post.set_defaults(func=cmd_write_k8s_postprocess_job)
 
+    k8s_reducers = sub.add_parser(
+        "write-k8s-reducer-jobs",
+        help="Write one Kubernetes Job per spectra reducer from a reducer fanout plan.",
+    )
+    k8s_reducers.add_argument("--reducer-plan", type=Path, required=True)
+    k8s_reducers.add_argument("--out-dir", type=Path, required=True)
+    k8s_reducers.add_argument("--image", required=True)
+    k8s_reducers.add_argument("--namespace", default="default")
+    k8s_reducers.add_argument("--service-account")
+    k8s_reducers.add_argument("--container-executable", default="luxquarry-allsky")
+    k8s_reducers.add_argument("--working-dir")
+    k8s_reducers.add_argument(
+        "--device",
+        default="cuda:0",
+        help="Device string passed inside each reducer pod. Use cuda:0 for one-GPU pods.",
+    )
+    k8s_reducers.add_argument("--gpu-limit", type=int, default=1)
+    k8s_reducers.add_argument("--cpu-request", default="2")
+    k8s_reducers.add_argument("--memory-request", default="8Gi")
+    k8s_reducers.add_argument("--restart-policy", default="Never")
+    k8s_reducers.add_argument("--backoff-limit", type=int, default=1)
+    k8s_reducers.add_argument("--pvc-name")
+    k8s_reducers.add_argument("--mount-path")
+    k8s_reducers.add_argument(
+        "--env",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Environment variable to place on every reducer container. Repeatable.",
+    )
+    k8s_reducers.set_defaults(func=cmd_write_k8s_reducer_jobs)
+
     campaign_contract = sub.add_parser(
         "write-campaign-contract",
         help="Write a stage contract for baseline, injected, scoring, recovery, and viewer products.",
@@ -589,6 +624,26 @@ def main(argv: list[str] | None = None) -> int:
         help="Maximum partition rows to embed in JSON/stdout. Full manifest is always written to parquet.",
     )
     partition_measurements.set_defaults(func=cmd_partition_measurement_shards)
+
+    reducer_plan = sub.add_parser(
+        "write-reducer-plan",
+        help="Write a local/shell spectra reducer fanout plan from a measurement partition manifest.",
+    )
+    reducer_plan.add_argument("--partition-manifest", type=Path, required=True)
+    reducer_plan.add_argument("--out-dir", type=Path, required=True)
+    reducer_plan.add_argument("--run-id", required=True)
+    reducer_plan.add_argument("--plan-out", type=Path, required=True)
+    reducer_plan.add_argument("--executable", default=".venv/bin/luxquarry-allsky")
+    reducer_plan.add_argument("--devices", default="cuda:0")
+    reducer_plan.add_argument("--spectra-out-dir", type=Path)
+    reducer_plan.add_argument("--only-ok", action="store_true")
+    reducer_plan.add_argument(
+        "--no-drop-duplicate-measurements",
+        action="store_true",
+        help="Do not pass --drop-duplicate-measurements to reducer assemble-spectra jobs.",
+    )
+    reducer_plan.add_argument("--max-partitions", type=int)
+    reducer_plan.set_defaults(func=cmd_write_reducer_plan)
 
     validate_assembly = sub.add_parser(
         "validate-assembly-order",
@@ -1184,6 +1239,31 @@ def cmd_write_k8s_postprocess_job(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_write_k8s_reducer_jobs(args: argparse.Namespace) -> int:
+    summary = write_kubernetes_reducer_jobs(
+        KubernetesReducerJobConfig(
+            reducer_plan_path=args.reducer_plan,
+            output_dir=args.out_dir,
+            image=args.image,
+            namespace=args.namespace,
+            service_account=args.service_account,
+            container_executable=args.container_executable,
+            working_dir=args.working_dir,
+            device=args.device,
+            gpu_limit=args.gpu_limit,
+            cpu_request=args.cpu_request,
+            memory_request=args.memory_request,
+            restart_policy=args.restart_policy,
+            backoff_limit=args.backoff_limit,
+            pvc_name=args.pvc_name,
+            mount_path=args.mount_path,
+            env=_parse_env_assignments(args.env),
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_write_campaign_contract(args: argparse.Namespace) -> int:
     contract = write_campaign_contract(
         CampaignContractConfig(
@@ -1249,6 +1329,38 @@ def cmd_partition_measurement_shards(args: argparse.Namespace) -> int:
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_write_reducer_plan(args: argparse.Namespace) -> int:
+    devices = tuple(part.strip() for part in args.devices.split(",") if part.strip())
+    plan = build_reducer_plan(
+        ReducerPlanConfig(
+            partition_manifest_path=args.partition_manifest,
+            output_dir=args.out_dir,
+            run_id=args.run_id,
+            executable=args.executable,
+            devices=devices,
+            spectra_out_dir=args.spectra_out_dir,
+            only_ok=args.only_ok,
+            drop_duplicate_measurements=not args.no_drop_duplicate_measurements,
+            max_partitions=args.max_partitions,
+        )
+    )
+    write_reducer_plan(plan, args.plan_out)
+    print(
+        json.dumps(
+            {
+                "plan_out": str(args.plan_out),
+                "shell_out": str(args.plan_out.with_suffix(".sh")),
+                "reducer_count": plan["reducer_count"],
+                "devices": plan["devices"],
+                "total_measurement_rows": plan["total_measurement_rows"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
     return 0
 
 
