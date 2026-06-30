@@ -51,6 +51,40 @@ Write `perf_summary.json` with:
 }
 ```
 
+The repeatable local sweep command is:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_sweep_smoke \
+  --run-id dispatch_sweep_smoke \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 2,10,100 \
+  --shard-batch-frames 1,2,5,10 \
+  --prefetch-frames 0,2 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --score-baseline
+```
+
+It writes:
+
+```text
+sweep_results.parquet
+sweep_results.json
+profile_summary.parquet
+profile_summary.json
+perf_summary.json
+trials/<trial_run_id>/
+```
+
+`perf_summary.json` reports both `best_trial` by end-to-end measurements/sec
+and `best_payload_trial` by worker payload measurements/sec. The split matters:
+small jobs are dominated by worker launch/setup, while large jobs should expose
+the actual GPU and I/O throughput.
+
 ## Function-Level Profiling
 
 Every benchmark run should optionally emit function/stage profiling:

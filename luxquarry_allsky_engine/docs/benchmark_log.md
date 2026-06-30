@@ -1268,3 +1268,83 @@ Notes:
 - The campaign contract still marks the run incomplete unless injected dispatch
   and viewer indexes exist. In this smoke, injected spectra were supplied but
   no injected dispatch plan was supplied.
+
+## 2026-06-29: Dispatch Benchmark Sweep Harness Smoke
+
+Command:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_sweep_smoke \
+  --run-id dispatch_sweep_smoke \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 2 \
+  --shard-batch-frames 1,2 \
+  --prefetch-frames 0 \
+  --repetitions 1 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --score-baseline \
+  --candidate-min-measurements 2 \
+  --candidate-min-abs-zscore 0.5 \
+  --candidate-max-rows 20 \
+  --status-snapshot-interval-sec 0
+```
+
+Outputs:
+
+```text
+runs/dispatch_benchmark_sweep_smoke/sweep_results.parquet
+runs/dispatch_benchmark_sweep_smoke/sweep_results.json
+runs/dispatch_benchmark_sweep_smoke/profile_summary.parquet
+runs/dispatch_benchmark_sweep_smoke/profile_summary.json
+runs/dispatch_benchmark_sweep_smoke/perf_summary.json
+```
+
+Trial summary:
+
+```text
+trial s1:
+  measurement_rows: 573
+  total_wall_sec: 4.583
+  worker_wall_sec: 3.252
+  worker_payload_wall_sec: 0.425
+  worker_launch_overhead_sec: 2.828
+  finalize_wall_sec: 1.305
+  measurements_per_sec_total: 125.0
+  measurements_per_sec_worker_payload: 1,349.1
+
+trial s2:
+  measurement_rows: 573
+  total_wall_sec: 3.121
+  worker_wall_sec: 3.016
+  worker_payload_wall_sec: 0.439
+  worker_launch_overhead_sec: 2.576
+  finalize_wall_sec: 0.092
+  measurements_per_sec_total: 183.6
+  measurements_per_sec_worker_payload: 1,303.9
+```
+
+Profile rows above 5%:
+
+```text
+s1 worker_phase: 70.96%
+s1 finalize_total: 28.47%
+s1 assemble_spectra: 25.61%
+s2 worker_phase: 96.64%
+```
+
+Notes:
+
+- This is a harness smoke, not a saturation benchmark.
+- The tiny two-frame workload is dominated by subprocess/worker launch and
+  RAPIDS startup costs. The measured worker payload is roughly 0.43 sec, but
+  the worker phase seen by the parent is roughly 3.0 sec.
+- `shard_batch_frames=2` wins end-to-end on this tiny test because it avoids
+  extra shard/finalize overhead.
+- The next real benchmark should sweep at least 10, 50, and 100 frames on all
+  local GPUs. That is the first point where setup overhead should stop hiding
+  GPU and storage throughput.

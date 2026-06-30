@@ -10,6 +10,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Any
 
+from .benchmark import DispatchBenchmarkSweepConfig, run_dispatch_benchmark_sweep
 from .campaign import CampaignContractConfig, write_campaign_contract
 from .catalog import CatalogConfig, build_frame_targets
 from .dispatch import DispatchPlanConfig, build_dispatch_plan, collect_dispatch_run, write_dispatch_plan
@@ -64,6 +65,35 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--target-count", type=int, default=0)
     bench.add_argument("--measurement-count", type=int, default=0)
     bench.set_defaults(func=cmd_benchmark_smoke)
+
+    dispatch_sweep = sub.add_parser(
+        "run-dispatch-benchmark-sweep",
+        help="Run repeated local dispatch/finalize trials and summarize throughput by setting.",
+    )
+    dispatch_sweep.add_argument("--manifest", type=Path, required=True)
+    dispatch_sweep.add_argument("--projected-targets", type=Path, required=True)
+    dispatch_sweep.add_argument("--out-dir", type=Path, required=True)
+    dispatch_sweep.add_argument("--run-id", required=True)
+    dispatch_sweep.add_argument("--cache-root", type=Path, default=Path("/mnt/niroseti/spherex_cache"))
+    dispatch_sweep.add_argument("--devices", default="cuda:0")
+    dispatch_sweep.add_argument("--workers-per-device", default="1")
+    dispatch_sweep.add_argument("--limit-frames", default="2")
+    dispatch_sweep.add_argument("--shard-batch-frames", default="1")
+    dispatch_sweep.add_argument("--prefetch-frames", default="0")
+    dispatch_sweep.add_argument("--repetitions", type=int, default=1)
+    dispatch_sweep.add_argument("--local-cache-dir", type=Path)
+    dispatch_sweep.add_argument("--executable")
+    dispatch_sweep.add_argument("--finalize-device", default="cuda:0")
+    dispatch_sweep.add_argument("--no-async-shard-writes", action="store_true")
+    dispatch_sweep.add_argument("--no-batch-table-assembly", action="store_true")
+    dispatch_sweep.add_argument("--no-materialize-worker-inputs", action="store_true")
+    dispatch_sweep.add_argument("--score-baseline", action="store_true")
+    dispatch_sweep.add_argument("--candidate-min-abs-zscore", type=float, default=5.0)
+    dispatch_sweep.add_argument("--candidate-min-measurements", type=int, default=10)
+    dispatch_sweep.add_argument("--candidate-max-rows", type=int)
+    dispatch_sweep.add_argument("--status-snapshot-interval-sec", type=float, default=0.0)
+    dispatch_sweep.add_argument("--continue-on-error", action="store_true")
+    dispatch_sweep.set_defaults(func=cmd_run_dispatch_benchmark_sweep)
 
     manifest = sub.add_parser("build-manifest", help="Scan FITS frames and write a frame manifest parquet.")
     manifest.add_argument("--input-root", type=Path, action="append", required=True)
@@ -496,6 +526,40 @@ def cmd_benchmark_smoke(args: argparse.Namespace) -> int:
     _write_json(out_dir / "correctness_summary.json", correctness)
     _write_json(out_dir / "profile_summary.json", profile)
     print(json.dumps({"out_dir": str(out_dir), "perf_summary": str(out_dir / "perf_summary.json")}, indent=2))
+    return 0
+
+
+def cmd_run_dispatch_benchmark_sweep(args: argparse.Namespace) -> int:
+    devices = tuple(part.strip() for part in args.devices.split(",") if part.strip())
+    executable = args.executable or sys.argv[0]
+    summary = run_dispatch_benchmark_sweep(
+        DispatchBenchmarkSweepConfig(
+            manifest_path=args.manifest,
+            projected_targets_path=args.projected_targets,
+            output_dir=args.out_dir,
+            run_id=args.run_id,
+            devices=devices,
+            workers_per_device_values=_parse_int_tuple(args.workers_per_device, name="workers-per-device"),
+            limit_frame_values=_parse_int_tuple(args.limit_frames, name="limit-frames"),
+            shard_batch_frame_values=_parse_int_tuple(args.shard_batch_frames, name="shard-batch-frames"),
+            prefetch_frame_values=_parse_int_tuple(args.prefetch_frames, name="prefetch-frames", allow_zero=True),
+            repetitions=args.repetitions,
+            cache_root=args.cache_root,
+            local_cache_dir=args.local_cache_dir,
+            executable=executable,
+            async_shard_writes=not args.no_async_shard_writes,
+            batch_table_assembly=not args.no_batch_table_assembly,
+            materialize_worker_inputs=not args.no_materialize_worker_inputs,
+            finalize_device=args.finalize_device,
+            score_baseline=args.score_baseline,
+            candidate_min_abs_zscore=args.candidate_min_abs_zscore,
+            candidate_min_measurements=args.candidate_min_measurements,
+            candidate_max_rows=args.candidate_max_rows,
+            status_snapshot_interval_sec=args.status_snapshot_interval_sec,
+            continue_on_error=args.continue_on_error,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
     return 0
 
 
@@ -1002,6 +1066,22 @@ def _parse_env_assignments(assignments: list[str]) -> dict[str, str]:
             raise ValueError(f"--env key must not be empty, got {item!r}")
         env[key] = value
     return env
+
+
+def _parse_int_tuple(raw: str, *, name: str, allow_zero: bool = False) -> tuple[int, ...]:
+    values: list[int] = []
+    for item in raw.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        value = int(item)
+        if value < 0 or (value == 0 and not allow_zero):
+            floor = "non-negative" if allow_zero else "positive"
+            raise ValueError(f"--{name} values must be {floor}, got {value}")
+        values.append(value)
+    if not values:
+        raise ValueError(f"--{name} must contain at least one integer")
+    return tuple(values)
 
 
 def _rate(count: int, elapsed_sec: float) -> float:

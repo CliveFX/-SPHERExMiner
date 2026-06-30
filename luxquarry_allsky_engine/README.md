@@ -170,6 +170,20 @@ Implemented stages:
   --finalize-device cuda:0 \
   --score-baseline
 
+# Sweep dispatch settings and write machine-readable perf/profile summaries.
+.venv/bin/luxquarry-allsky run-dispatch-benchmark-sweep \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_smoke_current/frame_targets_projected.parquet \
+  --out-dir runs/dispatch_benchmark_sweep_smoke \
+  --run-id dispatch_sweep_smoke \
+  --devices cuda:0 \
+  --workers-per-device 1 \
+  --limit-frames 2,10,100 \
+  --shard-batch-frames 1,2,5,10 \
+  --prefetch-frames 0,2 \
+  --local-cache-dir /tmp/luxquarry_stage_smoke \
+  --score-baseline
+
 # Resume the same local run. Complete workers are skipped; missing or failed
 # workers are relaunched before finalization.
 .venv/bin/luxquarry-allsky run-local-dispatch \
