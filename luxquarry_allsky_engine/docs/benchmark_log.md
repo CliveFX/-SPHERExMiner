@@ -2368,3 +2368,84 @@ skipped_reducer_count: 2
 failed_reducer_count: 0
 status: complete
 ```
+
+## 2026-06-29: Candidate Scorer Fanout Lifecycle
+
+Change:
+
+- Added `luxquarry-allsky write-candidate-fanout-plan`.
+- Added `luxquarry-allsky run-candidate-fanout-plan`.
+- Added `luxquarry-allsky collect-candidate-fanout-plan`.
+- Candidate scorer fanout consumes `reducer_outputs.parquet` and emits one
+  scorer task per reducer spectra partition.
+- Candidate collection writes `candidate_scorer_outputs.parquet`, which is the
+  handoff for candidate aggregation, viewer indexing, and later ClickHouse
+  loading.
+
+Plan smoke:
+
+```text
+input reducer outputs:
+  runs/service_queue_smoke_v3/reducer_lifecycle_smoke/reducer_outputs.parquet
+devices: cuda:0
+max_parallel: 1
+min_abs_zscore: 1.0
+min_measurements: 2
+include_flagged: true
+scorer_count: 2
+total planned spectra measurement rows: 270
+```
+
+Run result:
+
+```text
+status: complete
+launched_scorer_count: 2
+failed_scorer_count: 0
+total_wall_sec: 5.408
+
+part00000 wall_sec: 2.704
+part00001 wall_sec: 2.604
+```
+
+Collection result:
+
+```text
+complete: true
+complete_scorer_count: 2
+failed_scorer_count: 0
+input_measurement_rows: 270
+filtered_measurement_rows: 270
+target_count_by_partition: 147
+candidate_count: 0
+candidate_target_count_by_partition: 0
+collect_wall_sec: 0.009
+scorer_sum_wall_sec: 2.365
+scorer_manifest_path:
+  runs/service_queue_smoke_v3/candidate_fanout_smoke/candidate_scorer_outputs.parquet
+```
+
+Collected scorer rows:
+
+```text
+part00000: 140 input measurements, 0 candidates
+part00001: 130 input measurements, 0 candidates
+```
+
+Resume check:
+
+```text
+run-candidate-fanout-plan --resume
+launched_scorer_count: 0
+skipped_scorer_count: 2
+failed_scorer_count: 0
+status: complete
+```
+
+Notes:
+
+- Zero candidates is acceptable for this lifecycle smoke. The purpose here was
+  fanout, resume, collection, and manifest handoff, not detection threshold
+  tuning.
+- The next cloud-scale step is to generate Kubernetes scorer Jobs from the same
+  fanout plan, mirroring the reducer Job path.

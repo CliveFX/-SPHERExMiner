@@ -239,6 +239,11 @@ worker Jobs
 ClickHouse or another serving database belongs in the final viewer-index load,
 not in the worker or reducer hot path.
 
+The viewer/index layer will become large. Treat it as a rebuildable serving
+cache over immutable parquet/JSON products, not as the source of truth. This
+lets us build a heavy ClickHouse-backed dashboard later without making worker,
+reducer, or scorer throughput depend on an interactive database.
+
 After reducer Jobs complete, collect the spectra products:
 
 ```bash
@@ -250,3 +255,28 @@ After reducer Jobs complete, collect the spectra products:
 The collector writes `reducer_outputs.parquet`, one row per reducer partition.
 That table is the scalable handoff to scorer fanout and to the eventual
 ClickHouse/viewer loader.
+
+After reducer collection, fan out candidate scoring over the reducer outputs:
+
+```bash
+.venv/bin/luxquarry-allsky write-candidate-fanout-plan \
+  --reducer-outputs runs/<run_id>/reducers/reducer_outputs.parquet \
+  --out-dir runs/<run_id>/candidate_fanout \
+  --run-id <run_id>_candidate_fanout \
+  --plan-out runs/<run_id>/candidate_fanout/candidate_fanout_plan.json \
+  --devices cuda:0
+
+.venv/bin/luxquarry-allsky run-candidate-fanout-plan \
+  --plan runs/<run_id>/candidate_fanout/candidate_fanout_plan.json \
+  --max-parallel 1
+
+.venv/bin/luxquarry-allsky collect-candidate-fanout-plan \
+  --plan runs/<run_id>/candidate_fanout/candidate_fanout_plan.json \
+  --out runs/<run_id>/candidate_fanout/candidate_fanout_collect_summary.json
+```
+
+The local runner is a smoke/development path. At cloud scale the same
+`candidate_fanout_plan.json` should map to one scorer Job per reducer partition,
+then `collect-candidate-fanout-plan` writes `candidate_scorer_outputs.parquet`.
+That manifest is the input to candidate aggregation, quality dashboards, and
+ClickHouse/viewer indexing.

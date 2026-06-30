@@ -327,6 +327,37 @@ reducer_outputs.parquet
 `reducer_outputs.parquet` is the handoff table for scorer fanout, viewer-index
 loading, or ClickHouse ingestion.
 
+Current local candidate scorer lifecycle:
+
+```bash
+luxquarry-allsky write-candidate-fanout-plan \
+  --reducer-outputs runs/service_queue_smoke_v3/reducer_lifecycle_smoke/reducer_outputs.parquet \
+  --out-dir runs/service_queue_smoke_v3/candidate_fanout_smoke \
+  --run-id service_queue_smoke_v3_candidate_fanout \
+  --plan-out runs/service_queue_smoke_v3/candidate_fanout_smoke/candidate_fanout_plan.json \
+  --executable .venv/bin/luxquarry-allsky \
+  --devices cuda:0
+
+luxquarry-allsky run-candidate-fanout-plan \
+  --plan runs/service_queue_smoke_v3/candidate_fanout_smoke/candidate_fanout_plan.json \
+  --max-parallel 1
+
+luxquarry-allsky collect-candidate-fanout-plan \
+  --plan runs/service_queue_smoke_v3/candidate_fanout_smoke/candidate_fanout_plan.json \
+  --out runs/service_queue_smoke_v3/candidate_fanout_smoke/candidate_fanout_collect_summary.json
+```
+
+This stage writes:
+
+```text
+candidate_fanout_collect_summary.json
+candidate_scorer_outputs.parquet
+```
+
+`candidate_scorer_outputs.parquet` is the handoff to candidate aggregation,
+viewer-index loading, or ClickHouse ingestion. It records each candidate parquet
+path, candidate counts, target counts, and scorer timing.
+
 The current measurement dedupe key is:
 
 ```text

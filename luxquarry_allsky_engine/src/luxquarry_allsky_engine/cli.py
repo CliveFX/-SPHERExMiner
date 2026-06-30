@@ -12,6 +12,15 @@ from typing import Any
 
 from .benchmark import DispatchBenchmarkSweepConfig, run_dispatch_benchmark_sweep
 from .campaign import CampaignContractConfig, write_campaign_contract
+from .candidate_fanout import (
+    CandidateFanoutCollectConfig,
+    CandidateFanoutPlanConfig,
+    LocalCandidateFanoutRunConfig,
+    build_candidate_fanout_plan,
+    collect_candidate_fanout_plan,
+    run_candidate_fanout_plan,
+    write_candidate_fanout_plan,
+)
 from .catalog import CatalogConfig, build_frame_targets
 from .dispatch import DispatchPlanConfig, build_dispatch_plan, collect_dispatch_run, write_dispatch_plan
 from .finalize import FinalizeDispatchConfig, finalize_dispatch_run
@@ -672,6 +681,45 @@ def main(argv: list[str] | None = None) -> int:
     collect_reducers.add_argument("--out", type=Path)
     collect_reducers.add_argument("--allow-incomplete", action="store_true")
     collect_reducers.set_defaults(func=cmd_collect_reducer_plan)
+
+    candidate_fanout_plan = sub.add_parser(
+        "write-candidate-fanout-plan",
+        help="Write a candidate-scorer fanout plan from reducer_outputs.parquet.",
+    )
+    candidate_fanout_plan.add_argument("--reducer-outputs", type=Path, required=True)
+    candidate_fanout_plan.add_argument("--out-dir", type=Path, required=True)
+    candidate_fanout_plan.add_argument("--run-id", required=True)
+    candidate_fanout_plan.add_argument("--plan-out", type=Path, required=True)
+    candidate_fanout_plan.add_argument("--executable", default=".venv/bin/luxquarry-allsky")
+    candidate_fanout_plan.add_argument("--devices", default="cuda:0")
+    candidate_fanout_plan.add_argument("--output-prefix", default="baseline")
+    candidate_fanout_plan.add_argument("--flux-column", default="aperture_flux_uJy")
+    candidate_fanout_plan.add_argument("--min-abs-zscore", type=float, default=5.0)
+    candidate_fanout_plan.add_argument("--min-measurements", type=int, default=10)
+    candidate_fanout_plan.add_argument("--include-flagged", action="store_true")
+    candidate_fanout_plan.add_argument("--max-candidates", type=int)
+    candidate_fanout_plan.add_argument("--max-partitions", type=int)
+    candidate_fanout_plan.set_defaults(func=cmd_write_candidate_fanout_plan)
+
+    run_candidate_fanout = sub.add_parser(
+        "run-candidate-fanout-plan",
+        help="Launch local candidate scorers from a candidate fanout plan.",
+    )
+    run_candidate_fanout.add_argument("--plan", type=Path, required=True)
+    run_candidate_fanout.add_argument("--logs-dir", type=Path)
+    run_candidate_fanout.add_argument("--resume", action="store_true")
+    run_candidate_fanout.add_argument("--max-parallel", type=int)
+    run_candidate_fanout.add_argument("--allow-failed-scorers", action="store_true")
+    run_candidate_fanout.set_defaults(func=cmd_run_candidate_fanout_plan)
+
+    collect_candidate_fanout = sub.add_parser(
+        "collect-candidate-fanout-plan",
+        help="Collect partitioned candidate scorer outputs into a manifest and aggregate JSON.",
+    )
+    collect_candidate_fanout.add_argument("--plan", type=Path, required=True)
+    collect_candidate_fanout.add_argument("--out", type=Path)
+    collect_candidate_fanout.add_argument("--allow-incomplete", action="store_true")
+    collect_candidate_fanout.set_defaults(func=cmd_collect_candidate_fanout_plan)
 
     validate_assembly = sub.add_parser(
         "validate-assembly-order",
@@ -1409,6 +1457,67 @@ def cmd_run_reducer_plan(args: argparse.Namespace) -> int:
 def cmd_collect_reducer_plan(args: argparse.Namespace) -> int:
     summary = collect_reducer_plan(
         ReducerCollectConfig(
+            plan_path=args.plan,
+            output_path=args.out,
+            allow_incomplete=args.allow_incomplete,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_write_candidate_fanout_plan(args: argparse.Namespace) -> int:
+    devices = tuple(part.strip() for part in args.devices.split(",") if part.strip())
+    plan = build_candidate_fanout_plan(
+        CandidateFanoutPlanConfig(
+            reducer_outputs_path=args.reducer_outputs,
+            output_dir=args.out_dir,
+            run_id=args.run_id,
+            executable=args.executable,
+            devices=devices,
+            output_prefix=args.output_prefix,
+            flux_column=args.flux_column,
+            min_abs_zscore=args.min_abs_zscore,
+            min_measurements=args.min_measurements,
+            include_flagged=args.include_flagged,
+            max_candidates=args.max_candidates,
+            max_partitions=args.max_partitions,
+        )
+    )
+    write_candidate_fanout_plan(plan, args.plan_out)
+    print(
+        json.dumps(
+            {
+                "plan_out": str(args.plan_out),
+                "shell_out": str(args.plan_out.with_suffix(".sh")),
+                "scorer_count": plan["scorer_count"],
+                "devices": plan["devices"],
+                "total_spectra_measurement_rows": plan["total_spectra_measurement_rows"],
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
+def cmd_run_candidate_fanout_plan(args: argparse.Namespace) -> int:
+    summary = run_candidate_fanout_plan(
+        LocalCandidateFanoutRunConfig(
+            plan_path=args.plan,
+            logs_dir=args.logs_dir,
+            resume=args.resume,
+            max_parallel=args.max_parallel,
+            allow_failed_scorers=args.allow_failed_scorers,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_collect_candidate_fanout_plan(args: argparse.Namespace) -> int:
+    summary = collect_candidate_fanout_plan(
+        CandidateFanoutCollectConfig(
             plan_path=args.plan,
             output_path=args.out,
             allow_incomplete=args.allow_incomplete,

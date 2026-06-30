@@ -208,6 +208,21 @@ durable source of truth remains immutable parquet/JSON shards. A separate
 serving/index stage can load selected products into ClickHouse or another
 columnar serving store for dashboards and drilldown.
 
+The scalable handoff into that serving layer is:
+
+```text
+measurement_shard_manifest.parquet
+  -> measurement partition manifest
+  -> reducer_outputs.parquet
+  -> candidate_scorer_outputs.parquet
+  -> viewer/ClickHouse index
+```
+
+`candidate_scorer_outputs.parquet` records candidate parquet paths, candidate
+counts, target counts, and scorer timing by reducer partition. The viewer should
+read from that index path, not crawl arbitrary run directories on each page
+load.
+
 Likely ClickHouse tables:
 
 ```text
