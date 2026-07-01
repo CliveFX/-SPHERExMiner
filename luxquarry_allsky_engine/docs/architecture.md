@@ -25,12 +25,15 @@ frame group
   -> frame footprint
   -> catalog targets inside footprint
   -> GPU photometry for all targets
-  -> append measurement rows
-  -> spectra assembly as a downstream groupby/sort job
+  -> audit or survey output products
+  -> spectra/candidate assembly as downstream GPU jobs
 ```
 
-The key product is not a run folder full of target spectra. The key product is
-an append-only measurement table.
+The key product is not a run folder full of target spectra. In audit mode the
+key product is an append-only measurement table. In survey mode the key product
+is a reduced spectra/candidate product set with raw measurement retention only
+for injections, candidates, holdouts, debug samples, and explicitly requested
+targets. See `survey_output_contract.md`.
 
 The measured worker-only smoke shows small dispatches are dominated by worker
 process startup, not GPU payload. The next performance shape is a long-lived
@@ -51,6 +54,21 @@ Frame groups should be sized by:
 
 Each work unit must be independent and retryable. No worker should need to
 coordinate with another worker while processing frames.
+
+## Economic Target
+
+The v2 economic target is:
+
+```text
+$5k of cloud GPU compute should buy the accessible-sky survey for Gaia G ~= 8-14
+plus the full usable 2MASS point-source set.
+```
+
+This target is intentionally narrower than all Gaia, but broader than a toy
+campaign. It is the cost gate that should drive architecture decisions. The
+planner must report Gaia source count, 2MASS source count, deduplicated target
+count, frame count, estimated measurement count, estimated output bytes, and
+estimated cloud cost before a large run.
 
 ## Measurement Schema
 

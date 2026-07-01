@@ -18,9 +18,17 @@ Write `perf_summary.json` with:
 ```json
 {
   "campaign_id": "string",
+  "output_mode": "audit|survey",
+  "catalog_selection": "gaia_g_8_14|twomass_all_usable|combined",
   "frame_count": 0,
   "target_count": 0,
+  "gaia_target_count": 0,
+  "twomass_target_count": 0,
+  "deduplicated_target_count": 0,
   "measurement_count": 0,
+  "spectra_count": 0,
+  "candidate_count": 0,
+  "retained_raw_measurement_count": 0,
   "total_wall_sec": 0.0,
   "stage_wall_sec": {
     "stage_fits": 0.0,
@@ -35,21 +43,37 @@ Write `perf_summary.json` with:
     "frames_per_sec": 0.0,
     "measurements_per_sec": 0.0,
     "measurements_per_gpu_sec": 0.0,
+    "spectra_per_sec": 0.0,
+    "spectra_per_gpu_sec": 0.0,
     "parquet_rows_per_sec": 0.0
   },
   "io": {
     "fits_read_bytes": 0,
     "catalog_read_bytes": 0,
     "parquet_write_bytes": 0,
+    "bytes_per_measurement": 0.0,
+    "bytes_per_spectrum": 0.0,
     "local_cache_peak_bytes": 0
   },
   "gpu": {
     "device_count": 0,
     "kernel_wall_sec": 0.0,
     "estimated_occupancy": null
+  },
+  "economics": {
+    "target_cloud_instance": "string",
+    "estimated_cloud_gpu_hourly_cost": 0.0,
+    "estimated_cloud_total_cost": 0.0,
+    "estimated_cost_per_billion_measurements": 0.0,
+    "estimated_cost_per_million_spectra": 0.0,
+    "fits_under_5000_usd_for_gaia_g_8_14_plus_2mass": false
   }
 }
 ```
+
+The v2 economic gate is documented in `survey_output_contract.md`: `$5k` should
+buy the accessible-sky survey for Gaia G ~= 8-14 plus the full usable 2MASS
+point-source set. Benchmarks that do not estimate this cost are incomplete.
 
 The repeatable local sweep command is:
 
