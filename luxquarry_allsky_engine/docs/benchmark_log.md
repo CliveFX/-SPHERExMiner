@@ -3819,3 +3819,38 @@ Interpretation:
   CPU/device round trips before changing science math.
 - FITS read and frame upload are smaller but still above threshold; they are
   candidates for local NVMe/S3 staging, KvikIO experiments, and better overlap.
+
+### PSF Fused-Candidate Experiment
+
+An experimental fused PSF candidate kernel was tested locally but reverted
+before commit. The idea was to remove the large temporary candidate kernel bank
+(`n_candidates * MAX_PSF_PIXELS`) by computing each shifted PSF sample directly
+inside the candidate fit kernel.
+
+One-frame smoke result:
+
+```text
+old two-kernel PSF path:
+  worker_payload_max_wall_sec: 0.857
+  measurements_per_sec_worker_payload: 20,850
+  psf_device_submit_sync: 0.064 sec
+
+experimental fused candidate path:
+  worker_payload_max_wall_sec: 1.923
+  measurements_per_sec_worker_payload: 9,297
+  psf_device_submit_sync: 1.254 sec
+```
+
+Numerical comparison on the same frame matched the existing PSF output columns
+for the checked columns, but performance was much worse. The fused version
+avoided the kernel-bank write/read, but recomputed shifted PSF samples multiple
+times per candidate, which dominated the memory savings.
+
+Decision:
+
+- Do not replace the current PSF path with this fused recomputation approach.
+- The next PSF optimization should preserve or cache shifted kernel samples
+  rather than recomputing them for normalization, fitting, and chi-square.
+- Better candidates are tiled/shared-memory kernel construction, smaller
+  candidate-output surfaces, or a two-stage fit that avoids full chi-square for
+  losing candidates.
