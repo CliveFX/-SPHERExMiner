@@ -4087,3 +4087,56 @@ Interpretation:
   metadata GPU-native, dictionary-code repeated provenance fields, or split
   row-level numeric measurements from sidecar provenance tables where that is
   scientifically acceptable.
+
+### Scalar Metadata Experiment
+
+An experiment attempted to reduce `metadata_to_cudf` by removing constant
+compact provenance columns from the pandas metadata table, converting the
+smaller table with `cudf.from_pandas`, then assigning constant columns as cuDF
+scalar columns.
+
+Correctness:
+
+```text
+same columns: true
+same rows: true
+same targets: true
+checked provenance/science columns identical:
+  fits_path
+  wavelength_calibration_file
+  sapm_file
+  aperture_flux_uJy
+  cwave_um
+  psf_flux_uJy
+  psf_status_code
+```
+
+Dense 18-frame, 3-GPU comparison:
+
+```text
+baseline deep timing:
+  worker_payload_max_wall_sec: 2.252
+  measurements_per_sec_worker_payload: 142,431
+  write_measurement_shards: 0.400 sec critical path
+  shard_table_assembly: 0.279 sec critical path
+  metadata_to_cudf: 0.219 sec critical path
+  column_attach: 0.009 sec critical path
+
+scalar metadata experiment:
+  worker_payload_max_wall_sec: 2.286
+  measurements_per_sec_worker_payload: 140,339
+  write_measurement_shards: 0.466 sec critical path
+  shard_table_assembly: 0.342 sec critical path
+  metadata_to_cudf: 0.197 sec critical path
+  column_attach: 0.013 sec critical path
+```
+
+Decision:
+
+- Reverted before commit. The experiment reduced `metadata_to_cudf`, but
+  total shard assembly got worse.
+- Assigning many scalar/string columns after cuDF construction is not a free
+  win.
+- The better metadata strategy is likely dictionary coding or a sidecar
+  provenance table keyed by frame/calibration IDs, not per-column scalar
+  assignment after `from_pandas`.
