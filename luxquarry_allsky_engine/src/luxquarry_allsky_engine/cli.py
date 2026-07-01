@@ -1465,6 +1465,11 @@ def cmd_run_local_task_queue(args: argparse.Namespace) -> int:
                     row["source_input_load_wall_sec"] = float(
                         service_summary.get("source_input_load_wall_sec") or 0.0
                     )
+                    row["source_input_index_wall_sec"] = float(
+                        service_summary.get("source_input_index_wall_sec") or 0.0
+                    )
+                    row["resident_source_frame_count"] = int(service_summary.get("resident_source_frame_count") or 0)
+                    row["resident_source_target_rows"] = int(service_summary.get("resident_source_target_rows") or 0)
                     row["service_total_wall_sec"] = float(service_summary.get("total_wall_sec") or 0.0)
                 break
 

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from .gpu_worker import PersistentGpuFrameWorker, PersistentWorkerConfig
@@ -127,8 +128,11 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
 
     queue_manifest = _read_queue_manifest(queue_dir)
     source_manifest: pd.DataFrame | None = None
+    source_manifest_by_frame: pd.DataFrame | None = None
     source_targets: pd.DataFrame | None = None
+    source_target_indices_by_frame: dict[str, np.ndarray] | None = None
     source_input_load_wall = 0.0
+    source_input_index_wall = 0.0
     materialized_queue = bool(queue_manifest.get("materialized_task_inputs", True)) if queue_manifest else True
     if not materialized_queue:
         source_input_started = time.perf_counter()
@@ -139,6 +143,13 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
         source_manifest["frame_group_id"] = source_manifest["frame_group_id"].astype(str)
         source_targets["frame_group_id"] = source_targets["frame_group_id"].astype(str)
         source_input_load_wall = time.perf_counter() - source_input_started
+        source_index_started = time.perf_counter()
+        source_manifest_by_frame = source_manifest.set_index("frame_group_id", drop=False)
+        source_target_indices_by_frame = {
+            str(frame_id): indices
+            for frame_id, indices in source_targets.groupby("frame_group_id", sort=False).indices.items()
+        }
+        source_input_index_wall = time.perf_counter() - source_index_started
 
     worker = PersistentGpuFrameWorker(config.worker_config)
     summary: dict[str, Any] = {
@@ -151,6 +162,9 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
         "materialized_task_inputs": materialized_queue,
         "resident_source_inputs": not materialized_queue,
         "source_input_load_wall_sec": source_input_load_wall,
+        "source_input_index_wall_sec": source_input_index_wall,
+        "resident_source_frame_count": int(len(source_manifest)) if source_manifest is not None else 0,
+        "resident_source_target_rows": int(len(source_targets)) if source_targets is not None else 0,
         "tasks_completed": 0,
         "tasks_failed": 0,
         "frames_completed": 0,
@@ -184,13 +198,31 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
                 targets = pd.read_parquet(task_targets_path)
                 input_read_wall = time.perf_counter() - input_read_started
             else:
-                if source_manifest is None or source_targets is None:
+                if (
+                    source_manifest is None
+                    or source_manifest_by_frame is None
+                    or source_targets is None
+                    or source_target_indices_by_frame is None
+                ):
                     raise ValueError("Task has no materialized inputs and no resident source inputs are loaded")
-                frame_ids = {str(value) for value in task.get("frame_group_ids") or []}
+                frame_ids = [str(value) for value in task.get("frame_group_ids") or []]
                 if not frame_ids:
                     raise ValueError(f"Task {task_id} has no frame_group_ids")
-                manifest = source_manifest[source_manifest["frame_group_id"].isin(frame_ids)].copy()
-                targets = source_targets[source_targets["frame_group_id"].isin(frame_ids)].copy()
+                missing_manifest = [frame_id for frame_id in frame_ids if frame_id not in source_manifest_by_frame.index]
+                if missing_manifest:
+                    raise ValueError(
+                        f"Task {task_id} references {len(missing_manifest)} frame ids absent from source manifest"
+                    )
+                manifest = source_manifest_by_frame.loc[frame_ids].copy()
+                target_index_parts = [
+                    source_target_indices_by_frame[frame_id]
+                    for frame_id in frame_ids
+                    if frame_id in source_target_indices_by_frame
+                ]
+                if target_index_parts:
+                    targets = source_targets.take(np.concatenate(target_index_parts)).copy()
+                else:
+                    targets = source_targets.iloc[0:0].copy()
                 task_manifest_path = queue_manifest.get("source_manifest_path") if queue_manifest else None
                 task_targets_path = queue_manifest.get("source_projected_targets_path") if queue_manifest else None
             input_select_wall = time.perf_counter() - input_select_started

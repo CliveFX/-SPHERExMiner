@@ -4140,3 +4140,96 @@ Decision:
 - The better metadata strategy is likely dictionary coding or a sidecar
   provenance table keyed by frame/calibration IDs, not per-column scalar
   assignment after `from_pandas`.
+
+## 2026-06-30: Resident Task Input Indexing
+
+The local task queue previously loaded resident source inputs once per worker
+service, but each claimed task still selected its frame subset by scanning the
+full projected-target table with pandas `.isin()`. That is acceptable for a
+small number of large tasks, but it becomes setup overhead when we intentionally
+use many small tasks for horizontal scheduling.
+
+Patch:
+
+- Build `source_manifest_by_frame` once per worker service.
+- Build `source_target_indices_by_frame` once per worker service using
+  `source_targets.groupby("frame_group_id").indices`.
+- For each task, select frames by indexed `.loc[]` and target rows by
+  positional `.take()` rather than rescanning the full source target table.
+- Report `source_input_index_wall_sec`,
+  `resident_source_frame_count`, and `resident_source_target_rows` in worker
+  service and local-runner summaries.
+
+Smoke command:
+
+```bash
+cd /home/clive/dev/NIROSETI_SPHEREx
+luxquarry_allsky_engine/.venv/bin/luxquarry-allsky run-local-task-queue \
+  --manifest luxquarry_allsky_engine/runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets luxquarry_allsky_engine/runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir luxquarry_allsky_engine/runs/local_task_queue_resident_index_smoke \
+  --run-id local_task_queue_resident_index_smoke \
+  --devices cuda:0 \
+  --frames-per-task 1 \
+  --limit-frames 6 \
+  --enable-psf \
+  --psf-kernel-build-mode gpu_bilinear \
+  --measurement-column-profile compact \
+  --measurement-parquet-compression none \
+  --shard-batch-frames 6 \
+  --prefetch-frames 1
+```
+
+Result:
+
+```text
+source table: 20 frames, 400,000 projected target rows
+completed_frames: 6
+measurement_rows: 107,259
+failed_frames: 0
+failed_tasks: 0
+task_input_select_wall_sec: 0.0033-0.0041 sec per one-frame task
+```
+
+A one-frame summary smoke confirmed the runner emits the new resident-input
+fields:
+
+```text
+resident_source_frame_count: 20
+resident_source_target_rows: 400,000
+source_input_load_wall_sec: 0.155
+source_input_index_wall_sec: 0.064
+```
+
+Provenance check:
+
+```text
+compact shard rows: 17,875
+compact shard columns: 53
+present per measurement:
+  frame_group_id
+  image_id
+  catalog
+  target_id
+  source_id
+  ra_deg
+  dec_deg
+  x_pix
+  y_pix
+  fits_path
+  detector
+  wavelength_source
+  wavelength_calibration_file
+  sapm_file
+  cwave_um
+  cband_um
+  aperture_flux_uJy
+  psf_flux_uJy
+```
+
+Decision:
+
+- Keep. This is a low-risk setup optimization for many-task scheduling.
+- It does not change science math or measurement schema.
+- It does not attack the current dense-run critical path; FITS reads, parquet
+  writes, metadata conversion, and PSF gather remain larger targets.
