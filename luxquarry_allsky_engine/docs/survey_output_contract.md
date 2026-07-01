@@ -246,3 +246,29 @@ estimated_cost_per_million_spectra: 0.31
 That sample is not a cloud estimate; it is a local frame subset. The full
 estimate must use a full accessible-sky projected target table before the `$5k`
 gate means anything.
+
+## Sample Extrapolation
+
+When a full accessible-sky projected target table is not available yet, run the
+planner on representative cells and extrapolate:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky extrapolate-survey-sample \
+  --plan-summary runs/survey_plan_gc_nearest20_combined/survey_plan_summary.json \
+  --out-dir runs/survey_sample_extrapolation_smoke \
+  --target-cell-count 192
+```
+
+The output is:
+
+```text
+survey_sample_cell_summaries.parquet
+survey_sample_extrapolation.json
+```
+
+This command is deliberately caveated. It is useful for answering whether the
+architecture is roughly 2x, 10x, or 100x away from the `$5k` target. It is not a
+replacement for a real full-sky plan, and it is only as good as the sampled
+cells. A useful sample must include dense Galactic-plane regions and sparse
+high-latitude regions.

@@ -65,7 +65,14 @@ from .spectra import (
 )
 from .staging_benchmark import ObjectStagingBenchmarkConfig, benchmark_object_staging
 from .status import DispatchStatusConfig, write_dispatch_status_snapshot
-from .survey_economics import SurveyEconomicsConfig, SurveyPlanConfig, estimate_survey_economics, plan_survey_economics
+from .survey_economics import (
+    SurveyEconomicsConfig,
+    SurveyPlanConfig,
+    SurveySampleExtrapolationConfig,
+    estimate_survey_economics,
+    extrapolate_survey_sample,
+    plan_survey_economics,
+)
 from .task_queue import (
     GpuWorkerServiceConfig,
     TaskQueueCollectConfig,
@@ -450,6 +457,17 @@ def main(argv: list[str] | None = None) -> int:
     survey_plan.add_argument("--gpu-count", type=int, default=8)
     survey_plan.add_argument("--budget-usd", type=float, default=5000.0)
     survey_plan.set_defaults(func=cmd_plan_survey_economics)
+
+    survey_sample = sub.add_parser(
+        "extrapolate-survey-sample",
+        help="Extrapolate survey economics from representative per-cell survey plan summaries.",
+    )
+    survey_sample.add_argument("--plan-summary", type=Path, action="append", required=True)
+    survey_sample.add_argument("--out-dir", type=Path, required=True)
+    survey_sample.add_argument("--target-cell-count", type=int, required=True)
+    survey_sample.add_argument("--sample-cell-count", type=int)
+    survey_sample.add_argument("--budget-usd", type=float, default=5000.0)
+    survey_sample.set_defaults(func=cmd_extrapolate_survey_sample)
 
     local_task_queue = sub.add_parser(
         "run-local-task-queue",
@@ -1481,6 +1499,20 @@ def cmd_plan_survey_economics(args: argparse.Namespace) -> int:
             measurements_per_gpu_sec=args.measurements_per_gpu_sec,
             gpu_hourly_cost=args.gpu_hourly_cost,
             gpu_count=args.gpu_count,
+            budget_usd=args.budget_usd,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_extrapolate_survey_sample(args: argparse.Namespace) -> int:
+    summary = extrapolate_survey_sample(
+        SurveySampleExtrapolationConfig(
+            plan_summary_paths=tuple(args.plan_summary),
+            output_dir=args.out_dir,
+            target_cell_count=args.target_cell_count,
+            sample_cell_count=args.sample_cell_count,
             budget_usd=args.budget_usd,
         )
     )

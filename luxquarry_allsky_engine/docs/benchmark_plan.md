@@ -108,6 +108,16 @@ cd luxquarry_allsky_engine
   --gpu-count 8
 ```
 
+When only representative cell plans exist, extrapolate them:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky extrapolate-survey-sample \
+  --plan-summary runs/survey_plan_gc_nearest20_combined/survey_plan_summary.json \
+  --out-dir runs/survey_sample_extrapolation_smoke \
+  --target-cell-count 192
+```
+
 The repeatable local sweep command is:
 
 ```bash

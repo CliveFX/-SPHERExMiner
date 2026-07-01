@@ -47,6 +47,15 @@ class SurveyPlanConfig:
     budget_usd: float = 5000.0
 
 
+@dataclass(frozen=True)
+class SurveySampleExtrapolationConfig:
+    plan_summary_paths: tuple[Path, ...]
+    output_dir: Path
+    target_cell_count: int
+    sample_cell_count: int | None = None
+    budget_usd: float = 5000.0
+
+
 def plan_survey_economics(config: SurveyPlanConfig) -> dict[str, Any]:
     config.output_dir.mkdir(parents=True, exist_ok=True)
     manifest = pd.read_parquet(config.manifest_path)
@@ -126,6 +135,105 @@ def plan_survey_economics(config: SurveyPlanConfig) -> dict[str, Any]:
         "economics": economics,
     }
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return summary
+
+
+def extrapolate_survey_sample(config: SurveySampleExtrapolationConfig) -> dict[str, Any]:
+    if not config.plan_summary_paths:
+        raise ValueError("at least one plan summary path is required")
+    if config.target_cell_count <= 0:
+        raise ValueError("target_cell_count must be positive")
+    sample_count = config.sample_cell_count or len(config.plan_summary_paths)
+    if sample_count <= 0:
+        raise ValueError("sample_cell_count must be positive")
+
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    rows = []
+    for index, path in enumerate(config.plan_summary_paths):
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        economics = payload.get("economics") or payload
+        row = {
+            "sample_index": index,
+            "path": str(path),
+            "planned_frame_count": int(payload.get("planned_frame_count") or economics.get("frame_count") or 0),
+            "planned_projected_target_rows": int(payload.get("planned_projected_target_rows") or 0),
+            "planned_in_frame_target_rows": int(payload.get("planned_in_frame_target_rows") or economics.get("measurement_count") or 0),
+            "planned_unique_targets": int(payload.get("planned_unique_targets") or economics.get("target_count") or 0),
+            "gaia_target_count": int(economics.get("gaia_target_count") or 0),
+            "twomass_target_count": int(economics.get("twomass_target_count") or 0),
+            "in_frame_gaia_target_count": int(economics.get("in_frame_gaia_target_count") or 0),
+            "in_frame_twomass_target_count": int(economics.get("in_frame_twomass_target_count") or 0),
+            "measurement_count": int(economics.get("measurement_count") or 0),
+            "spectra_count": int(economics.get("spectra_count") or 0),
+            "retained_raw_measurement_count": int(economics.get("retained_raw_measurement_count") or 0),
+            "estimated_output_bytes": int(economics.get("estimated_output_bytes") or 0),
+            "estimated_compute_cost_usd": float(economics.get("estimated_compute_cost_usd") or 0.0),
+            "estimated_gpu_hours": float(economics.get("estimated_gpu_hours") or 0.0),
+        }
+        rows.append(row)
+
+    sample_df = pd.DataFrame(rows)
+    scale = float(config.target_cell_count) / float(sample_count)
+    summed = sample_df.sum(numeric_only=True).to_dict()
+    extrapolated = {
+        "target_cell_count": int(config.target_cell_count),
+        "sample_cell_count": int(sample_count),
+        "plan_summary_count": len(config.plan_summary_paths),
+        "scale_factor": scale,
+        "frame_count": int(round(float(summed.get("planned_frame_count") or 0.0) * scale)),
+        "projected_target_rows": int(round(float(summed.get("planned_projected_target_rows") or 0.0) * scale)),
+        "in_frame_target_rows": int(round(float(summed.get("planned_in_frame_target_rows") or 0.0) * scale)),
+        "unique_targets": int(round(float(summed.get("planned_unique_targets") or 0.0) * scale)),
+        "gaia_target_count": int(round(float(summed.get("gaia_target_count") or 0.0) * scale)),
+        "twomass_target_count": int(round(float(summed.get("twomass_target_count") or 0.0) * scale)),
+        "in_frame_gaia_target_count": int(round(float(summed.get("in_frame_gaia_target_count") or 0.0) * scale)),
+        "in_frame_twomass_target_count": int(round(float(summed.get("in_frame_twomass_target_count") or 0.0) * scale)),
+        "measurement_count": int(round(float(summed.get("measurement_count") or 0.0) * scale)),
+        "spectra_count": int(round(float(summed.get("spectra_count") or 0.0) * scale)),
+        "retained_raw_measurement_count": int(
+            round(float(summed.get("retained_raw_measurement_count") or 0.0) * scale)
+        ),
+        "estimated_output_bytes": int(round(float(summed.get("estimated_output_bytes") or 0.0) * scale)),
+        "estimated_compute_cost_usd": float(summed.get("estimated_compute_cost_usd") or 0.0) * scale,
+        "estimated_gpu_hours": float(summed.get("estimated_gpu_hours") or 0.0) * scale,
+    }
+    extrapolated["estimated_output_gib"] = extrapolated["estimated_output_bytes"] / float(1024**3)
+    extrapolated["fits_budget"] = extrapolated["estimated_compute_cost_usd"] <= float(config.budget_usd)
+    extrapolated["budget_usd"] = float(config.budget_usd)
+    if extrapolated["measurement_count"] > 0:
+        extrapolated["estimated_cost_per_billion_measurements"] = extrapolated["estimated_compute_cost_usd"] / (
+            extrapolated["measurement_count"] / 1_000_000_000.0
+        )
+    else:
+        extrapolated["estimated_cost_per_billion_measurements"] = None
+    if extrapolated["spectra_count"] > 0:
+        extrapolated["estimated_cost_per_million_spectra"] = extrapolated["estimated_compute_cost_usd"] / (
+            extrapolated["spectra_count"] / 1_000_000.0
+        )
+    else:
+        extrapolated["estimated_cost_per_million_spectra"] = None
+
+    sample_path = config.output_dir / "survey_sample_cell_summaries.parquet"
+    extrapolation_path = config.output_dir / "survey_sample_extrapolation.json"
+    sample_df.to_parquet(sample_path, index=False)
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "backend": "luxquarry_survey_sample_extrapolator",
+        "plan_summary_paths": [str(path) for path in config.plan_summary_paths],
+        "output_dir": str(config.output_dir),
+        "outputs": {
+            "survey_sample_cell_summaries": str(sample_path),
+            "survey_sample_extrapolation": str(extrapolation_path),
+        },
+        "sample_totals": {str(key): _json_number(value) for key, value in summed.items()},
+        "extrapolated": extrapolated,
+        "caveats": [
+            "This is an extrapolation from supplied plan summaries, not a full projected all-sky plan.",
+            "Sampling quality depends on whether the supplied cells represent dense Galactic-plane and sparse high-latitude regions.",
+            "Catalog cross-match/deduplication remains catalog-ID based unless upstream target planning has already deduplicated Gaia and 2MASS physically.",
+        ],
+    }
+    extrapolation_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
 
 
@@ -318,3 +426,13 @@ def _resolve_bytes_per_measurement(config: SurveyEconomicsConfig) -> float:
             raise ValueError("bytes_per_measurement must be positive")
         return float(config.bytes_per_measurement)
     return 158.0
+
+
+def _json_number(value: Any) -> int | float:
+    try:
+        numeric = float(value)
+    except Exception:
+        return 0
+    if numeric.is_integer():
+        return int(numeric)
+    return numeric
