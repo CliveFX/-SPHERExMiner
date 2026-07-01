@@ -516,6 +516,9 @@ def main(argv: list[str] | None = None) -> int:
     survey_sample.add_argument("--out-dir", type=Path, required=True)
     survey_sample.add_argument("--target-cell-count", type=int, required=True)
     survey_sample.add_argument("--sample-cell-count", type=int)
+    survey_sample.add_argument("--measurements-per-gpu-sec", type=float)
+    survey_sample.add_argument("--gpu-hourly-cost", type=float, default=6.88)
+    survey_sample.add_argument("--gpu-count", type=int, default=8)
     survey_sample.add_argument("--budget-usd", type=float, default=5000.0)
     survey_sample.set_defaults(func=cmd_extrapolate_survey_sample)
 
@@ -1601,6 +1604,9 @@ def cmd_extrapolate_survey_sample(args: argparse.Namespace) -> int:
             output_dir=args.out_dir,
             target_cell_count=args.target_cell_count,
             sample_cell_count=args.sample_cell_count,
+            measurements_per_gpu_sec=args.measurements_per_gpu_sec,
+            gpu_hourly_cost=args.gpu_hourly_cost,
+            gpu_count=args.gpu_count,
             budget_usd=args.budget_usd,
         )
     )

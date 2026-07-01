@@ -55,6 +55,9 @@ class SurveySampleExtrapolationConfig:
     output_dir: Path
     target_cell_count: int
     sample_cell_count: int | None = None
+    measurements_per_gpu_sec: float | None = None
+    gpu_hourly_cost: float = 6.88
+    gpu_count: int = 8
     budget_usd: float = 5000.0
 
 
@@ -165,17 +168,28 @@ def extrapolate_survey_sample(config: SurveySampleExtrapolationConfig) -> dict[s
     sample_count = config.sample_cell_count or len(config.plan_summary_paths)
     if sample_count <= 0:
         raise ValueError("sample_cell_count must be positive")
+    if config.gpu_count <= 0:
+        raise ValueError("gpu_count must be positive")
+    if config.measurements_per_gpu_sec is not None and config.measurements_per_gpu_sec <= 0:
+        raise ValueError("measurements_per_gpu_sec must be positive")
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
     rows = []
     for index, path in enumerate(config.plan_summary_paths):
         payload = json.loads(path.read_text(encoding="utf-8"))
         economics = payload.get("economics") or payload
+        all_2mass_valid = economics.get("all_2mass_input_valid")
+        projected_rows = int(
+            payload.get("planned_projected_target_rows")
+            or economics.get("projected_target_rows")
+            or _metadata_projected_rows(economics)
+            or 0
+        )
         row = {
             "sample_index": index,
             "path": str(path),
             "planned_frame_count": int(payload.get("planned_frame_count") or economics.get("frame_count") or 0),
-            "planned_projected_target_rows": int(payload.get("planned_projected_target_rows") or 0),
+            "planned_projected_target_rows": projected_rows,
             "planned_in_frame_target_rows": int(payload.get("planned_in_frame_target_rows") or economics.get("measurement_count") or 0),
             "planned_unique_targets": int(payload.get("planned_unique_targets") or economics.get("target_count") or 0),
             "gaia_target_count": int(economics.get("gaia_target_count") or 0),
@@ -188,12 +202,32 @@ def extrapolate_survey_sample(config: SurveySampleExtrapolationConfig) -> dict[s
             "estimated_output_bytes": int(economics.get("estimated_output_bytes") or 0),
             "estimated_compute_cost_usd": float(economics.get("estimated_compute_cost_usd") or 0.0),
             "estimated_gpu_hours": float(economics.get("estimated_gpu_hours") or 0.0),
+            "all_2mass_input_valid": bool(all_2mass_valid) if all_2mass_valid is not None else False,
+            "all_2mass_input_status": str(economics.get("all_2mass_input_status") or "unknown"),
+            "all_2mass_input_reason": str(economics.get("all_2mass_input_reason") or ""),
         }
         rows.append(row)
 
     sample_df = pd.DataFrame(rows)
     scale = float(config.target_cell_count) / float(sample_count)
     summed = sample_df.sum(numeric_only=True).to_dict()
+    measurement_count = int(round(float(summed.get("measurement_count") or 0.0) * scale))
+    spectra_count = int(round(float(summed.get("spectra_count") or 0.0) * scale))
+    if config.measurements_per_gpu_sec:
+        estimated_gpu_hours = measurement_count / float(config.measurements_per_gpu_sec) / 3600.0
+        estimated_compute_cost_usd = estimated_gpu_hours * float(config.gpu_hourly_cost)
+    else:
+        estimated_gpu_hours = float(summed.get("estimated_gpu_hours") or 0.0) * scale
+        estimated_compute_cost_usd = float(summed.get("estimated_compute_cost_usd") or 0.0) * scale
+    cluster_wall_hours = estimated_gpu_hours / float(config.gpu_count)
+    max_budget_gpu_hours = float(config.budget_usd) / float(config.gpu_hourly_cost)
+    max_budget_measurements = None
+    max_budget_spectra_at_sample_depth = None
+    if config.measurements_per_gpu_sec:
+        max_budget_measurements = int(round(max_budget_gpu_hours * 3600.0 * float(config.measurements_per_gpu_sec)))
+        mean_depth = measurement_count / spectra_count if spectra_count else 0.0
+        if mean_depth > 0:
+            max_budget_spectra_at_sample_depth = int(round(max_budget_measurements / mean_depth))
     extrapolated = {
         "target_cell_count": int(config.target_cell_count),
         "sample_cell_count": int(sample_count),
@@ -207,18 +241,26 @@ def extrapolate_survey_sample(config: SurveySampleExtrapolationConfig) -> dict[s
         "twomass_target_count": int(round(float(summed.get("twomass_target_count") or 0.0) * scale)),
         "in_frame_gaia_target_count": int(round(float(summed.get("in_frame_gaia_target_count") or 0.0) * scale)),
         "in_frame_twomass_target_count": int(round(float(summed.get("in_frame_twomass_target_count") or 0.0) * scale)),
-        "measurement_count": int(round(float(summed.get("measurement_count") or 0.0) * scale)),
-        "spectra_count": int(round(float(summed.get("spectra_count") or 0.0) * scale)),
+        "measurement_count": measurement_count,
+        "spectra_count": spectra_count,
         "retained_raw_measurement_count": int(
             round(float(summed.get("retained_raw_measurement_count") or 0.0) * scale)
         ),
         "estimated_output_bytes": int(round(float(summed.get("estimated_output_bytes") or 0.0) * scale)),
-        "estimated_compute_cost_usd": float(summed.get("estimated_compute_cost_usd") or 0.0) * scale,
-        "estimated_gpu_hours": float(summed.get("estimated_gpu_hours") or 0.0) * scale,
+        "estimated_compute_cost_usd": estimated_compute_cost_usd,
+        "estimated_gpu_hours": estimated_gpu_hours,
+        "estimated_cluster_wall_hours": cluster_wall_hours,
     }
     extrapolated["estimated_output_gib"] = extrapolated["estimated_output_bytes"] / float(1024**3)
     extrapolated["fits_budget"] = extrapolated["estimated_compute_cost_usd"] <= float(config.budget_usd)
     extrapolated["budget_usd"] = float(config.budget_usd)
+    extrapolated["gpu_count"] = int(config.gpu_count)
+    extrapolated["gpu_hourly_cost"] = float(config.gpu_hourly_cost)
+    extrapolated["measurements_per_gpu_sec"] = config.measurements_per_gpu_sec
+    extrapolated["budget_gpu_hours"] = max_budget_gpu_hours
+    extrapolated["budget_cluster_wall_hours"] = max_budget_gpu_hours / float(config.gpu_count)
+    extrapolated["budget_measurement_capacity"] = max_budget_measurements
+    extrapolated["budget_spectra_capacity_at_sample_depth"] = max_budget_spectra_at_sample_depth
     if extrapolated["measurement_count"] > 0:
         extrapolated["estimated_cost_per_billion_measurements"] = extrapolated["estimated_compute_cost_usd"] / (
             extrapolated["measurement_count"] / 1_000_000_000.0
@@ -231,6 +273,20 @@ def extrapolate_survey_sample(config: SurveySampleExtrapolationConfig) -> dict[s
         )
     else:
         extrapolated["estimated_cost_per_million_spectra"] = None
+    extrapolated["mean_measurements_per_spectrum"] = (
+        extrapolated["measurement_count"] / extrapolated["spectra_count"]
+        if extrapolated["spectra_count"] > 0
+        else 0.0
+    )
+    input_quality = {
+        "all_samples_prove_all_2mass": bool(sample_df["all_2mass_input_valid"].all()) if len(sample_df) else False,
+        "sample_status_counts": {
+            str(key): int(value)
+            for key, value in sample_df.groupby("all_2mass_input_status", dropna=False).size().items()
+        }
+        if len(sample_df)
+        else {},
+    }
 
     sample_path = config.output_dir / "survey_sample_cell_summaries.parquet"
     extrapolation_path = config.output_dir / "survey_sample_extrapolation.json"
@@ -240,15 +296,18 @@ def extrapolate_survey_sample(config: SurveySampleExtrapolationConfig) -> dict[s
         "backend": "luxquarry_survey_sample_extrapolator",
         "plan_summary_paths": [str(path) for path in config.plan_summary_paths],
         "output_dir": str(config.output_dir),
+        "unit_note": "target_cell_count/sample_cell_count are generic extrapolation units. For frame-sample inputs, use total frames and sampled frames.",
         "outputs": {
             "survey_sample_cell_summaries": str(sample_path),
             "survey_sample_extrapolation": str(extrapolation_path),
         },
+        "input_quality": input_quality,
         "sample_totals": {str(key): _json_number(value) for key, value in summed.items()},
         "extrapolated": extrapolated,
         "caveats": [
             "This is an extrapolation from supplied plan summaries, not a full projected all-sky plan.",
             "Sampling quality depends on whether the supplied cells represent dense Galactic-plane and sparse high-latitude regions.",
+            "If measurements_per_gpu_sec is supplied, compute cost is recomputed from that measured rate instead of trusting per-sample stored cost fields.",
             "Catalog cross-match/deduplication remains catalog-ID based unless upstream target planning has already deduplicated Gaia and 2MASS physically.",
         ],
     }
@@ -526,6 +585,16 @@ def _read_json_if_exists(path: Path) -> dict[str, Any] | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError:
         return None
+
+
+def _metadata_projected_rows(economics: dict[str, Any]) -> int:
+    metadata = economics.get("all_2mass_input_metadata")
+    if not isinstance(metadata, dict):
+        return 0
+    projected_summary = metadata.get("projected_targets_summary")
+    if not isinstance(projected_summary, dict):
+        return 0
+    return int(projected_summary.get("projected_target_rows") or 0)
 
 
 def _select_targets(targets: pd.DataFrame, config: SurveyEconomicsConfig) -> pd.DataFrame:

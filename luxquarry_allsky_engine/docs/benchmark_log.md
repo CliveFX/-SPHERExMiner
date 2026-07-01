@@ -1,5 +1,50 @@
 # Benchmark Log
 
+## 2026-06-30: Dense-Frame Survey Cost Extrapolation
+
+Command:
+
+```bash
+cd /home/clive/dev/NIROSETI_SPHEREx
+luxquarry_allsky_engine/.venv/bin/luxquarry-allsky extrapolate-survey-sample \
+  --plan-summary luxquarry_allsky_engine/runs/survey_economics_gc_3frame_all2mass_true/summary.json \
+  --out-dir luxquarry_allsky_engine/runs/survey_extrapolation_qr2_dense_frame_gc3 \
+  --target-cell-count 8035 \
+  --sample-cell-count 3 \
+  --measurements-per-gpu-sec 73687 \
+  --gpu-count 8 \
+  --gpu-hourly-cost 6.88 \
+  --budget-usd 5000
+```
+
+Result:
+
+```text
+input sample: 3 dense Galactic-core frames, proven uncapped/no-filter 2MASS
+scaled frame count: 8,035 QR2 local frames
+measurement_count: 6,748,631,318
+spectra_count: 2,347,636,838
+mean_measurements_per_spectrum: 2.875
+estimated_gpu_hours: 25.44
+estimated_cluster_wall_hours_on_8_gpus: 3.18
+estimated_compute_cost_usd: 175.03
+estimated_output_gib: 8,965.45
+budget_measurement_capacity_at_5000_usd: 192,785,755,814
+```
+
+Notes:
+
+- This is a dense-frame extrapolation, not a representative all-sky estimate.
+  It scales a Galactic-core-ish 3-frame sample to the current 8,035 local QR2
+  frame count.
+- The sample input is proven all-2MASS for those frames:
+  `twomass_uncapped=true` and `twomass_magnitude_filtered=false`.
+- Compute cost is recomputed from the measured local GPU rate of
+  `73,687 measurements/GPU/sec`; it is not copied from stale sample metadata.
+- A defensible sky cost estimate still requires representative samples across
+  dense Galactic plane, ordinary plane, off-plane, and high-latitude sparse
+  regions.
+
 ## 2026-06-28: Manifest Smoke
 
 Command:
