@@ -3854,3 +3854,50 @@ Decision:
 - Better candidates are tiled/shared-memory kernel construction, smaller
   candidate-output surfaces, or a two-stage fit that avoids full chi-square for
   losing candidates.
+
+### PSF Winner-Only Chi-Square Experiment
+
+A second PSF experiment kept the current two-kernel candidate bank but skipped
+candidate chi-square during the all-candidate fit in default SNR mode. After
+the reducer selected the best candidate per target, a small extra kernel
+computed chi-square only for the winners.
+
+One-frame smoke:
+
+```text
+old path, warmed:
+  worker_payload_max_wall_sec: 0.857
+  measurements_per_sec_worker_payload: 20,850
+  psf_device_submit_sync: 0.064 sec
+
+winner-only chi-square, warmed:
+  worker_payload_max_wall_sec: 0.766
+  measurements_per_sec_worker_payload: 23,326
+  psf_device_submit_sync: 0.074 sec
+```
+
+Dense 18-frame, 3-GPU run:
+
+```text
+old path:
+  worker_payload_max_wall_sec: 2.258
+  measurements_per_sec_worker_payload: 142,079
+  psf_device_submit_sync critical path: 0.403 sec
+
+winner-only chi-square:
+  worker_payload_max_wall_sec: 2.414
+  measurements_per_sec_worker_payload: 132,869
+  psf_device_submit_sync critical path: 0.386 sec
+```
+
+Numerical comparison on the smoke frame matched the checked PSF output columns,
+including flux, uncertainty, fit position, score, reduced chi-square, status,
+sector, and kernel sum. The dense throughput regression means this was also
+reverted before commit.
+
+Decision:
+
+- Do not add an extra winner-only chi-square kernel in this form.
+- If revisiting this idea, fold winner chi-square into a later GPU-resident
+  reducer/output path where it does not add another launch and synchronization
+  point.
