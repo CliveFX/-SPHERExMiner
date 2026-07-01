@@ -8,7 +8,8 @@ The near-term LuxQuarry All-Sky Engine target is:
 $5k of cloud GPU compute buys a full accessible-sky SPHEREx survey for:
 
 1. Gaia sources in the selected bright/mid magnitude range, currently G ~= 8-14.
-2. The full usable 2MASS point-source set.
+2. All 2MASS point-source catalog rows present in the processed local 2MASS PSC
+   cache.
 ```
 
 This is intentionally not "all Gaia." The all-catalog target is useful as a
@@ -18,6 +19,18 @@ real frame-first GPU engine while avoiding the faint/noisy and bright/saturated
 tails that produce poor spectra and wasted scoring work. 2MASS is included as a
 separate all-source infrared-selected target set because it finds red/cool
 objects that Gaia cuts can miss.
+
+For this economic gate, 2MASS is not magnitude-capped. The planner's
+`combined` mode means:
+
+```text
+Gaia:   catalog == gaia_dr3 and G within gaia_mag_min..gaia_mag_max
+2MASS:  catalog == 2mass_psc, no magnitude filter
+```
+
+The estimator can only count rows that exist in the input projected-target
+Parquet. A true all-2MASS estimate therefore requires an upstream frame-target
+projection that was not capped to a small per-frame 2MASS sample.
 
 Before every serious cloud estimate, the planner must write the actual catalog
 cardinality used for the run:
@@ -170,7 +183,7 @@ mode must reduce earlier rather than merely scale storage.
 A v2 cloud-readiness benchmark should answer:
 
 ```text
-How many Gaia G 8-14 targets and usable 2MASS targets are in the selected accessible sky?
+How many Gaia G 8-14 targets and 2MASS PSC targets are in the selected accessible sky?
 How many SPHEREx frame measurements are required?
 What fraction of raw rows are retained in survey mode?
 How much data is written?

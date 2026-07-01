@@ -421,6 +421,7 @@ def main(argv: list[str] | None = None) -> int:
         "--catalog-selection",
         choices=["gaia_g_8_14", "twomass_all_usable", "combined"],
         default="combined",
+        help="Target selector for economics. combined means Gaia in the requested G range plus every 2mass_psc row present in the projected-target table.",
     )
     survey_economics.add_argument("--gaia-mag-min", type=float, default=8.0)
     survey_economics.add_argument("--gaia-mag-max", type=float, default=14.0)
@@ -445,6 +446,7 @@ def main(argv: list[str] | None = None) -> int:
         "--catalog-selection",
         choices=["gaia_g_8_14", "twomass_all_usable", "combined"],
         default="combined",
+        help="Target selector for economics. combined means Gaia in the requested G range plus every 2mass_psc row present in the projected-target table.",
     )
     survey_plan.add_argument("--gaia-mag-min", type=float, default=8.0)
     survey_plan.add_argument("--gaia-mag-max", type=float, default=14.0)

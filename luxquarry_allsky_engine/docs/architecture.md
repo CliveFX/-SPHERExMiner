@@ -61,14 +61,17 @@ The v2 economic target is:
 
 ```text
 $5k of cloud GPU compute should buy the accessible-sky survey for Gaia G ~= 8-14
-plus the full usable 2MASS point-source set.
+plus all 2MASS point-source catalog rows present in the processed local 2MASS
+PSC cache.
 ```
 
 This target is intentionally narrower than all Gaia, but broader than a toy
 campaign. It is the cost gate that should drive architecture decisions. The
 planner must report Gaia source count, 2MASS source count, deduplicated target
 count, frame count, estimated measurement count, estimated output bytes, and
-estimated cloud cost before a large run.
+estimated cloud cost before a large run. For `combined` survey economics, Gaia
+is magnitude-filtered and 2MASS is not; any per-frame source cap must happen
+before this estimate and must be called out as an incomplete all-2MASS plan.
 
 ## Measurement Schema
 

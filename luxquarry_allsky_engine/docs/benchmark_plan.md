@@ -72,8 +72,11 @@ Write `perf_summary.json` with:
 ```
 
 The v2 economic gate is documented in `survey_output_contract.md`: `$5k` should
-buy the accessible-sky survey for Gaia G ~= 8-14 plus the full usable 2MASS
-point-source set. Benchmarks that do not estimate this cost are incomplete.
+buy the accessible-sky survey for Gaia G ~= 8-14 plus all 2MASS point-source
+catalog rows present in the processed local 2MASS PSC cache. Benchmarks that do
+not estimate this cost are incomplete. Benchmarks built from capped
+projected-target tables are useful performance samples, but they are not valid
+all-2MASS cost estimates.
 
 Run the survey planner after building a manifest/projected-target table:
 

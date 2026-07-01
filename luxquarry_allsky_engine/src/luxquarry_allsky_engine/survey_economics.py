@@ -337,6 +337,8 @@ def estimate_survey_economics(config: SurveyEconomicsConfig) -> dict[str, Any]:
         "notes": [
             "Counts are derived from the supplied manifest/projected-target parquet files.",
             "Use a full accessible-sky projected target table before treating this as a cloud estimate.",
+            "For catalog_selection=combined, Gaia is magnitude-filtered and 2MASS is not; all 2MASS means all 2mass_psc rows present in the supplied projected-target parquet.",
+            "If the upstream projected-target table was built with a per-frame source cap, this is a capped sample rather than an all-2MASS estimate.",
             "2MASS and Gaia deduplication is not solved here; deduplicated_target_count is exact only if input target_id semantics are already deduplicated.",
         ],
     }
