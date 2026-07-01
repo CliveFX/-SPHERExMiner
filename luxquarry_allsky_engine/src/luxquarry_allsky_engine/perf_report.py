@@ -51,6 +51,22 @@ def summarize_task_queue_performance(config: TaskQueuePerfReportConfig) -> dict[
             measurement_rows=measurement_rows,
         )
     )
+    for stage_name, column_name, backend in [
+        ("shard_table_assembly", "shard_table_assembly_wall_sec", "cudf_measurement_table"),
+        ("shard_column_profile", "shard_column_profile_wall_sec", "cudf_column_projection"),
+        ("parquet_write", "parquet_write_wall_sec", "cudf_parquet_writer"),
+    ]:
+        row = _shard_substage_row(
+            run_id=str(local_summary.get("run_id") or run_dir.name),
+            stage=stage_name,
+            backend=backend,
+            shards=shard_rows,
+            value_column=column_name,
+            denominator_wall=worker_payload_wall,
+            measurement_rows=measurement_rows,
+        )
+        if row["summed_wall_sec"] > 0 or row["critical_path_wall_sec"] > 0:
+            profile_rows.append(row)
 
     spectra = local_summary.get("spectra_summary") or {}
     if spectra:
@@ -206,6 +222,35 @@ def _shard_write_row(*, run_id: str, shards: pd.DataFrame, denominator_wall: flo
     }
 
 
+def _shard_substage_row(
+    *,
+    run_id: str,
+    stage: str,
+    backend: str,
+    shards: pd.DataFrame,
+    value_column: str,
+    denominator_wall: float,
+    measurement_rows: int,
+) -> dict[str, Any]:
+    summed = _sum_column(shards, value_column)
+    critical = _max_group_sum(shards, "worker_id", value_column)
+    return {
+        "run_id": run_id,
+        "stage": stage,
+        "phase": "worker_payload",
+        "backend": backend,
+        "inclusive": False,
+        "summed_wall_sec": summed,
+        "critical_path_wall_sec": critical,
+        "critical_path_wall_pct": _pct(critical, denominator_wall),
+        "rows_in": measurement_rows,
+        "rows_out": measurement_rows,
+        "completed_frames": 0,
+        "throughput_rows_per_sec_critical": _rate(measurement_rows, critical),
+        "decision_hint": _decision_hint(stage, critical, denominator_wall),
+    }
+
+
 def _simple_stage_row(
     *,
     run_id: str,
@@ -240,7 +285,13 @@ def _decision_hint(stage: str, critical: float, denominator: float) -> str:
         return "Below 5% critical-path threshold; keep unless it scales poorly."
     if stage in {"read_fits", "stage_fits_object"}:
         return "Hot I/O path; test KvikIO/fsspec caching and overlap before rewriting science code."
-    if stage in {"write_measurement_shards", "assemble_measurement_table"}:
+    if stage in {
+        "write_measurement_shards",
+        "assemble_measurement_table",
+        "shard_table_assembly",
+        "shard_column_profile",
+        "parquet_write",
+    }:
         return "Hot durable-output path; consider larger shard batches, cuDF parquet tuning, or async writer isolation."
     if stage.startswith("psf"):
         return "Hot PSF path; keep kernels resident and remove CPU/device round trips before changing math."

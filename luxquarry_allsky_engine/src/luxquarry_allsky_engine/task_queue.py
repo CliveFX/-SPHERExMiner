@@ -309,6 +309,9 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                     "frame_group_ids": ",".join(str(v) for v in shard.get("frame_group_ids") or []),
                     "image_ids": ",".join(str(v) for v in shard.get("image_ids") or []),
                     "write_wall_sec": float(shard.get("write_wall_sec") or 0.0),
+                    "shard_table_assembly_wall_sec": float(shard.get("shard_table_assembly_wall_sec") or 0.0),
+                    "shard_column_profile_wall_sec": float(shard.get("shard_column_profile_wall_sec") or 0.0),
+                    "parquet_write_wall_sec": float(shard.get("parquet_write_wall_sec") or 0.0),
                     "exists": shard_path.exists(),
                     "task_id": task.get("task_id"),
                 }

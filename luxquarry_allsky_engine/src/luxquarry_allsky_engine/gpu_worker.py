@@ -828,10 +828,16 @@ class PersistentGpuFrameWorker:
             shard_group=shard_group,
         )
         tw = time.perf_counter()
+        t_assemble = time.perf_counter()
         out = PersistentGpuFrameWorker._assemble_shard_table(measurements, device=device)
+        shard_table_assembly_wall_sec = time.perf_counter() - t_assemble
+        t_profile = time.perf_counter()
         out = PersistentGpuFrameWorker._apply_measurement_column_profile(out, column_profile)
+        shard_column_profile_wall_sec = time.perf_counter() - t_profile
         compression_arg = None if parquet_compression == "none" else parquet_compression
+        t_parquet = time.perf_counter()
         out.to_parquet(shard_path, index=False, compression=compression_arg)
+        parquet_write_wall_sec = time.perf_counter() - t_parquet
         write_wall_sec = time.perf_counter() - tw
         byte_count = shard_path.stat().st_size if shard_path.exists() else 0
         return {
@@ -846,6 +852,9 @@ class PersistentGpuFrameWorker:
             "parquet_compression": parquet_compression,
             "bytes": int(byte_count),
             "write_wall_sec": write_wall_sec,
+            "shard_table_assembly_wall_sec": shard_table_assembly_wall_sec,
+            "shard_column_profile_wall_sec": shard_column_profile_wall_sec,
+            "parquet_write_wall_sec": parquet_write_wall_sec,
         }
 
     @staticmethod

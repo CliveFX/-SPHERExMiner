@@ -342,6 +342,19 @@ summed work across all GPUs. Treat any non-inclusive stage above 5% of
 `worker_payload_max_wall_sec` as requiring an explicit keep/accelerate/rewrite
 decision.
 
+Shard output reports both the inclusive `write_measurement_shards` stage and
+its sub-stages when produced by a recent worker:
+
+```text
+shard_table_assembly
+shard_column_profile
+parquet_write
+```
+
+Use these sub-stages to distinguish cuDF table construction from actual parquet
+I/O. On the dense 18-frame/3-GPU verification run, shard table assembly was the
+larger cost.
+
 For larger queues, prefer resident source inputs:
 
 ```bash

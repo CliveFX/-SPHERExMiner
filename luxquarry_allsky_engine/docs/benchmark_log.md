@@ -3901,3 +3901,55 @@ Decision:
 - If revisiting this idea, fold winner chi-square into a later GPU-resident
   reducer/output path where it does not add another launch and synchronization
   point.
+
+## 2026-06-30: Shard Write Sub-Stage Timing
+
+The local task-queue profiler now breaks shard output into:
+
+```text
+write_measurement_shards        inclusive shard flush
+shard_table_assembly            cuDF table construction / device-column concat
+shard_column_profile            compact/full column projection
+parquet_write                   cudf.to_parquet wall time
+```
+
+Dense 18-frame, 3-GPU, compact, no-compression verification:
+
+```text
+completed_frames: 18
+measurement_rows: 320,768
+worker_payload_max_wall_sec: 2.266
+measurements_per_sec_worker_payload: 141,549
+worker_parallel_efficiency: 0.957
+```
+
+Top critical-path stages:
+
+```text
+write_measurement_shards: 0.469 sec, 20.7%
+psf_device_submit_sync:   0.410 sec, 18.1%
+shard_table_assembly:     0.339 sec, 15.0%
+read_fits:                0.138 sec,  6.1%
+upload_frame_to_gpu:      0.136 sec,  6.0%
+parquet_write:            0.130 sec,  5.7%
+```
+
+Shard writer breakdown by worker:
+
+```text
+worker-cuda-0: rows 107,259, write 0.398 sec, table 0.271 sec, parquet 0.126 sec
+worker-cuda-1: rows 107,147, write 0.404 sec, table 0.275 sec, parquet 0.129 sec
+worker-cuda-2: rows 106,362, write 0.469 sec, table 0.339 sec, parquet 0.130 sec
+```
+
+Interpretation:
+
+- The bigger durable-output cost is not parquet write alone; it is cuDF shard
+  table assembly, especially concatenating per-frame device columns into the
+  shard table.
+- `shard_column_profile` is negligible, so compact/full projection is not the
+  problem.
+- The next output-path optimization should focus on avoiding per-frame column
+  concatenation at shard flush. Candidate directions: preallocate shard columns,
+  append measurements into device-side buffers as frames complete, or write
+  larger but less frequently assembled frame-group tables.
