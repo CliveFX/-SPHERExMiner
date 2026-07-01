@@ -609,22 +609,32 @@ class PersistentGpuFrameWorker:
         columns: dict[str, object],
         status: object,
         device: str,
+        column_profile: str = "full",
     ):
         import cudf
         import cupy as cp
 
         cp.cuda.Device(_device_index(device)).use()
+        compact = column_profile == "compact"
+        if compact:
+            metadata = metadata[[column for column in metadata.columns if column in COMPACT_MEASUREMENT_COLUMNS]]
+            columns = {name: values for name, values in columns.items() if name in COMPACT_MEASUREMENT_COLUMNS}
         gdf = cudf.from_pandas(metadata)
         for name, values in columns.items():
             gdf[name] = values
-        gdf["aperture_flux_unit"] = "uJy"
-        gdf["aperture_status_code"] = status
-        gdf["aperture_status"] = "ok"
-        gdf.loc[gdf["aperture_status_code"] != 0, "aperture_status"] = "bad_background"
+        if not compact or "aperture_flux_unit" in COMPACT_MEASUREMENT_COLUMNS:
+            gdf["aperture_flux_unit"] = "uJy"
+        if not compact or "aperture_status_code" in COMPACT_MEASUREMENT_COLUMNS:
+            gdf["aperture_status_code"] = status
+        if not compact:
+            gdf["aperture_status"] = "ok"
+            gdf.loc[gdf["aperture_status_code"] != 0, "aperture_status"] = "bad_background"
         if "psf_status_code" in gdf.columns:
-            gdf["psf_flux_unit"] = "uJy"
-            gdf["psf_status"] = "ok"
-            gdf.loc[gdf["psf_status_code"] != 0, "psf_status"] = "bad_fit"
+            if not compact or "psf_flux_unit" in COMPACT_MEASUREMENT_COLUMNS:
+                gdf["psf_flux_unit"] = "uJy"
+            if not compact:
+                gdf["psf_status"] = "ok"
+                gdf.loc[gdf["psf_status_code"] != 0, "psf_status"] = "bad_fit"
         return gdf
 
     def _get_calibration(self, *, release: str, detector: int) -> ResidentCalibration:
@@ -829,7 +839,11 @@ class PersistentGpuFrameWorker:
         )
         tw = time.perf_counter()
         t_assemble = time.perf_counter()
-        out = PersistentGpuFrameWorker._assemble_shard_table(measurements, device=device)
+        out = PersistentGpuFrameWorker._assemble_shard_table(
+            measurements,
+            device=device,
+            column_profile=column_profile,
+        )
         shard_table_assembly_wall_sec = time.perf_counter() - t_assemble
         t_profile = time.perf_counter()
         out = PersistentGpuFrameWorker._apply_measurement_column_profile(out, column_profile)
@@ -858,7 +872,7 @@ class PersistentGpuFrameWorker:
         }
 
     @staticmethod
-    def _assemble_shard_table(measurements: list[Any], *, device: str):
+    def _assemble_shard_table(measurements: list[Any], *, device: str, column_profile: str = "full"):
         import cudf
         import cupy as cp
 
@@ -880,6 +894,7 @@ class PersistentGpuFrameWorker:
             columns=columns,
             status=status,
             device=device,
+            column_profile=column_profile,
         )
 
     @staticmethod

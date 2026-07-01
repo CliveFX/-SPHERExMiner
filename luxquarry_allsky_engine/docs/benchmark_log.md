@@ -3953,3 +3953,91 @@ Interpretation:
   concatenation at shard flush. Candidate directions: preallocate shard columns,
   append measurements into device-side buffers as frames complete, or write
   larger but less frequently assembled frame-group tables.
+
+## 2026-06-30: Compact Profile-Aware Shard Assembly
+
+Compact output previously assembled the full measurement table first, including
+columns that compact mode later dropped, then projected down to
+`COMPACT_MEASUREMENT_COLUMNS`. The worker now passes `measurement_column_profile`
+into shard table assembly so compact mode avoids building unused columns before
+cuDF construction.
+
+The compact profile still preserves per-measurement science provenance:
+
+```text
+frame_group_id
+image_id
+catalog/source/target identifiers
+sky and pixel coordinates
+fits_path
+detector/release
+aperture settings
+wavelength calibration source/file/collection
+sapm_file
+cwave_um/cband_um
+aperture and PSF flux/status columns
+```
+
+Compact mode intentionally omits local staging-only paths and human-readable
+status strings. The numeric status codes and source FITS/calibration provenance
+remain.
+
+One-frame smoke comparison:
+
+```text
+before:
+  worker_payload_max_wall_sec: 0.763
+  measurements_per_sec_worker_payload: 23,440
+  shard_table_assembly_wall_sec: 0.152
+  parquet_write_wall_sec: 0.043
+
+after:
+  worker_payload_max_wall_sec: 0.742
+  measurements_per_sec_worker_payload: 24,100
+  shard_table_assembly_wall_sec: 0.134
+  parquet_write_wall_sec: 0.039
+```
+
+Dense 18-frame, 3-GPU comparison:
+
+```text
+before:
+  worker_payload_max_wall_sec: 2.266
+  measurements_per_sec_worker_payload: 141,549
+  worker_parallel_efficiency: 0.957
+  write_measurement_shards: 0.469 sec critical path
+  shard_table_assembly: 0.339 sec critical path
+  parquet_write: 0.130 sec critical path
+
+after:
+  worker_payload_max_wall_sec: 2.176
+  measurements_per_sec_worker_payload: 147,391
+  worker_parallel_efficiency: 0.987
+  write_measurement_shards: 0.432 sec critical path
+  shard_table_assembly: 0.310 sec critical path
+  parquet_write: 0.122 sec critical path
+```
+
+Correctness check:
+
+```text
+same columns: true
+same rows: true
+same targets: true
+checked science/provenance columns identical:
+  aperture_flux_uJy
+  cwave_um
+  psf_flux_uJy
+  psf_grid_best_score
+  psf_status_code
+  aperture_status_code
+```
+
+Interpretation:
+
+- This is a real but small win: about 4.1% better payload throughput on the
+  dense 3-GPU benchmark.
+- It does not solve the output path; shard table assembly remains about 14% of
+  critical-path payload wall time.
+- The next output optimization should avoid concatenating per-frame device
+  columns at shard flush, rather than merely trimming columns earlier.
