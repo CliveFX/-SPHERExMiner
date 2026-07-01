@@ -180,3 +180,41 @@ Would the estimated compute bill fit under $5k?
 
 If the answer is no, the next optimization should attack the largest contributor
 to cost for this target, not a generic micro-bottleneck.
+
+## Estimator Command
+
+Use the estimator before a large run:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky estimate-survey-economics \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out runs/survey_economics_gc_nearest20_combined/summary.json \
+  --catalog-selection combined \
+  --output-mode survey \
+  --raw-retention-fraction 0.01 \
+  --measurements-per-gpu-sec 73687 \
+  --gpu-hourly-cost 6.88 \
+  --gpu-count 8
+```
+
+The first dense 20-frame sample produced:
+
+```text
+frame_count: 20
+target_count: 32,648
+gaia_target_count: 15,790
+twomass_target_count: 16,858
+in_frame_target_count: 29,918
+measurement_count: 360,394
+retained_raw_measurement_count: 3,604
+estimated_output_gib: 0.115
+estimated_compute_cost_usd: 0.0093
+estimated_cost_per_billion_measurements: 25.94
+estimated_cost_per_million_spectra: 0.31
+```
+
+That sample is not a cloud estimate; it is a local frame subset. The full
+estimate must use a full accessible-sky projected target table before the `$5k`
+gate means anything.
