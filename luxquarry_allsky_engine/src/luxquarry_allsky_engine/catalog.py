@@ -84,16 +84,8 @@ def build_frame_targets(
     rows: list[pd.DataFrame] = []
     timings: list[dict[str, Any]] = []
     for frame in manifest.to_dict(orient="records"):
-        t0 = time.perf_counter()
-        frame_rows = query_targets_for_frame(frame, config)
-        timings.append(
-            {
-                "frame_group_id": frame.get("frame_group_id"),
-                "image_id": frame.get("image_id"),
-                "target_count": int(len(frame_rows)),
-                "wall_time_sec": time.perf_counter() - t0,
-            }
-        )
+        frame_rows, timing = _query_targets_for_frame_profiled(frame, config)
+        timings.append(timing)
         if len(frame_rows):
             rows.append(frame_rows)
     targets = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=_output_columns())
@@ -101,6 +93,7 @@ def build_frame_targets(
     t0 = time.perf_counter()
     targets.to_parquet(output_path, index=False)
     write_wall = time.perf_counter() - t0
+    timing_totals = _frame_target_timing_totals(timings)
     summary = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "manifest_path": str(manifest_path),
@@ -120,6 +113,7 @@ def build_frame_targets(
         "unique_target_count": int(targets["target_id"].nunique()) if len(targets) else 0,
         "total_wall_sec": time.perf_counter() - started,
         "write_wall_sec": write_wall,
+        "timing_totals": timing_totals,
         "frame_timings": timings,
     }
     output_path.with_suffix(".summary.json").write_text(
@@ -131,21 +125,74 @@ def build_frame_targets(
 
 
 def query_targets_for_frame(frame: dict[str, Any], config: CatalogConfig) -> pd.DataFrame:
+    rows, _timing = _query_targets_for_frame_profiled(frame, config)
+    return rows
+
+
+def _query_targets_for_frame_profiled(
+    frame: dict[str, Any],
+    config: CatalogConfig,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    started = time.perf_counter()
     bounds = _frame_bounds(frame, pad_deg=config.bbox_pad_deg)
     pieces: list[pd.DataFrame] = []
+    timing: dict[str, Any] = {
+        "frame_group_id": frame.get("frame_group_id"),
+        "image_id": frame.get("image_id"),
+        "bounds_ra_min_deg": bounds[0],
+        "bounds_ra_max_deg": bounds[1],
+        "bounds_dec_min_deg": bounds[2],
+        "bounds_dec_max_deg": bounds[3],
+        "gaia_limit": _json_int_or_none(_resolve_catalog_limit(config, "gaia")),
+        "twomass_limit": _json_int_or_none(_resolve_catalog_limit(config, "2mass")),
+        "gaia_query_wall_sec": 0.0,
+        "gaia_normalize_wall_sec": 0.0,
+        "gaia_raw_rows": 0,
+        "gaia_output_rows": 0,
+        "twomass_query_wall_sec": 0.0,
+        "twomass_normalize_wall_sec": 0.0,
+        "twomass_raw_rows": 0,
+        "twomass_output_rows": 0,
+        "concat_wall_sec": 0.0,
+        "dedup_wall_sec": 0.0,
+        "target_count": 0,
+    }
     if config.catalog in {"gaia", "all"}:
+        t0 = time.perf_counter()
         gaia = _query_gaia(bounds=bounds, config=config, max_sources=_resolve_catalog_limit(config, "gaia"))
+        timing["gaia_query_wall_sec"] = time.perf_counter() - t0
+        timing["gaia_raw_rows"] = int(len(gaia))
         if len(gaia):
-            pieces.append(_normalize_gaia(gaia, frame))
+            t0 = time.perf_counter()
+            normalized = _normalize_gaia(gaia, frame)
+            timing["gaia_normalize_wall_sec"] = time.perf_counter() - t0
+            timing["gaia_output_rows"] = int(len(normalized))
+            pieces.append(normalized)
     if config.catalog in {"2mass", "all"}:
+        t0 = time.perf_counter()
         twomass = _query_2mass(bounds=bounds, config=config, max_sources=_resolve_catalog_limit(config, "2mass"))
+        timing["twomass_query_wall_sec"] = time.perf_counter() - t0
+        timing["twomass_raw_rows"] = int(len(twomass))
         if len(twomass):
-            pieces.append(_normalize_2mass(twomass, frame))
+            t0 = time.perf_counter()
+            normalized = _normalize_2mass(twomass, frame)
+            timing["twomass_normalize_wall_sec"] = time.perf_counter() - t0
+            timing["twomass_output_rows"] = int(len(normalized))
+            pieces.append(normalized)
     if not pieces:
-        return pd.DataFrame(columns=_output_columns())
+        out = pd.DataFrame(columns=_output_columns())
+        timing["wall_time_sec"] = time.perf_counter() - started
+        return out, timing
+    t0 = time.perf_counter()
     out = pd.concat(pieces, ignore_index=True)
+    timing["concat_wall_sec"] = time.perf_counter() - t0
+    t0 = time.perf_counter()
     out = out.drop_duplicates(subset=["frame_group_id", "target_id", "catalog"]).reset_index(drop=True)
-    return out[_output_columns()]
+    timing["dedup_wall_sec"] = time.perf_counter() - t0
+    out = out[_output_columns()]
+    timing["target_count"] = int(len(out))
+    timing["wall_time_sec"] = time.perf_counter() - started
+    return out, timing
 
 
 def _query_gaia(*, bounds: tuple[float, float, float, float], config: CatalogConfig, max_sources: int | None) -> pd.DataFrame:
@@ -337,6 +384,31 @@ def _json_float_or_none(value: float | None) -> float | None:
     return None if value is None else float(value)
 
 
+def _frame_target_timing_totals(timings: list[dict[str, Any]]) -> dict[str, Any]:
+    numeric_keys = [
+        "wall_time_sec",
+        "gaia_query_wall_sec",
+        "gaia_normalize_wall_sec",
+        "gaia_raw_rows",
+        "gaia_output_rows",
+        "twomass_query_wall_sec",
+        "twomass_normalize_wall_sec",
+        "twomass_raw_rows",
+        "twomass_output_rows",
+        "concat_wall_sec",
+        "dedup_wall_sec",
+        "target_count",
+    ]
+    totals: dict[str, Any] = {"frame_count": len(timings)}
+    for key in numeric_keys:
+        values = [row.get(key) for row in timings]
+        if key.endswith("_rows") or key == "target_count":
+            totals[key] = int(sum(int(value or 0) for value in values))
+        else:
+            totals[key] = float(sum(float(value or 0.0) for value in values))
+    return totals
+
+
 def _execute_df(sql: str, params: list[Any]) -> pd.DataFrame:
     con = duckdb.connect(":memory:")
     try:
@@ -391,27 +463,79 @@ def _output_columns() -> list[str]:
 
 def _write_profile(path: Path, summary: dict[str, Any]) -> None:
     total = max(float(summary.get("total_wall_sec") or 0.0), 1e-12)
-    query_wall = sum(float(row["wall_time_sec"]) for row in summary.get("frame_timings", []))
+    timing_totals = summary.get("timing_totals") or _frame_target_timing_totals(summary.get("frame_timings", []))
     write_wall = float(summary.get("write_wall_sec") or 0.0)
+    rows = [
+        _profile_row(
+            stage="gaia_duckdb_query",
+            wall_time_sec=float(timing_totals.get("gaia_query_wall_sec") or 0.0),
+            total_wall_sec=total,
+            backend="duckdb_parquet_cpu",
+            rows_out=int(timing_totals.get("gaia_raw_rows") or 0),
+        ),
+        _profile_row(
+            stage="twomass_duckdb_query",
+            wall_time_sec=float(timing_totals.get("twomass_query_wall_sec") or 0.0),
+            total_wall_sec=total,
+            backend="duckdb_parquet_cpu",
+            rows_out=int(timing_totals.get("twomass_raw_rows") or 0),
+        ),
+        _profile_row(
+            stage="gaia_normalize",
+            wall_time_sec=float(timing_totals.get("gaia_normalize_wall_sec") or 0.0),
+            total_wall_sec=total,
+            backend="pandas_cpu",
+            rows_out=int(timing_totals.get("gaia_output_rows") or 0),
+        ),
+        _profile_row(
+            stage="twomass_normalize",
+            wall_time_sec=float(timing_totals.get("twomass_normalize_wall_sec") or 0.0),
+            total_wall_sec=total,
+            backend="pandas_cpu",
+            rows_out=int(timing_totals.get("twomass_output_rows") or 0),
+        ),
+        _profile_row(
+            stage="concat_catalog_rows",
+            wall_time_sec=float(timing_totals.get("concat_wall_sec") or 0.0),
+            total_wall_sec=total,
+            backend="pandas_cpu",
+            rows_out=int(timing_totals.get("target_count") or 0),
+        ),
+        _profile_row(
+            stage="dedup_catalog_rows",
+            wall_time_sec=float(timing_totals.get("dedup_wall_sec") or 0.0),
+            total_wall_sec=total,
+            backend="pandas_cpu",
+            rows_out=int(timing_totals.get("target_count") or 0),
+        ),
+        _profile_row(
+            stage="write_frame_targets",
+            wall_time_sec=write_wall,
+            total_wall_sec=total,
+            backend="pandas_pyarrow",
+            rows_out=int(summary.get("target_row_count") or 0),
+        ),
+    ]
     profile = {
         "created_utc": summary.get("created_utc"),
-        "rows": [
-            {
-                "stage": "catalog_query",
-                "function_or_script": "luxquarry_allsky_engine.catalog.build_frame_targets",
-                "wall_time_sec": query_wall,
-                "wall_time_pct": 100.0 * query_wall / total,
-                "backend": "duckdb_parquet_cpu",
-                "rows_out": summary.get("target_row_count"),
-            },
-            {
-                "stage": "write_frame_targets",
-                "function_or_script": "luxquarry_allsky_engine.catalog.build_frame_targets",
-                "wall_time_sec": write_wall,
-                "wall_time_pct": 100.0 * write_wall / total,
-                "backend": "pandas_pyarrow",
-                "rows_out": summary.get("target_row_count"),
-            },
-        ],
+        "rows": rows,
     }
     path.write_text(json.dumps(profile, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _profile_row(
+    *,
+    stage: str,
+    wall_time_sec: float,
+    total_wall_sec: float,
+    backend: str,
+    rows_out: int,
+) -> dict[str, Any]:
+    return {
+        "stage": stage,
+        "function_or_script": "luxquarry_allsky_engine.catalog.build_frame_targets",
+        "wall_time_sec": wall_time_sec,
+        "wall_time_pct": 100.0 * wall_time_sec / max(total_wall_sec, 1e-12),
+        "backend": backend,
+        "rows_out": rows_out,
+    }

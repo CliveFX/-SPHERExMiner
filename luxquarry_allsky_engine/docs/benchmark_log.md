@@ -4700,3 +4700,30 @@ Interpretation:
   density/measurement-rate datapoint, not a full spectral-depth run.
 - Full-depth cost must be estimated from representative proven all-2MASS cells
   with real frame overlap/depth, not by scaling capped target tables.
+
+Profiled rerun after adding per-catalog frame-target instrumentation:
+
+```text
+output: runs/frame_targets_gc_oneframe_all2mass_true_profiled/frame_targets.parquet
+target rows: 923,860
+total wall: 3.65 sec
+frame target-build wall: 2.62 sec
+write parquet wall: 0.75 sec
+```
+
+Stage breakdown:
+
+```text
+2MASS DuckDB query:    1.388 sec, 911,398 rows
+Gaia DuckDB query:     0.651 sec,  12,462 rows
+dedup catalog rows:    0.402 sec, 923,860 rows
+2MASS normalize:       0.082 sec, 911,398 rows
+concat catalog rows:   0.040 sec, 923,860 rows
+Gaia normalize:        0.011 sec,  12,462 rows
+write frame targets:   0.753 sec, 923,860 rows
+```
+
+This rerun was likely warm-cache, so do not compare absolute wall time directly
+to the first pass. The useful lesson is the stage ranking: catalog read and
+parquet write dominate this phase, while pandas normalization is not yet the
+main problem.
