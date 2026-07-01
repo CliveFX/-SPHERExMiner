@@ -4727,3 +4727,70 @@ This rerun was likely warm-cache, so do not compare absolute wall time directly
 to the first pass. The useful lesson is the stage ranking: catalog read and
 parquet write dominate this phase, while pandas normalization is not yet the
 main problem.
+
+## 2026-06-30 / Proven three-frame all-2MASS overlap sample
+
+Purpose:
+
+Measure whether dense all-2MASS targets repeat across adjacent SPHEREx frames.
+This is the first small sample that starts to answer spectral depth instead of
+only one-frame target density.
+
+Input:
+
+```text
+manifest: runs/manifest_galactic_core_nearest20/frame_manifest.parquet
+frames: first 3
+catalog selection: Gaia G 8-14 uncapped + all local 2MASS PSC
+frame targets: runs/frame_targets_gc_3frame_all2mass_true/frame_targets.parquet
+projected targets: runs/projected_targets_gc_3frame_all2mass_true/frame_targets_projected.parquet
+economics: runs/survey_economics_gc_3frame_all2mass_true/summary.json
+depth summary: runs/survey_economics_gc_3frame_all2mass_true/depth_summary.json
+```
+
+Target build:
+
+```text
+frame-target rows: 2,773,375
+unique queried targets: 951,886
+2MASS queried rows: 2,736,229
+Gaia queried rows: 37,146
+target-build total wall: 10.29 sec
+2MASS DuckDB query total: 3.66 sec
+Gaia DuckDB query total: 1.93 sec
+dedup total: 1.17 sec
+parquet write: 2.26 sec
+```
+
+Projection/economics:
+
+```text
+projected rows: 2,773,375
+in-frame measurement rows: 2,519,713
+unique in-frame spectra: 876,529
+mean measurements per spectrum: 2.875
+median measurements per spectrum: 3
+max depth in sample: 3
+estimated GPU seconds at 73,687 measurements/GPU/sec: 34.19
+estimated compute cost: $0.065
+estimated survey-mode output: 3.35 GiB
+```
+
+Depth histogram:
+
+```text
+depth 1:  37,976 targets
+depth 2:  33,922 targets
+depth 3: 804,631 targets
+```
+
+Interpretation:
+
+- Adjacent frames in this dense sample are highly overlapped. Median depth is
+  3/3 frames.
+- A full-depth estimate must use actual SPHEREx frame coverage, not independent
+  frame scaling.
+- The catalog side remains manageable for this sample, but output and
+  measurement count scale directly with overlap depth.
+- Next cost samples should use representative cells with many frames, then
+  report both measurement count and per-target depth distribution.
