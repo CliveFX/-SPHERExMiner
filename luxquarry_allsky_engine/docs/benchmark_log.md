@@ -4634,3 +4634,69 @@ Decision:
   possible.
 - Keep table/metadata assembly visible because it can become a real bottleneck
   when async writer wait grows or output pressure increases.
+
+## 2026-06-30 / Proven one-frame all-2MASS density sample
+
+Purpose:
+
+Replace the misleading capped cost-smoke intuition with one real uncapped
+2MASS density datapoint. This is not a full-depth spectra estimate; it is one
+SPHEREx frame footprint near the Galactic core with Gaia G 8-14 uncapped and
+2MASS uncapped/no magnitude filter.
+
+Commands:
+
+```text
+build-frame-targets:
+  manifest: runs/manifest_galactic_core_nearest20/frame_manifest.parquet
+  output: runs/frame_targets_gc_oneframe_all2mass_true/frame_targets.parquet
+  catalog: all
+  gaia_g_min/max: 8/14
+  gaia_max_sources_per_frame: 0
+  all_2mass: true
+  limit_frames: 1
+
+project-frame-targets:
+  output: runs/projected_targets_gc_oneframe_all2mass_true/frame_targets_projected.parquet
+
+estimate-survey-economics:
+  require_all_2mass_input: true
+  measurements_per_gpu_sec: 73,687
+  gpu_hourly_cost: 6.88
+  gpu_count: 8
+```
+
+Observed target density:
+
+```text
+queried target rows: 923,860
+2MASS rows:          911,398
+Gaia G 8-14 rows:     12,462
+in-frame rows:       838,546
+projected parquet:      59 MB
+```
+
+Strict economics result:
+
+```text
+all_2mass_input_status: proven
+source_manifest_frame_count: 20
+active frame_count: 1
+measurement_count: 838,546
+spectra_count: 838,546
+mean_measurements_per_spectrum: 1.0
+estimated_gpu_seconds: 11.38 at 73,687 measurements/GPU/sec
+estimated_compute_cost_usd: 0.0217
+estimated_output_gib: 3.20
+```
+
+Interpretation:
+
+- The old capped 20-frame smoke estimate must not be used as a full survey cost
+  claim.
+- A single dense frame already has roughly 0.84M in-frame measurements for
+  Gaia G 8-14 plus all local 2MASS PSC rows.
+- The one-frame result has `mean_measurements_per_spectrum = 1.0`, so it is a
+  density/measurement-rate datapoint, not a full spectral-depth run.
+- Full-depth cost must be estimated from representative proven all-2MASS cells
+  with real frame overlap/depth, not by scaling capped target tables.

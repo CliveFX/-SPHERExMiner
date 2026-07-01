@@ -284,14 +284,22 @@ def estimate_survey_economics(config: SurveyEconomicsConfig) -> dict[str, Any]:
     in_frame = selected
     if "in_frame" in in_frame.columns:
         in_frame = in_frame[in_frame["in_frame"].astype(bool)]
+    active_frame_ids = _active_frame_ids(in_frame if len(in_frame) else selected)
+    planned_manifest = _filter_manifest_to_frames(manifest, active_frame_ids) if active_frame_ids else manifest.iloc[0:0]
 
     catalog_counts = _catalog_target_counts(selected)
     in_frame_catalog_counts = _catalog_target_counts(in_frame)
     target_count = _unique_targets(selected)
     in_frame_target_count = _unique_targets(in_frame)
     measurement_count = int(len(in_frame))
-    frame_count = int(manifest["frame_group_id"].nunique()) if "frame_group_id" in manifest.columns else int(len(manifest))
+    source_frame_count = int(manifest["frame_group_id"].nunique()) if "frame_group_id" in manifest.columns else int(len(manifest))
+    frame_count = (
+        int(planned_manifest["frame_group_id"].nunique())
+        if "frame_group_id" in planned_manifest.columns
+        else int(len(planned_manifest))
+    )
     spectra_count = int(in_frame_target_count)
+    mean_measurements_per_spectrum = measurement_count / spectra_count if spectra_count else 0.0
 
     bytes_per_measurement = _resolve_bytes_per_measurement(config)
     raw_rows_retained = measurement_count if config.output_mode == "audit" else int(
@@ -334,6 +342,7 @@ def estimate_survey_economics(config: SurveyEconomicsConfig) -> dict[str, Any]:
         "all_2mass_input_status": input_audit["all_2mass_input_status"],
         "all_2mass_input_reason": input_audit["all_2mass_input_reason"],
         "all_2mass_input_metadata": input_audit["all_2mass_input_metadata"],
+        "source_manifest_frame_count": source_frame_count,
         "frame_count": frame_count,
         "target_count": int(target_count),
         "in_frame_target_count": int(in_frame_target_count),
@@ -345,6 +354,7 @@ def estimate_survey_economics(config: SurveyEconomicsConfig) -> dict[str, Any]:
         "measurement_count": measurement_count,
         "estimated_measurement_count": measurement_count,
         "spectra_count": spectra_count,
+        "mean_measurements_per_spectrum": mean_measurements_per_spectrum,
         "retained_raw_measurement_count": int(raw_rows_retained),
         "raw_retention_fraction": float(config.raw_retention_fraction if config.output_mode == "survey" else 1.0),
         "bytes_per_measurement": float(bytes_per_measurement),
