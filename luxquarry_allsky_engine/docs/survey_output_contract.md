@@ -183,7 +183,34 @@ to cost for this target, not a generic micro-bottleneck.
 
 ## Estimator Command
 
-Use the estimator before a large run:
+Use the planner before a large run when you want materialized plan products:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky plan-survey-economics \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/survey_plan_gc_nearest20_combined \
+  --catalog-selection combined \
+  --output-mode survey \
+  --raw-retention-fraction 0.01 \
+  --measurements-per-gpu-sec 73687 \
+  --gpu-hourly-cost 6.88 \
+  --gpu-count 8
+```
+
+It writes:
+
+```text
+survey_plan_frames.parquet
+survey_plan_targets.parquet
+survey_plan_unique_targets.parquet
+survey_plan_summary.json
+survey_economics_summary.json
+```
+
+Use the estimator directly when the plan products already exist or are not
+needed:
 
 ```bash
 cd luxquarry_allsky_engine
@@ -203,6 +230,7 @@ The first dense 20-frame sample produced:
 
 ```text
 frame_count: 20
+planned_projected_target_rows: 400,000
 target_count: 32,648
 gaia_target_count: 15,790
 twomass_target_count: 16,858

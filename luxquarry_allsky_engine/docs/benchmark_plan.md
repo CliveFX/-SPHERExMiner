@@ -75,7 +75,24 @@ The v2 economic gate is documented in `survey_output_contract.md`: `$5k` should
 buy the accessible-sky survey for Gaia G ~= 8-14 plus the full usable 2MASS
 point-source set. Benchmarks that do not estimate this cost are incomplete.
 
-Run the economics estimator after building a manifest/projected-target table:
+Run the survey planner after building a manifest/projected-target table:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky plan-survey-economics \
+  --manifest runs/manifest_galactic_core_nearest20/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_galactic_core_nearest20_allcat_g11_16_n20000/frame_targets_projected.parquet \
+  --out-dir runs/survey_plan_gc_nearest20_combined \
+  --catalog-selection combined \
+  --output-mode survey \
+  --raw-retention-fraction 0.01 \
+  --measurements-per-gpu-sec 73687 \
+  --gpu-hourly-cost 6.88 \
+  --gpu-count 8
+```
+
+Run the economics estimator directly when materialized plan products are not
+needed:
 
 ```bash
 cd luxquarry_allsky_engine

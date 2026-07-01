@@ -28,6 +28,107 @@ class SurveyEconomicsConfig:
     budget_usd: float = 5000.0
 
 
+@dataclass(frozen=True)
+class SurveyPlanConfig:
+    manifest_path: Path
+    projected_targets_path: Path
+    output_dir: Path
+    catalog_selection: str = "combined"
+    gaia_mag_min: float = 8.0
+    gaia_mag_max: float = 14.0
+    twomass_all_usable: bool = True
+    output_mode: str = "survey"
+    raw_retention_fraction: float = 0.01
+    bytes_per_measurement: float | None = None
+    bytes_per_spectrum: float = 4096.0
+    measurements_per_gpu_sec: float | None = None
+    gpu_hourly_cost: float = 6.88
+    gpu_count: int = 8
+    budget_usd: float = 5000.0
+
+
+def plan_survey_economics(config: SurveyPlanConfig) -> dict[str, Any]:
+    config.output_dir.mkdir(parents=True, exist_ok=True)
+    manifest = pd.read_parquet(config.manifest_path)
+    targets = pd.read_parquet(config.projected_targets_path)
+    economics_config = SurveyEconomicsConfig(
+        manifest_path=config.manifest_path,
+        projected_targets_path=config.projected_targets_path,
+        catalog_selection=config.catalog_selection,
+        gaia_mag_min=config.gaia_mag_min,
+        gaia_mag_max=config.gaia_mag_max,
+        twomass_all_usable=config.twomass_all_usable,
+        output_mode=config.output_mode,
+        raw_retention_fraction=config.raw_retention_fraction,
+        bytes_per_measurement=config.bytes_per_measurement,
+        bytes_per_spectrum=config.bytes_per_spectrum,
+        measurements_per_gpu_sec=config.measurements_per_gpu_sec,
+        gpu_hourly_cost=config.gpu_hourly_cost,
+        gpu_count=config.gpu_count,
+        budget_usd=config.budget_usd,
+    )
+    selected = _select_targets(targets, economics_config)
+    selected_in_frame = _in_frame_targets(selected)
+    active_frame_ids = _active_frame_ids(selected_in_frame)
+    planned_manifest = _filter_manifest_to_frames(manifest, active_frame_ids)
+    unique_targets = _unique_target_rows(selected)
+
+    frames_path = config.output_dir / "survey_plan_frames.parquet"
+    targets_path = config.output_dir / "survey_plan_targets.parquet"
+    unique_targets_path = config.output_dir / "survey_plan_unique_targets.parquet"
+    economics_path = config.output_dir / "survey_economics_summary.json"
+    summary_path = config.output_dir / "survey_plan_summary.json"
+
+    planned_manifest.to_parquet(frames_path, index=False)
+    selected.to_parquet(targets_path, index=False)
+    unique_targets.to_parquet(unique_targets_path, index=False)
+
+    economics = estimate_survey_economics(
+        SurveyEconomicsConfig(
+            manifest_path=frames_path,
+            projected_targets_path=targets_path,
+            output_path=economics_path,
+            catalog_selection=config.catalog_selection,
+            gaia_mag_min=config.gaia_mag_min,
+            gaia_mag_max=config.gaia_mag_max,
+            twomass_all_usable=config.twomass_all_usable,
+            output_mode=config.output_mode,
+            raw_retention_fraction=config.raw_retention_fraction,
+            bytes_per_measurement=config.bytes_per_measurement,
+            bytes_per_spectrum=config.bytes_per_spectrum,
+            measurements_per_gpu_sec=config.measurements_per_gpu_sec,
+            gpu_hourly_cost=config.gpu_hourly_cost,
+            gpu_count=config.gpu_count,
+            budget_usd=config.budget_usd,
+        )
+    )
+    summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "backend": "luxquarry_survey_economics_planner",
+        "source_manifest_path": str(config.manifest_path),
+        "source_projected_targets_path": str(config.projected_targets_path),
+        "output_dir": str(config.output_dir),
+        "catalog_selection": config.catalog_selection,
+        "output_mode": config.output_mode,
+        "source_frame_count": int(len(manifest)),
+        "planned_frame_count": int(len(planned_manifest)),
+        "source_projected_target_rows": int(len(targets)),
+        "planned_projected_target_rows": int(len(selected)),
+        "planned_in_frame_target_rows": int(len(selected_in_frame)),
+        "planned_unique_targets": int(len(unique_targets)),
+        "outputs": {
+            "survey_plan_frames": str(frames_path),
+            "survey_plan_targets": str(targets_path),
+            "survey_plan_unique_targets": str(unique_targets_path),
+            "survey_economics_summary": str(economics_path),
+            "survey_plan_summary": str(summary_path),
+        },
+        "economics": economics,
+    }
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return summary
+
+
 def estimate_survey_economics(config: SurveyEconomicsConfig) -> dict[str, Any]:
     if config.output_mode not in {"audit", "survey"}:
         raise ValueError("output_mode must be audit or survey")
@@ -155,6 +256,47 @@ def _select_targets(targets: pd.DataFrame, config: SurveyEconomicsConfig) -> pd.
     if not pieces:
         return targets.iloc[0:0].copy()
     return pd.concat(pieces, ignore_index=True)
+
+
+def _in_frame_targets(targets: pd.DataFrame) -> pd.DataFrame:
+    if "in_frame" not in targets.columns:
+        return targets
+    return targets[targets["in_frame"].astype(bool)].copy()
+
+
+def _active_frame_ids(targets: pd.DataFrame) -> set[str]:
+    if targets.empty or "frame_group_id" not in targets.columns:
+        return set()
+    return set(targets["frame_group_id"].astype(str).dropna().unique().tolist())
+
+
+def _filter_manifest_to_frames(manifest: pd.DataFrame, frame_ids: set[str]) -> pd.DataFrame:
+    if not frame_ids or "frame_group_id" not in manifest.columns:
+        return manifest.iloc[0:0].copy()
+    frame_id_series = manifest["frame_group_id"].astype(str)
+    return manifest[frame_id_series.isin(frame_ids)].copy().reset_index(drop=True)
+
+
+def _unique_target_rows(targets: pd.DataFrame) -> pd.DataFrame:
+    if targets.empty:
+        return targets.copy()
+    preferred = [
+        "catalog",
+        "target_id",
+        "source_id",
+        "ra_deg",
+        "dec_deg",
+        "reference_epoch_yr",
+        "pmra_masyr",
+        "pmdec_masyr",
+        "parallax_mas",
+        "mag_primary",
+        "mag_primary_band",
+    ]
+    columns = [column for column in preferred if column in targets.columns]
+    if not columns:
+        return targets[["catalog", "target_id"]].drop_duplicates().reset_index(drop=True)
+    return targets[columns].drop_duplicates(subset=["catalog", "target_id"]).reset_index(drop=True)
 
 
 def _unique_targets(targets: pd.DataFrame) -> int:

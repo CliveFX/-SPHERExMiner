@@ -65,7 +65,7 @@ from .spectra import (
 )
 from .staging_benchmark import ObjectStagingBenchmarkConfig, benchmark_object_staging
 from .status import DispatchStatusConfig, write_dispatch_status_snapshot
-from .survey_economics import SurveyEconomicsConfig, estimate_survey_economics
+from .survey_economics import SurveyEconomicsConfig, SurveyPlanConfig, estimate_survey_economics, plan_survey_economics
 from .task_queue import (
     GpuWorkerServiceConfig,
     TaskQueueCollectConfig,
@@ -426,6 +426,30 @@ def main(argv: list[str] | None = None) -> int:
     survey_economics.add_argument("--gpu-count", type=int, default=8)
     survey_economics.add_argument("--budget-usd", type=float, default=5000.0)
     survey_economics.set_defaults(func=cmd_estimate_survey_economics)
+
+    survey_plan = sub.add_parser(
+        "plan-survey-economics",
+        help="Write survey plan frame/target products and an economics estimate for the selected catalog target set.",
+    )
+    survey_plan.add_argument("--manifest", type=Path, required=True)
+    survey_plan.add_argument("--projected-targets", type=Path, required=True)
+    survey_plan.add_argument("--out-dir", type=Path, required=True)
+    survey_plan.add_argument(
+        "--catalog-selection",
+        choices=["gaia_g_8_14", "twomass_all_usable", "combined"],
+        default="combined",
+    )
+    survey_plan.add_argument("--gaia-mag-min", type=float, default=8.0)
+    survey_plan.add_argument("--gaia-mag-max", type=float, default=14.0)
+    survey_plan.add_argument("--output-mode", choices=["audit", "survey"], default="survey")
+    survey_plan.add_argument("--raw-retention-fraction", type=float, default=0.01)
+    survey_plan.add_argument("--bytes-per-measurement", type=float)
+    survey_plan.add_argument("--bytes-per-spectrum", type=float, default=4096.0)
+    survey_plan.add_argument("--measurements-per-gpu-sec", type=float)
+    survey_plan.add_argument("--gpu-hourly-cost", type=float, default=6.88)
+    survey_plan.add_argument("--gpu-count", type=int, default=8)
+    survey_plan.add_argument("--budget-usd", type=float, default=5000.0)
+    survey_plan.set_defaults(func=cmd_plan_survey_economics)
 
     local_task_queue = sub.add_parser(
         "run-local-task-queue",
@@ -1424,6 +1448,29 @@ def cmd_estimate_survey_economics(args: argparse.Namespace) -> int:
             manifest_path=args.manifest,
             projected_targets_path=args.projected_targets,
             output_path=args.out,
+            catalog_selection=args.catalog_selection,
+            gaia_mag_min=args.gaia_mag_min,
+            gaia_mag_max=args.gaia_mag_max,
+            output_mode=args.output_mode,
+            raw_retention_fraction=args.raw_retention_fraction,
+            bytes_per_measurement=args.bytes_per_measurement,
+            bytes_per_spectrum=args.bytes_per_spectrum,
+            measurements_per_gpu_sec=args.measurements_per_gpu_sec,
+            gpu_hourly_cost=args.gpu_hourly_cost,
+            gpu_count=args.gpu_count,
+            budget_usd=args.budget_usd,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_plan_survey_economics(args: argparse.Namespace) -> int:
+    summary = plan_survey_economics(
+        SurveyPlanConfig(
+            manifest_path=args.manifest,
+            projected_targets_path=args.projected_targets,
+            output_dir=args.out_dir,
             catalog_selection=args.catalog_selection,
             gaia_mag_min=args.gaia_mag_min,
             gaia_mag_max=args.gaia_mag_max,
