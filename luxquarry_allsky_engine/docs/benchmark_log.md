@@ -4490,3 +4490,75 @@ Decision:
   loop keeps moving while the writer thread builds/writes durable shards.
 - For fully accurate bottleneck reading, use the updated performance profile and
   distinguish `async_writer` from `worker_payload`.
+
+## 2026-06-30 / Async shard size check
+
+Question:
+
+Should the local task-queue default move from one-frame measurement shards to a
+larger six-frame shard now that async writes are enabled by default?
+
+Comparable runs:
+
+```text
+run: local_task_queue_shard_async_enabled_6f
+frames_per_task: 6
+shard_batch_frames: 1
+completed_frames: 6
+measurement_rows: 107,259
+ok_measurement_rows: 104,665
+shard_count: 6
+shard_total_bytes: 16,953,504
+worker_payload_max_wall_sec: 1.458
+measurements_per_sec_worker_payload: 73,581
+total_wall_sec: 4.379
+```
+
+```text
+run: local_task_queue_shard_batch6_async_6f
+frames_per_task: 6
+shard_batch_frames: 6
+completed_frames: 6
+measurement_rows: 107,259
+ok_measurement_rows: 104,665
+shard_count: 1
+shard_total_bytes: 11,584,621
+worker_payload_max_wall_sec: 1.544
+measurements_per_sec_worker_payload: 69,447
+total_wall_sec: 4.492
+```
+
+Schema/provenance check:
+
+```text
+compact shard columns: 53
+kept durable provenance:
+  catalog
+  target_id
+  source_id
+  ra_deg
+  dec_deg
+  frame_group_id
+  image_id
+  fits_path
+  detector
+  release
+  wavelength_source
+  wavelength_calibration_file
+  wavelength_calibration_collection
+  flags_summary
+  cwave_um
+  aperture_status_code
+  psf_status_code
+dropped in compact mode:
+  local_fits_path
+```
+
+Decision:
+
+- Keep the one-frame shard default for now.
+- Six-frame shards reduce bytes and shard count, but this run lost enough async
+  overlap that the worker payload was slower.
+- Both shapes are runnable and row-equivalent. Larger shards remain useful for
+  storage/viewer-pressure experiments, but they are not the default performance
+  setting from this evidence.

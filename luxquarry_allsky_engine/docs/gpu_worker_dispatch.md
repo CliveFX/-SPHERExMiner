@@ -703,8 +703,10 @@ smokes and a larger value for all-sky batch jobs.
 
 The worker supports `--local-cache-dir PATH` for local FITS staging. A cache hit
 does not copy the FITS again; it validates by file size and then reads from the
-local path. Measurement rows retain both `fits_path` and `local_fits_path` so
-the original source and staged read path are explicit.
+local path. Full measurement rows retain both `fits_path` and `local_fits_path`
+so the original source and staged read path are explicit. Compact measurement
+rows retain the durable `fits_path` provenance and intentionally omit
+`local_fits_path`, because it is an ephemeral staging/cache path.
 
 The worker supports `--async-shard-writes` for queued cuDF parquet writes. The
 high-level `run-local-task-queue` command enables this by default and provides
