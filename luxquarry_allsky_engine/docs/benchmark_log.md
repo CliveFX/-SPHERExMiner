@@ -4233,3 +4233,87 @@ Decision:
 - It does not change science math or measurement schema.
 - It does not attack the current dense-run critical path; FITS reads, parquet
   writes, metadata conversion, and PSF gather remain larger targets.
+
+## 2026-06-30: Compact Metadata Construction and Non-Batch Fix
+
+Patch:
+
+- Compact measurement mode now skips `local_fits_path` while building
+  per-frame pandas metadata instead of adding it and trimming it later.
+- The durable source `fits_path` is still emitted per measurement.
+- The non-batch table path now passes `measurement_column_profile` into
+  `_measurement_to_cudf()`.
+- Fixed the non-batch path to unpack `_measurement_to_cudf()` correctly. Before
+  this fix it treated the returned `(table, timings)` tuple as a table, which
+  could yield a completed task with a failed frame and bogus row accounting.
+
+Batch compact smoke:
+
+```text
+run: local_task_queue_compact_metadata_early_smoke
+completed_frames: 1
+measurement_rows: 17,875
+failed_frames: 0
+column_count: 53
+```
+
+Schema/provenance comparison against the previous compact reference:
+
+```text
+rows equal: true
+columns equal: true
+checked equal:
+  frame_group_id
+  image_id
+  target_id
+  fits_path
+  wavelength_calibration_file
+  sapm_file
+  cwave_um
+  cband_um
+  aperture_flux_uJy
+  psf_flux_uJy
+  aperture_status_code
+  psf_status_code
+local_fits_path present in compact output: false
+```
+
+Non-batch compact verification:
+
+```text
+bad pre-fix smoke:
+  run: local_task_queue_compact_nonbatch_smoke
+  error: AttributeError: 'tuple' object has no attribute 'columns'
+  failed_frames: 1
+  measurement_rows: 2
+
+fixed smoke:
+  run: local_task_queue_compact_nonbatch_fix_smoke
+  completed_frames: 1
+  failed_frames: 0
+  measurement_rows: 17,875
+  column_count: 53
+```
+
+Dense 18-frame, 3-GPU verification:
+
+```text
+run: local_task_queue_compact_metadata_early_3gpu18_verify
+completed_frames: 18
+measurement_rows: 320,768
+failed_frames: 0
+worker_parallel_efficiency: 0.947
+worker_payload_max_wall_sec: 2.913
+measurements_per_sec_worker_payload: 110,101
+```
+
+Interpretation:
+
+- This did not set a throughput record. The dense verification was dominated by
+  FITS/calibration read variance and came in below the prior best retained
+  compact-output run.
+- Keep anyway because it fixes a real non-batch compact correctness bug and
+  makes compact metadata construction more direct.
+- The next meaningful performance work remains the same: reduce FITS read/cache
+  overhead, reduce metadata-to-cuDF conversion, and reduce PSF gather/host-sync
+  work.

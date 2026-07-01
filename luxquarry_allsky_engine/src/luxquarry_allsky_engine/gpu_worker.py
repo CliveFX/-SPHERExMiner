@@ -525,6 +525,7 @@ class PersistentGpuFrameWorker:
             payload=payload,
             calibration=calibration,
             aperture=self.config.aperture,
+            column_profile=self.config.measurement_column_profile,
         )
         ok_count = int((batch.status == 0).sum().get())
         if self.config.batch_table_assembly:
@@ -534,12 +535,14 @@ class PersistentGpuFrameWorker:
                 status=batch.status,
                 ok_count=ok_count,
             )
+            table_timings = {}
         else:
-            measurement = self._measurement_to_cudf(
+            measurement, table_timings = self._measurement_to_cudf(
                 metadata=metadata,
                 columns=batch.columns,
                 status=batch.status,
                 device=self.config.device,
+                column_profile=self.config.measurement_column_profile,
             )
         table_wall = time.perf_counter() - t_table
         return measurement, {
@@ -556,6 +559,7 @@ class PersistentGpuFrameWorker:
             "psf_measurement_count": int(len(selected_targets)) if self.config.enable_psf else 0,
             "ok_psf_count": psf_ok_count,
             **psf_timings,
+            **table_timings,
             "table_wall_sec": table_wall,
             "frame_compute_wall_sec": time.perf_counter() - frame_started,
         }
@@ -569,6 +573,7 @@ class PersistentGpuFrameWorker:
         payload: FramePayload,
         calibration: ResidentCalibration,
         aperture: ApertureConfig,
+        column_profile: str = "full",
     ) -> pd.DataFrame:
         detector = int(frame["detector"])
         release = str(frame.get("release") or "qr2")
@@ -588,7 +593,8 @@ class PersistentGpuFrameWorker:
             ]
         ].copy()
         metadata["fits_path"] = str(frame["path"])
-        metadata["local_fits_path"] = payload.read_path
+        if column_profile != "compact":
+            metadata["local_fits_path"] = payload.read_path
         metadata["edge_distance_pix"] = selected_edge.astype(np.float32, copy=False)
         metadata["detector"] = detector
         metadata["release"] = release
