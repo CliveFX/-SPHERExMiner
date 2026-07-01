@@ -303,6 +303,10 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                 "measurement_rows": int(worker_summary.get("measurement_rows") or 0),
                 "ok_measurement_rows": int(worker_summary.get("ok_measurement_rows") or 0),
                 "failed_frames": int(worker_summary.get("failed_frames") or 0),
+                "async_shard_writes": bool(worker_summary.get("async_shard_writes", False)),
+                "async_shard_write_wait_wall_sec": float(
+                    worker_summary.get("async_shard_write_wait_wall_sec") or 0.0
+                ),
                 "resident_calibration_count": int(worker_summary.get("resident_calibration_count") or 0),
                 "calibration_cache_hits": int(worker_summary.get("calibration_cache_hits") or 0),
                 "calibration_cache_misses": int(worker_summary.get("calibration_cache_misses") or 0),
@@ -338,6 +342,7 @@ def collect_task_queue_run(config: TaskQueueCollectConfig) -> dict[str, Any]:
                     "column_profile": shard.get("column_profile"),
                     "column_count": int(shard.get("column_count") or 0),
                     "parquet_compression": shard.get("parquet_compression"),
+                    "async_shard_writes": bool(worker_summary.get("async_shard_writes", False)),
                     "frame_group_ids": ",".join(str(v) for v in shard.get("frame_group_ids") or []),
                     "image_ids": ",".join(str(v) for v in shard.get("image_ids") or []),
                     "write_wall_sec": float(shard.get("write_wall_sec") or 0.0),

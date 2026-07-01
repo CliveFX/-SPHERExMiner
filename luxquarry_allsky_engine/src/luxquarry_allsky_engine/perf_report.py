@@ -24,6 +24,7 @@ def summarize_task_queue_performance(config: TaskQueuePerfReportConfig) -> dict[
     collect_summary = _read_json(run_dir / "task_queue_collect_summary.json")
     frame_rows = _read_parquet(run_dir / "task_queue_frames.parquet")
     shard_rows = _read_parquet(run_dir / "measurement_shard_manifest.parquet")
+    task_rows = _read_parquet(run_dir / "task_queue_tasks.parquet")
 
     worker_payload_wall = _num(collect_summary.get("worker_payload_max_wall_sec"))
     total_wall = _num(local_summary.get("total_wall_sec"))
@@ -49,8 +50,23 @@ def summarize_task_queue_performance(config: TaskQueuePerfReportConfig) -> dict[
             shards=shard_rows,
             denominator_wall=worker_payload_wall,
             measurement_rows=measurement_rows,
+            phase=_shard_write_phase(shard_rows),
         )
     )
+    async_wait_wall = _max_group_sum(task_rows, "worker_id", "async_shard_write_wait_wall_sec")
+    if async_wait_wall > 0:
+        profile_rows.append(
+            _simple_stage_row(
+                run_id=str(local_summary.get("run_id") or run_dir.name),
+                stage="async_shard_write_wait",
+                backend="async_shard_writer",
+                wall=async_wait_wall,
+                denominator_wall=worker_payload_wall,
+                rows_out=measurement_rows,
+                inclusive=False,
+                phase="worker_payload",
+            )
+        )
     for stage_name, column_name, backend in [
         ("shard_table_assembly", "shard_table_assembly_wall_sec", "cudf_measurement_table"),
         ("metadata_concat", "metadata_concat_wall_sec", "pandas_metadata_concat"),
@@ -70,6 +86,7 @@ def summarize_task_queue_performance(config: TaskQueuePerfReportConfig) -> dict[
             value_column=column_name,
             denominator_wall=worker_payload_wall,
             measurement_rows=measurement_rows,
+            phase=_shard_write_phase(shard_rows),
         )
         if row["summed_wall_sec"] > 0 or row["critical_path_wall_sec"] > 0:
             profile_rows.append(row)
@@ -208,13 +225,26 @@ def _frame_stage_row(
     }
 
 
-def _shard_write_row(*, run_id: str, shards: pd.DataFrame, denominator_wall: float, measurement_rows: int) -> dict[str, Any]:
+def _shard_write_phase(shards: pd.DataFrame) -> str:
+    if "async_shard_writes" not in shards.columns or shards.empty:
+        return "worker_payload"
+    return "async_writer" if bool(shards["async_shard_writes"].fillna(False).any()) else "worker_payload"
+
+
+def _shard_write_row(
+    *,
+    run_id: str,
+    shards: pd.DataFrame,
+    denominator_wall: float,
+    measurement_rows: int,
+    phase: str,
+) -> dict[str, Any]:
     summed = _sum_column(shards, "write_wall_sec")
     critical = _max_group_sum(shards, "worker_id", "write_wall_sec")
     return {
         "run_id": run_id,
         "stage": "write_measurement_shards",
-        "phase": "worker_payload",
+        "phase": phase,
         "backend": "parquet_measurement_writer",
         "inclusive": False,
         "summed_wall_sec": summed,
@@ -237,13 +267,14 @@ def _shard_substage_row(
     value_column: str,
     denominator_wall: float,
     measurement_rows: int,
+    phase: str,
 ) -> dict[str, Any]:
     summed = _sum_column(shards, value_column)
     critical = _max_group_sum(shards, "worker_id", value_column)
     return {
         "run_id": run_id,
         "stage": stage,
-        "phase": "worker_payload",
+        "phase": phase,
         "backend": backend,
         "inclusive": False,
         "summed_wall_sec": summed,

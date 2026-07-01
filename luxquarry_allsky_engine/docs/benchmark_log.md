@@ -4390,3 +4390,103 @@ Decision:
   repeated per-frame target masking and gives us explicit target setup timing.
 - Larger performance work remains in FITS/cache I/O, output metadata
   conversion, and PSF host-sync/gather paths.
+
+## 2026-06-30: Async Shard Writes Default for Local Task Queue
+
+The high-level `run-local-task-queue` command now enables async shard writes by
+default. It still accepts `--async-shard-writes`, but callers now use
+`--sync-shard-writes` to force the old synchronous behavior. Low-level worker
+commands remain explicit.
+
+The benchmark shape intentionally uses one six-frame task with one shard per
+frame. This gives the worker useful frame work to overlap with queued shard
+writes; one-frame tasks cannot benefit much because each task immediately waits
+at completion.
+
+Synchronous baseline:
+
+```text
+run: local_task_queue_shard_async_sync_baseline_6f
+frames_per_task: 6
+shard_batch_frames: 1
+completed_frames: 6
+measurement_rows: 107,259
+ok_measurement_rows: 104,665
+failed_frames: 0
+worker_payload_max_wall_sec: 1.759
+measurements_per_sec_worker_payload: 60,980
+write_measurement_shards critical path: 0.542 sec
+```
+
+Async enabled:
+
+```text
+run: local_task_queue_shard_async_enabled_6f
+frames_per_task: 6
+shard_batch_frames: 1
+completed_frames: 6
+measurement_rows: 107,259
+ok_measurement_rows: 104,665
+failed_frames: 0
+worker_payload_max_wall_sec: 1.458
+measurements_per_sec_worker_payload: 73,581
+```
+
+Manifest comparison:
+
+```text
+shard_count: 6 -> 6
+measurement_rows: 107,259 -> 107,259
+ok_rows: 104,665 -> 104,665
+bytes: 16,953,504 -> 16,953,504
+```
+
+Default-path smoke:
+
+```text
+run: local_task_queue_async_default_report_smoke2
+command: run-local-task-queue with no explicit --async-shard-writes
+recorded worker command includes: --async-shard-writes
+completed_frames: 2
+measurement_rows: 35,717
+ok_measurement_rows: 34,877
+failed_frames: 0
+async_shard_write_wait_wall_sec: 0.059
+```
+
+Sync opt-out smoke:
+
+```text
+run: local_task_queue_sync_flag_smoke1
+command: run-local-task-queue --sync-shard-writes
+recorded worker command omits: --async-shard-writes
+completed_frames: 1
+measurement_rows: 17,875
+failed_frames: 0
+async_shard_writes: false
+```
+
+Profiler fix:
+
+- Async shard writer raw work is now reported under phase `async_writer`.
+- The worker-payload report now shows the real hot-path costs:
+  `submit_measurement_shard` and `async_shard_write_wait`.
+- Example from `local_task_queue_async_default_report_smoke2`:
+
+```text
+write_measurement_shards: async_writer, 0.260 sec critical writer time
+shard_table_assembly: async_writer, 0.178 sec critical writer time
+metadata_to_cudf: async_writer, 0.146 sec critical writer time
+parquet_write: async_writer, 0.082 sec critical writer time
+async_shard_write_wait: worker_payload, 0.059 sec critical path
+submit_measurement_shard: worker_payload, 0.001 sec critical path
+```
+
+Decision:
+
+- Keep and promote for `run-local-task-queue`. In this overlap-friendly shape,
+  async writes improved worker-payload throughput by about 21%.
+- Do not claim raw parquet writing became faster. The win is overlap: the frame
+  loop keeps moving while the writer thread builds/writes durable shards.
+- For fully accurate bottleneck reading, use the updated performance profile and
+  distinguish `async_writer` from `worker_payload`.

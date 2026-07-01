@@ -377,10 +377,11 @@ persistent worker from about 1.15 sec to about 0.94 sec while preserving the
 same CPU-baseline correctness. First-touch staging is mainly a way to populate
 the local cache; repeated passes and long worker queues are where it should pay.
 
-`--async-shard-writes` queues cuDF parquet writes on a background thread and
-waits for them before completion. On the same tiny smoke it is roughly tied with
-the warm staged path, but it removes inline shard write blocking from the frame
-loop and is the better shape for long queues.
+`run-local-task-queue` now enables async shard writes by default. The worker
+queues cuDF parquet writes on a background thread and waits for them before
+completion. This removes inline shard write blocking from the frame loop and is
+the better shape for long queues. Use `--sync-shard-writes` on the high-level
+runner when a reproducible synchronous write baseline is needed.
 
 `--batch-table-assembly` keeps per-frame kernel outputs as CuPy device columns
 and builds the cuDF measurement table once per shard batch. On the 10-frame

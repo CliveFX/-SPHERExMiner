@@ -707,10 +707,11 @@ local path. Measurement rows retain both `fits_path` and `local_fits_path` so
 the original source and staged read path are explicit.
 
 The worker supports `--async-shard-writes` for queued cuDF parquet writes. The
-worker still waits for every queued shard before writing the final summary, so a
-completed run means all listed shards are durable. Status exposes
-`queued_shard_writes`, and frame timings separate `shard_submit_wall_sec` from
-actual shard `write_wall_sec`.
+high-level `run-local-task-queue` command enables this by default and provides
+`--sync-shard-writes` as an opt-out. The worker still waits for every queued
+shard before writing the final summary, so a completed run means all listed
+shards are durable. Status exposes `queued_shard_writes`, and frame timings
+separate `shard_submit_wall_sec` from actual shard `write_wall_sec`.
 
 The worker supports `--batch-table-assembly` to defer cuDF table construction
 until shard flush. In that mode, each frame keeps target metadata in pandas and

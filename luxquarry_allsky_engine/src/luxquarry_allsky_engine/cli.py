@@ -421,7 +421,18 @@ def main(argv: list[str] | None = None) -> int:
     )
     local_task_queue.add_argument("--executable")
     local_task_queue.add_argument("--no-rmm-pool", action="store_true")
-    local_task_queue.add_argument("--async-shard-writes", action="store_true")
+    local_task_queue.add_argument(
+        "--async-shard-writes",
+        dest="async_shard_writes",
+        action="store_true",
+        help="Overlap shard table assembly/parquet writes with subsequent frame work. Enabled by default.",
+    )
+    local_task_queue.add_argument(
+        "--sync-shard-writes",
+        dest="async_shard_writes",
+        action="store_false",
+        help="Write measurement shards synchronously on the worker hot path.",
+    )
     local_task_queue.add_argument(
         "--batch-table-assembly",
         dest="batch_table_assembly",
@@ -434,7 +445,7 @@ def main(argv: list[str] | None = None) -> int:
         action="store_false",
         help="Build cuDF tables per frame instead of at shard flush.",
     )
-    local_task_queue.set_defaults(batch_table_assembly=True)
+    local_task_queue.set_defaults(batch_table_assembly=True, async_shard_writes=True)
     local_task_queue.add_argument("--discard-measurement-shards", action="store_true")
     local_task_queue.add_argument("--measurement-column-profile", choices=["full", "compact"], default="full")
     local_task_queue.add_argument("--measurement-parquet-compression", choices=["snappy", "none"], default="snappy")
