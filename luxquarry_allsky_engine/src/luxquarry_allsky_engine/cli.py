@@ -470,6 +470,11 @@ def main(argv: list[str] | None = None) -> int:
     survey_economics.add_argument("--gpu-hourly-cost", type=float, default=6.88)
     survey_economics.add_argument("--gpu-count", type=int, default=8)
     survey_economics.add_argument("--budget-usd", type=float, default=5000.0)
+    survey_economics.add_argument(
+        "--require-all-2mass-input",
+        action="store_true",
+        help="Fail unless summary metadata proves uncapped, no-magnitude-filter 2MASS input.",
+    )
     survey_economics.set_defaults(func=cmd_estimate_survey_economics)
 
     survey_plan = sub.add_parser(
@@ -495,6 +500,11 @@ def main(argv: list[str] | None = None) -> int:
     survey_plan.add_argument("--gpu-hourly-cost", type=float, default=6.88)
     survey_plan.add_argument("--gpu-count", type=int, default=8)
     survey_plan.add_argument("--budget-usd", type=float, default=5000.0)
+    survey_plan.add_argument(
+        "--require-all-2mass-input",
+        action="store_true",
+        help="Fail unless summary metadata proves uncapped, no-magnitude-filter 2MASS input.",
+    )
     survey_plan.set_defaults(func=cmd_plan_survey_economics)
 
     survey_sample = sub.add_parser(
@@ -1538,6 +1548,7 @@ def cmd_estimate_survey_economics(args: argparse.Namespace) -> int:
             gpu_hourly_cost=args.gpu_hourly_cost,
             gpu_count=args.gpu_count,
             budget_usd=args.budget_usd,
+            require_all_2mass_input=args.require_all_2mass_input,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
@@ -1561,6 +1572,7 @@ def cmd_plan_survey_economics(args: argparse.Namespace) -> int:
             gpu_hourly_cost=args.gpu_hourly_cost,
             gpu_count=args.gpu_count,
             budget_usd=args.budget_usd,
+            require_all_2mass_input=args.require_all_2mass_input,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

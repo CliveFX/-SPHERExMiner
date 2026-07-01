@@ -54,10 +54,13 @@ def project_frame_targets(
     t0 = time.perf_counter()
     out.to_parquet(output_path, index=False)
     write_wall = time.perf_counter() - t0
+    frame_targets_summary = _read_json_if_exists(frame_targets_path.with_suffix(".summary.json"))
     summary = {
         "created_utc": datetime.now(timezone.utc).isoformat(),
         "manifest_path": str(manifest_path),
         "frame_targets_path": str(frame_targets_path),
+        "frame_targets_summary_path": str(frame_targets_path.with_suffix(".summary.json")),
+        "frame_targets_summary": frame_targets_summary,
         "output_path": str(output_path),
         "frame_count": int(len(manifest)),
         "input_target_rows": int(len(targets)),
@@ -115,6 +118,15 @@ def _science_header(hdul: fits.HDUList) -> fits.Header:
         if hdu.header:
             return hdu.header
     return hdul[0].header
+
+
+def _read_json_if_exists(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
 
 
 def _write_profile(path: Path, summary: dict[str, Any]) -> None:

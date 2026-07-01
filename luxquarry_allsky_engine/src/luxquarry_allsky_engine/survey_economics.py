@@ -26,6 +26,7 @@ class SurveyEconomicsConfig:
     gpu_hourly_cost: float = 6.88
     gpu_count: int = 8
     budget_usd: float = 5000.0
+    require_all_2mass_input: bool = False
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ class SurveyPlanConfig:
     gpu_hourly_cost: float = 6.88
     gpu_count: int = 8
     budget_usd: float = 5000.0
+    require_all_2mass_input: bool = False
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,7 @@ def plan_survey_economics(config: SurveyPlanConfig) -> dict[str, Any]:
         gpu_hourly_cost=config.gpu_hourly_cost,
         gpu_count=config.gpu_count,
         budget_usd=config.budget_usd,
+        require_all_2mass_input=config.require_all_2mass_input,
     )
     selected = _select_targets(targets, economics_config)
     selected_in_frame = _in_frame_targets(selected)
@@ -87,10 +90,24 @@ def plan_survey_economics(config: SurveyPlanConfig) -> dict[str, Any]:
     unique_targets_path = config.output_dir / "survey_plan_unique_targets.parquet"
     economics_path = config.output_dir / "survey_economics_summary.json"
     summary_path = config.output_dir / "survey_plan_summary.json"
+    planned_targets_summary_path = targets_path.with_suffix(".summary.json")
 
     planned_manifest.to_parquet(frames_path, index=False)
     selected.to_parquet(targets_path, index=False)
     unique_targets.to_parquet(unique_targets_path, index=False)
+    source_projected_summary = _read_json_if_exists(config.projected_targets_path.with_suffix(".summary.json"))
+    planned_targets_summary = {
+        "created_utc": datetime.now(timezone.utc).isoformat(),
+        "source_projected_targets_path": str(config.projected_targets_path),
+        "source_projected_targets_summary_path": str(config.projected_targets_path.with_suffix(".summary.json")),
+        "source_projected_targets_summary": source_projected_summary,
+        "planned_projected_target_rows": int(len(selected)),
+        "planned_unique_targets": int(len(unique_targets)),
+    }
+    planned_targets_summary_path.write_text(
+        json.dumps(planned_targets_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
     economics = estimate_survey_economics(
         SurveyEconomicsConfig(
@@ -109,6 +126,7 @@ def plan_survey_economics(config: SurveyPlanConfig) -> dict[str, Any]:
             gpu_hourly_cost=config.gpu_hourly_cost,
             gpu_count=config.gpu_count,
             budget_usd=config.budget_usd,
+            require_all_2mass_input=config.require_all_2mass_input,
         )
     )
     summary = {
@@ -128,6 +146,7 @@ def plan_survey_economics(config: SurveyPlanConfig) -> dict[str, Any]:
         "outputs": {
             "survey_plan_frames": str(frames_path),
             "survey_plan_targets": str(targets_path),
+            "survey_plan_targets_summary": str(planned_targets_summary_path),
             "survey_plan_unique_targets": str(unique_targets_path),
             "survey_economics_summary": str(economics_path),
             "survey_plan_summary": str(summary_path),
@@ -247,6 +266,13 @@ def estimate_survey_economics(config: SurveyEconomicsConfig) -> dict[str, Any]:
     if config.gpu_count <= 0:
         raise ValueError("gpu_count must be positive")
 
+    input_audit = _audit_all_2mass_input(config)
+    if config.require_all_2mass_input and not input_audit["all_2mass_input_valid"]:
+        raise ValueError(
+            "Projected-target input is not proven valid for all-2MASS economics: "
+            f"{input_audit['all_2mass_input_status']} - {input_audit['all_2mass_input_reason']}"
+        )
+
     manifest = pd.read_parquet(config.manifest_path)
     targets = pd.read_parquet(config.projected_targets_path)
     if "catalog" not in targets.columns:
@@ -304,6 +330,10 @@ def estimate_survey_economics(config: SurveyEconomicsConfig) -> dict[str, Any]:
         "gaia_mag_min": float(config.gaia_mag_min),
         "gaia_mag_max": float(config.gaia_mag_max),
         "twomass_all_usable": bool(config.twomass_all_usable),
+        "all_2mass_input_valid": bool(input_audit["all_2mass_input_valid"]),
+        "all_2mass_input_status": input_audit["all_2mass_input_status"],
+        "all_2mass_input_reason": input_audit["all_2mass_input_reason"],
+        "all_2mass_input_metadata": input_audit["all_2mass_input_metadata"],
         "frame_count": frame_count,
         "target_count": int(target_count),
         "in_frame_target_count": int(in_frame_target_count),
@@ -339,6 +369,7 @@ def estimate_survey_economics(config: SurveyEconomicsConfig) -> dict[str, Any]:
             "Use a full accessible-sky projected target table before treating this as a cloud estimate.",
             "For catalog_selection=combined, Gaia is magnitude-filtered and 2MASS is not; all 2MASS means all 2mass_psc rows present in the supplied projected-target parquet.",
             "If the upstream projected-target table was built with a per-frame source cap, this is a capped sample rather than an all-2MASS estimate.",
+            f"All-2MASS input audit: {input_audit['all_2mass_input_status']} - {input_audit['all_2mass_input_reason']}",
             "2MASS and Gaia deduplication is not solved here; deduplicated_target_count is exact only if input target_id semantics are already deduplicated.",
         ],
     }
@@ -346,6 +377,145 @@ def estimate_survey_economics(config: SurveyEconomicsConfig) -> dict[str, Any]:
         config.output_path.parent.mkdir(parents=True, exist_ok=True)
         config.output_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     return summary
+
+
+def _audit_all_2mass_input(config: SurveyEconomicsConfig) -> dict[str, Any]:
+    if config.catalog_selection not in {"combined", "twomass_all_usable"}:
+        return {
+            "all_2mass_input_valid": True,
+            "all_2mass_input_status": "not_applicable",
+            "all_2mass_input_reason": "catalog selection does not include 2MASS all-source economics",
+            "all_2mass_input_metadata": {},
+        }
+
+    metadata = _projected_target_input_metadata(config.projected_targets_path)
+    frame_targets = metadata.get("frame_targets_summary")
+    if not frame_targets:
+        return {
+            "all_2mass_input_valid": False,
+            "all_2mass_input_status": "unknown",
+            "all_2mass_input_reason": "no frame-target summary metadata proving uncapped/no-filter 2MASS input",
+            "all_2mass_input_metadata": metadata,
+        }
+
+    twomass_uncapped = frame_targets.get("twomass_uncapped")
+    twomass_filtered = frame_targets.get("twomass_magnitude_filtered")
+    twomass_limit = frame_targets.get("twomass_max_sources_per_frame")
+    if twomass_uncapped is True and twomass_filtered is False:
+        return {
+            "all_2mass_input_valid": True,
+            "all_2mass_input_status": "proven",
+            "all_2mass_input_reason": "frame-target summary reports uncapped 2MASS with no mag_primary filter",
+            "all_2mass_input_metadata": metadata,
+        }
+
+    reason_parts = []
+    if twomass_uncapped is not True:
+        reason_parts.append(f"twomass_uncapped={twomass_uncapped!r}")
+    if twomass_filtered is not False:
+        reason_parts.append(f"twomass_magnitude_filtered={twomass_filtered!r}")
+    if twomass_limit is not None:
+        reason_parts.append(f"twomass_max_sources_per_frame={twomass_limit!r}")
+    reason = ", ".join(reason_parts) or "frame-target summary does not prove all-2MASS input"
+    status = "invalid" if twomass_uncapped is False or twomass_filtered is True or twomass_limit is not None else "unknown"
+    return {
+        "all_2mass_input_valid": False,
+        "all_2mass_input_status": status,
+        "all_2mass_input_reason": reason,
+        "all_2mass_input_metadata": metadata,
+    }
+
+
+def _projected_target_input_metadata(projected_targets_path: Path) -> dict[str, Any]:
+    summary_path = projected_targets_path.with_suffix(".summary.json")
+    summary = _read_json_if_exists(summary_path)
+    metadata: dict[str, Any] = {
+        "projected_targets_path": str(projected_targets_path),
+        "projected_targets_summary_path": str(summary_path),
+        "projected_targets_summary_present": summary is not None,
+    }
+    if not summary:
+        return metadata
+
+    metadata["projected_targets_summary"] = _compact_summary(summary)
+    source_summary = summary.get("source_projected_targets_summary")
+    if isinstance(source_summary, dict):
+        metadata["source_projected_targets_summary"] = _compact_summary(source_summary)
+        frame_targets_summary = _extract_frame_targets_summary(source_summary, projected_targets_path.parent)
+    else:
+        frame_targets_summary = _extract_frame_targets_summary(summary, projected_targets_path.parent)
+    if frame_targets_summary:
+        metadata["frame_targets_summary"] = _compact_summary(frame_targets_summary)
+    return metadata
+
+
+def _extract_frame_targets_summary(summary: dict[str, Any], base_dir: Path) -> dict[str, Any] | None:
+    embedded = summary.get("frame_targets_summary")
+    if isinstance(embedded, dict):
+        return embedded
+
+    summary_path_value = summary.get("frame_targets_summary_path")
+    if summary_path_value:
+        loaded = _read_json_if_exists(_resolve_metadata_path(base_dir, summary_path_value))
+        if loaded:
+            return loaded
+
+    frame_targets_path_value = summary.get("frame_targets_path")
+    if frame_targets_path_value:
+        frame_targets_path = _resolve_metadata_path(base_dir, frame_targets_path_value)
+        loaded = _read_json_if_exists(frame_targets_path.with_suffix(".summary.json"))
+        if loaded:
+            return loaded
+    return None
+
+
+def _resolve_metadata_path(base_dir: Path, value: Any) -> Path:
+    path = Path(str(value))
+    if path.is_absolute() or path.exists():
+        return path
+    candidate = base_dir / path
+    if candidate.exists():
+        return candidate
+    return path
+
+
+def _compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    keep = [
+        "created_utc",
+        "catalog",
+        "manifest_path",
+        "frame_targets_path",
+        "frame_targets_summary_path",
+        "source_projected_targets_path",
+        "source_projected_targets_summary_path",
+        "output_path",
+        "gaia_g_min",
+        "gaia_g_max",
+        "twomass_mag_min",
+        "twomass_mag_max",
+        "max_sources_per_frame",
+        "gaia_max_sources_per_frame",
+        "twomass_max_sources_per_frame",
+        "twomass_uncapped",
+        "twomass_magnitude_filtered",
+        "frame_count",
+        "target_row_count",
+        "input_target_rows",
+        "projected_target_rows",
+        "planned_projected_target_rows",
+        "unique_target_count",
+        "planned_unique_targets",
+    ]
+    return {key: summary.get(key) for key in keep if key in summary}
+
+
+def _read_json_if_exists(path: Path) -> dict[str, Any] | None:
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
 
 
 def _select_targets(targets: pd.DataFrame, config: SurveyEconomicsConfig) -> pd.DataFrame:

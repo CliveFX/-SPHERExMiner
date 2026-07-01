@@ -64,6 +64,29 @@ are intentional:
 `--all-2mass` disables both the 2MASS `mag_primary` filter and the 2MASS SQL
 `LIMIT`. The Gaia G range remains active.
 
+For serious cloud estimates, require the planner to prove the target table came
+from uncapped/no-filter 2MASS input:
+
+```bash
+.venv/bin/luxquarry-allsky plan-survey-economics \
+  --manifest runs/manifest_sample/frame_manifest.parquet \
+  --projected-targets runs/projected_targets_sample_all2mass/frame_targets_projected.parquet \
+  --out-dir runs/survey_plan_sample_all2mass \
+  --catalog-selection combined \
+  --require-all-2mass-input
+```
+
+The economics JSON always includes:
+
+```text
+all_2mass_input_valid
+all_2mass_input_status: proven | invalid | unknown | not_applicable
+all_2mass_input_reason
+all_2mass_input_metadata
+```
+
+Treat `unknown` and `invalid` as smoke/test estimates, not cloud cost evidence.
+
 Before every serious cloud estimate, the planner must write the actual catalog
 cardinality used for the run:
 

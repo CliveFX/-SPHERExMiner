@@ -118,6 +118,22 @@ Use capped `--gaia-max-sources-per-frame` and
 `--twomass-max-sources-per-frame` values for smoke tests. Do not treat capped
 tables as all-2MASS economics estimates.
 
+For any number that will be used as an all-2MASS cloud-cost claim, add:
+
+```bash
+--require-all-2mass-input
+```
+
+and confirm the resulting economics JSON contains:
+
+```text
+all_2mass_input_valid: true
+all_2mass_input_status: proven
+```
+
+If it says `unknown` or `invalid`, the estimate can still be useful for
+software smoke testing, but it is not evidence for the `$5k` target.
+
 Run the economics estimator directly when materialized plan products are not
 needed:
 
