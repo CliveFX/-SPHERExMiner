@@ -37,6 +37,7 @@ from .kubernetes import (
 )
 from .local_runner import LocalDispatchRunConfig, LocalPlanWorkerRunConfig, run_dispatch_plan_workers, run_local_dispatch
 from .manifest import build_frame_manifest, rewrite_manifest_paths_to_uri
+from .perf_report import TaskQueuePerfReportConfig, summarize_task_queue_performance
 from .photometry import ApertureConfig, run_cpu_aperture, run_gpu_aperture
 from .projection import project_frame_targets
 from .recovery import InjectionRecoveryConfig, score_injection_recovery
@@ -392,6 +393,14 @@ def main(argv: list[str] | None = None) -> int:
     collect_task_queue.add_argument("--queue-dir", type=Path, required=True)
     collect_task_queue.add_argument("--out", type=Path, required=True)
     collect_task_queue.set_defaults(func=cmd_collect_task_queue_run)
+
+    task_queue_perf = sub.add_parser(
+        "summarize-task-queue-perf",
+        help="Build a stage-level bottleneck report from a local task-queue run directory.",
+    )
+    task_queue_perf.add_argument("--run-dir", type=Path, required=True)
+    task_queue_perf.add_argument("--out-dir", type=Path)
+    task_queue_perf.set_defaults(func=cmd_summarize_task_queue_perf)
 
     local_task_queue = sub.add_parser(
         "run-local-task-queue",
@@ -1362,6 +1371,17 @@ def cmd_collect_task_queue_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_summarize_task_queue_perf(args: argparse.Namespace) -> int:
+    report = summarize_task_queue_performance(
+        TaskQueuePerfReportConfig(
+            run_dir=args.run_dir,
+            output_dir=args.out_dir,
+        )
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
+    return 0
+
+
 def cmd_run_local_task_queue(args: argparse.Namespace) -> int:
     devices = tuple(part.strip() for part in args.devices.split(",") if part.strip())
     if not devices:
@@ -1497,6 +1517,14 @@ def cmd_run_local_task_queue(args: argparse.Namespace) -> int:
         "candidate_summary": candidate_summary,
     }
     summary_path = out_dir / "local_task_queue_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    perf_report = summarize_task_queue_performance(
+        TaskQueuePerfReportConfig(
+            run_dir=out_dir,
+            output_dir=out_dir,
+        )
+    )
+    summary["perf_report"] = perf_report
     summary_path.write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0 if summary["status"] == "complete" else 1

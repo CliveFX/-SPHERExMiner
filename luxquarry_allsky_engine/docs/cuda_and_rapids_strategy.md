@@ -293,7 +293,11 @@ until the schema and query workload are proven.
 
 ## Local Benchmark Requirements
 
-Every RAPIDS/CUDA decision must show up in `perf_summary.json`.
+Every RAPIDS/CUDA decision must show up in a run artifact:
+
+- benchmark sweeps: `perf_summary.json` and `profile_summary.parquet`
+- local task queues: `task_queue_perf_report.json` and
+  `task_queue_perf_profile.parquet`
 
 Required metrics:
 
@@ -313,3 +317,7 @@ Required metrics:
 
 If a GPU library adds complexity without improving one of these measurements,
 remove it from the hot path.
+
+For local task-queue runs, optimize from critical-path worker timings rather
+than summed timings. Summed timings show total work across all GPUs; critical
+path timings show what actually controls wall clock.

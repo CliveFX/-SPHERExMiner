@@ -309,6 +309,7 @@ wait for workers
 collect task queue shards
 optionally assemble spectra
 optionally score baseline candidates
+write task_queue_perf_report.json
 write local_task_queue_summary.json
 ```
 
@@ -324,6 +325,22 @@ default. For output-path benchmarks, pass
 that disabling compression is only a small throughput win, so the remaining
 durable-output gap is the broader table/parquet/filesystem path rather than
 snappy alone.
+
+To regenerate the stage-level report for any existing local task-queue run:
+
+```bash
+.venv/bin/luxquarry-allsky collect-task-queue-run \
+  --queue-dir runs/<run_id> \
+  --out runs/<run_id>/task_queue_collect_summary.json
+
+.venv/bin/luxquarry-allsky summarize-task-queue-perf \
+  --run-dir runs/<run_id>
+```
+
+The report ranks worker-payload stages by critical-path wall time, not just
+summed work across all GPUs. Treat any non-inclusive stage above 5% of
+`worker_payload_max_wall_sec` as requiring an explicit keep/accelerate/rewrite
+decision.
 
 For larger queues, prefer resident source inputs:
 

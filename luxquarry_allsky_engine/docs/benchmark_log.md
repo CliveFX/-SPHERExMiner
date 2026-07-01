@@ -3764,3 +3764,58 @@ Interpretation:
   compressed durable artifacts. Use `--measurement-parquet-compression none`
   for targeted write-path benchmarks or if downstream storage bandwidth is
   known to be cheaper than compression CPU time.
+
+## 2026-06-30: Local Task-Queue Bottleneck Report
+
+One-off `run-local-task-queue` runs now write a stage-level performance report
+alongside the run summary:
+
+```text
+task_queue_perf_report.json
+task_queue_perf_profile.json
+task_queue_perf_profile.parquet
+```
+
+The report can also be regenerated from an existing run directory:
+
+```bash
+luxquarry_allsky_engine/.venv/bin/luxquarry-allsky collect-task-queue-run \
+  --queue-dir luxquarry_allsky_engine/runs/local_task_queue_gc_dense_3gpu18_batch_table_nocompress_verify \
+  --out luxquarry_allsky_engine/runs/local_task_queue_gc_dense_3gpu18_batch_table_nocompress_verify/task_queue_collect_summary.json
+
+luxquarry_allsky_engine/.venv/bin/luxquarry-allsky summarize-task-queue-perf \
+  --run-dir luxquarry_allsky_engine/runs/local_task_queue_gc_dense_3gpu18_batch_table_nocompress_verify
+```
+
+The latest dense 18-frame, 3-GPU, compact, no-compression run produced:
+
+```text
+completed_frames: 18
+measurement_rows: 320,768
+worker_payload_max_wall_sec: 2.258
+measurements_per_sec_worker_payload: 142,079
+worker_parallel_efficiency: 0.946
+shard_total_bytes: 34,997,955
+shard_bytes_per_measurement: 109.1
+```
+
+Critical-path worker payload bottlenecks above the 5% threshold:
+
+```text
+write_measurement_shards: 0.415 sec, 18.4%
+psf_device_submit_sync:   0.403 sec, 17.8%
+upload_frame_to_gpu:      0.150 sec,  6.7%
+read_fits:                0.130 sec,  5.7%
+```
+
+Interpretation:
+
+- Aperture is not a material bottleneck on this workload.
+- The next speed work should not be another scheduler abstraction. The current
+  local queue already has good worker balance (`0.946` parallel efficiency).
+- The top durable-output target is the shard writer/table-to-parquet path.
+- The top GPU/science target is PSF device submit/sync and associated
+  host/device synchronization. Keep PSF kernels resident and remove avoidable
+  CPU/device round trips before changing science math.
+- FITS read and frame upload are smaller but still above threshold; they are
+  candidates for local NVMe/S3 staging, KvikIO experiments, and better overlap.
