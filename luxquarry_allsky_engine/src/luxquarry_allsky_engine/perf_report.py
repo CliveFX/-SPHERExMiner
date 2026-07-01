@@ -53,6 +53,12 @@ def summarize_task_queue_performance(config: TaskQueuePerfReportConfig) -> dict[
     )
     for stage_name, column_name, backend in [
         ("shard_table_assembly", "shard_table_assembly_wall_sec", "cudf_measurement_table"),
+        ("metadata_concat", "metadata_concat_wall_sec", "pandas_metadata_concat"),
+        ("device_column_concat", "device_column_concat_wall_sec", "cupy_device_column_concat"),
+        ("status_concat", "status_concat_wall_sec", "cupy_status_concat"),
+        ("metadata_to_cudf", "metadata_to_cudf_wall_sec", "cudf_from_pandas"),
+        ("column_attach", "column_attach_wall_sec", "cudf_device_column_attach"),
+        ("status_attach", "status_attach_wall_sec", "cudf_status_column_attach"),
         ("shard_column_profile", "shard_column_profile_wall_sec", "cudf_column_projection"),
         ("parquet_write", "parquet_write_wall_sec", "cudf_parquet_writer"),
     ]:
@@ -291,6 +297,12 @@ def _decision_hint(stage: str, critical: float, denominator: float) -> str:
         "shard_table_assembly",
         "shard_column_profile",
         "parquet_write",
+        "metadata_concat",
+        "device_column_concat",
+        "status_concat",
+        "metadata_to_cudf",
+        "column_attach",
+        "status_attach",
     }:
         return "Hot durable-output path; consider larger shard batches, cuDF parquet tuning, or async writer isolation."
     if stage.startswith("psf"):

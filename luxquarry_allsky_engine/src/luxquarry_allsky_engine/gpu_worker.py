@@ -610,18 +610,28 @@ class PersistentGpuFrameWorker:
         status: object,
         device: str,
         column_profile: str = "full",
-    ):
+    ) -> tuple[Any, dict[str, float]]:
         import cudf
         import cupy as cp
 
+        timings = {
+            "metadata_to_cudf_wall_sec": 0.0,
+            "column_attach_wall_sec": 0.0,
+            "status_attach_wall_sec": 0.0,
+        }
         cp.cuda.Device(_device_index(device)).use()
         compact = column_profile == "compact"
         if compact:
             metadata = metadata[[column for column in metadata.columns if column in COMPACT_MEASUREMENT_COLUMNS]]
             columns = {name: values for name, values in columns.items() if name in COMPACT_MEASUREMENT_COLUMNS}
+        t_metadata = time.perf_counter()
         gdf = cudf.from_pandas(metadata)
+        timings["metadata_to_cudf_wall_sec"] = time.perf_counter() - t_metadata
+        t_columns = time.perf_counter()
         for name, values in columns.items():
             gdf[name] = values
+        timings["column_attach_wall_sec"] = time.perf_counter() - t_columns
+        t_status = time.perf_counter()
         if not compact or "aperture_flux_unit" in COMPACT_MEASUREMENT_COLUMNS:
             gdf["aperture_flux_unit"] = "uJy"
         if not compact or "aperture_status_code" in COMPACT_MEASUREMENT_COLUMNS:
@@ -635,7 +645,8 @@ class PersistentGpuFrameWorker:
             if not compact:
                 gdf["psf_status"] = "ok"
                 gdf.loc[gdf["psf_status_code"] != 0, "psf_status"] = "bad_fit"
-        return gdf
+        timings["status_attach_wall_sec"] = time.perf_counter() - t_status
+        return gdf, timings
 
     def _get_calibration(self, *, release: str, detector: int) -> ResidentCalibration:
         key = (release, int(detector))
@@ -839,7 +850,7 @@ class PersistentGpuFrameWorker:
         )
         tw = time.perf_counter()
         t_assemble = time.perf_counter()
-        out = PersistentGpuFrameWorker._assemble_shard_table(
+        out, assemble_timings = PersistentGpuFrameWorker._assemble_shard_table(
             measurements,
             device=device,
             column_profile=column_profile,
@@ -867,6 +878,7 @@ class PersistentGpuFrameWorker:
             "bytes": int(byte_count),
             "write_wall_sec": write_wall_sec,
             "shard_table_assembly_wall_sec": shard_table_assembly_wall_sec,
+            **assemble_timings,
             "shard_column_profile_wall_sec": shard_column_profile_wall_sec,
             "parquet_write_wall_sec": parquet_write_wall_sec,
         }
@@ -877,25 +889,44 @@ class PersistentGpuFrameWorker:
         import cupy as cp
 
         cp.cuda.Device(_device_index(device)).use()
+        timings = {
+            "metadata_concat_wall_sec": 0.0,
+            "device_column_concat_wall_sec": 0.0,
+            "status_concat_wall_sec": 0.0,
+            "metadata_to_cudf_wall_sec": 0.0,
+            "column_attach_wall_sec": 0.0,
+            "status_attach_wall_sec": 0.0,
+        }
         if not measurements:
-            return cudf.DataFrame()
+            return cudf.DataFrame(), timings
         first = measurements[0]
         if not isinstance(first, FrameMeasurement):
-            return measurements[0] if len(measurements) == 1 else cudf.concat(measurements, ignore_index=True)
+            t_concat = time.perf_counter()
+            table = measurements[0] if len(measurements) == 1 else cudf.concat(measurements, ignore_index=True)
+            timings["device_column_concat_wall_sec"] = time.perf_counter() - t_concat
+            return table, timings
 
+        t_metadata = time.perf_counter()
         metadata = pd.concat([measurement.metadata for measurement in measurements], ignore_index=True)
+        timings["metadata_concat_wall_sec"] = time.perf_counter() - t_metadata
+        t_columns = time.perf_counter()
         columns = {
             name: cp.concatenate([measurement.columns[name] for measurement in measurements])
             for name in first.columns
         }
+        timings["device_column_concat_wall_sec"] = time.perf_counter() - t_columns
+        t_status = time.perf_counter()
         status = cp.concatenate([measurement.status for measurement in measurements])
-        return PersistentGpuFrameWorker._measurement_to_cudf(
+        timings["status_concat_wall_sec"] = time.perf_counter() - t_status
+        table, cudf_timings = PersistentGpuFrameWorker._measurement_to_cudf(
             metadata=metadata,
             columns=columns,
             status=status,
             device=device,
             column_profile=column_profile,
         )
+        timings.update(cudf_timings)
+        return table, timings
 
     @staticmethod
     def _apply_measurement_column_profile(table: Any, column_profile: str):

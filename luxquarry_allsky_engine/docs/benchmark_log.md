@@ -4041,3 +4041,49 @@ Interpretation:
   critical-path payload wall time.
 - The next output optimization should avoid concatenating per-frame device
   columns at shard flush, rather than merely trimming columns earlier.
+
+## 2026-06-30: Shard Assembly Deep Timing
+
+Shard assembly now reports deeper sub-stages:
+
+```text
+metadata_concat
+device_column_concat
+status_concat
+metadata_to_cudf
+column_attach
+status_attach
+```
+
+Dense 18-frame, 3-GPU verification:
+
+```text
+worker_payload_max_wall_sec: 2.252
+measurements_per_sec_worker_payload: 142,431
+worker_parallel_efficiency: 0.953
+```
+
+Critical-path shard output stages:
+
+```text
+write_measurement_shards: 0.400 sec, 17.8%
+shard_table_assembly:     0.279 sec, 12.4%
+metadata_to_cudf:         0.219 sec,  9.7%
+parquet_write:            0.123 sec,  5.5%
+metadata_concat:          0.020 sec,  0.9%
+column_attach:            0.009 sec,  0.4%
+device_column_concat:     0.004 sec,  0.2%
+status_attach:            0.004 sec,  0.2%
+```
+
+Interpretation:
+
+- The earlier assumption that device-column concatenation was the main shard
+  assembly problem was wrong for this workload.
+- The dominant assembly sub-stage is converting metadata from pandas to cuDF,
+  mostly string/provenance columns.
+- Device-column concatenation is cheap here.
+- The next output-path optimization should attack metadata conversion: keep
+  metadata GPU-native, dictionary-code repeated provenance fields, or split
+  row-level numeric measurements from sidecar provenance tables where that is
+  scientifically acceptable.
