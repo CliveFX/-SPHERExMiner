@@ -225,7 +225,32 @@ def main(argv: list[str] | None = None) -> int:
     frame_targets.add_argument("--gaia-g-max", type=float, default=16.0)
     frame_targets.add_argument("--twomass-mag-min", type=float, default=11.0)
     frame_targets.add_argument("--twomass-mag-max", type=float, default=16.0)
-    frame_targets.add_argument("--max-sources-per-frame", type=int, default=5000)
+    frame_targets.add_argument(
+        "--max-sources-per-frame",
+        type=int,
+        default=5000,
+        help="Legacy total cap. With --catalog all this is split between Gaia and 2MASS unless per-catalog caps are supplied. Use 0 for no legacy cap.",
+    )
+    frame_targets.add_argument(
+        "--gaia-max-sources-per-frame",
+        type=int,
+        help="Gaia-specific per-frame cap. Use 0 for no LIMIT.",
+    )
+    frame_targets.add_argument(
+        "--twomass-max-sources-per-frame",
+        type=int,
+        help="2MASS-specific per-frame cap. Use 0 for no LIMIT.",
+    )
+    frame_targets.add_argument(
+        "--twomass-no-mag-filter",
+        action="store_true",
+        help="Do not apply the 2MASS mag_primary filter; useful for all-2MASS planning samples.",
+    )
+    frame_targets.add_argument(
+        "--all-2mass",
+        action="store_true",
+        help="Shortcut for uncapped, no-magnitude-filter 2MASS selection. Gaia limits still come from Gaia flags.",
+    )
     frame_targets.add_argument("--bbox-pad-deg", type=float, default=0.05)
     frame_targets.add_argument("--limit-frames", type=int)
     frame_targets.set_defaults(func=cmd_build_frame_targets)
@@ -1237,14 +1262,18 @@ def cmd_rewrite_manifest_paths(args: argparse.Namespace) -> int:
 
 
 def cmd_build_frame_targets(args: argparse.Namespace) -> int:
+    twomass_no_mag_filter = bool(args.twomass_no_mag_filter or args.all_2mass)
+    twomass_max_sources = 0 if args.all_2mass else args.twomass_max_sources_per_frame
     config = CatalogConfig(
         cache_root=args.cache_root,
         catalog=args.catalog,
         gaia_g_min=args.gaia_g_min,
         gaia_g_max=args.gaia_g_max,
-        twomass_mag_min=args.twomass_mag_min,
-        twomass_mag_max=args.twomass_mag_max,
+        twomass_mag_min=None if twomass_no_mag_filter else args.twomass_mag_min,
+        twomass_mag_max=None if twomass_no_mag_filter else args.twomass_mag_max,
         max_sources_per_frame=args.max_sources_per_frame,
+        gaia_max_sources_per_frame=args.gaia_max_sources_per_frame,
+        twomass_max_sources_per_frame=twomass_max_sources,
         bbox_pad_deg=args.bbox_pad_deg,
     )
     summary = build_frame_targets(

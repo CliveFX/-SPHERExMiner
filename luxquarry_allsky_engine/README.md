@@ -95,6 +95,18 @@ Implemented stages:
   --max-sources-per-frame 500 \
   --limit-frames 10
 
+# For survey-economics samples where 2MASS should not be magnitude-capped,
+# use per-catalog caps or explicit all-2MASS mode.
+.venv/bin/luxquarry-allsky build-frame-targets \
+  --manifest runs/manifest_smoke_v2/frame_manifest.parquet \
+  --out runs/frame_targets_smoke_all2mass/frame_targets.parquet \
+  --catalog all \
+  --gaia-g-min 8 \
+  --gaia-g-max 14 \
+  --gaia-max-sources-per-frame 0 \
+  --all-2mass \
+  --limit-frames 1
+
 # Project frame target coordinates to detector pixels with vectorized Astropy WCS.
 .venv/bin/luxquarry-allsky project-frame-targets \
   --manifest runs/manifest_smoke_v2/frame_manifest.parquet \

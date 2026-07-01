@@ -94,6 +94,30 @@ cd luxquarry_allsky_engine
   --gpu-count 8
 ```
 
+For the actual Gaia G 8-14 plus all-2MASS economics gate, first build/project
+targets with uncapped 2MASS input:
+
+```bash
+cd luxquarry_allsky_engine
+.venv/bin/luxquarry-allsky build-frame-targets \
+  --manifest runs/manifest_sample/frame_manifest.parquet \
+  --out runs/frame_targets_sample_all2mass/frame_targets.parquet \
+  --catalog all \
+  --gaia-g-min 8 \
+  --gaia-g-max 14 \
+  --gaia-max-sources-per-frame 0 \
+  --all-2mass
+
+.venv/bin/luxquarry-allsky project-frame-targets \
+  --manifest runs/manifest_sample/frame_manifest.parquet \
+  --frame-targets runs/frame_targets_sample_all2mass/frame_targets.parquet \
+  --out runs/projected_targets_sample_all2mass/frame_targets_projected.parquet
+```
+
+Use capped `--gaia-max-sources-per-frame` and
+`--twomass-max-sources-per-frame` values for smoke tests. Do not treat capped
+tables as all-2MASS economics estimates.
+
 Run the economics estimator directly when materialized plan products are not
 needed:
 

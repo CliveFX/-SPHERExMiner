@@ -62,9 +62,11 @@ class CatalogConfig:
     catalog: str = "all"
     gaia_g_min: float = 11.0
     gaia_g_max: float = 16.0
-    twomass_mag_min: float = 11.0
-    twomass_mag_max: float = 16.0
-    max_sources_per_frame: int = 5000
+    twomass_mag_min: float | None = 11.0
+    twomass_mag_max: float | None = 16.0
+    max_sources_per_frame: int | None = 5000
+    gaia_max_sources_per_frame: int | None = None
+    twomass_max_sources_per_frame: int | None = None
     bbox_pad_deg: float = 0.05
 
 
@@ -104,6 +106,15 @@ def build_frame_targets(
         "manifest_path": str(manifest_path),
         "output_path": str(output_path),
         "catalog": config.catalog,
+        "gaia_g_min": float(config.gaia_g_min),
+        "gaia_g_max": float(config.gaia_g_max),
+        "twomass_mag_min": _json_float_or_none(config.twomass_mag_min),
+        "twomass_mag_max": _json_float_or_none(config.twomass_mag_max),
+        "max_sources_per_frame": config.max_sources_per_frame,
+        "gaia_max_sources_per_frame": _json_int_or_none(_resolve_catalog_limit(config, "gaia")),
+        "twomass_max_sources_per_frame": _json_int_or_none(_resolve_catalog_limit(config, "2mass")),
+        "twomass_uncapped": _resolve_catalog_limit(config, "2mass") is None,
+        "twomass_magnitude_filtered": config.twomass_mag_min is not None or config.twomass_mag_max is not None,
         "frame_count": int(len(manifest)),
         "target_row_count": int(len(targets)),
         "unique_target_count": int(targets["target_id"].nunique()) if len(targets) else 0,
@@ -122,13 +133,12 @@ def build_frame_targets(
 def query_targets_for_frame(frame: dict[str, Any], config: CatalogConfig) -> pd.DataFrame:
     bounds = _frame_bounds(frame, pad_deg=config.bbox_pad_deg)
     pieces: list[pd.DataFrame] = []
-    per_catalog_limit = config.max_sources_per_frame if config.catalog != "all" else max(1, config.max_sources_per_frame // 2)
     if config.catalog in {"gaia", "all"}:
-        gaia = _query_gaia(bounds=bounds, config=config, max_sources=per_catalog_limit)
+        gaia = _query_gaia(bounds=bounds, config=config, max_sources=_resolve_catalog_limit(config, "gaia"))
         if len(gaia):
             pieces.append(_normalize_gaia(gaia, frame))
     if config.catalog in {"2mass", "all"}:
-        twomass = _query_2mass(bounds=bounds, config=config, max_sources=per_catalog_limit)
+        twomass = _query_2mass(bounds=bounds, config=config, max_sources=_resolve_catalog_limit(config, "2mass"))
         if len(twomass):
             pieces.append(_normalize_2mass(twomass, frame))
     if not pieces:
@@ -138,9 +148,9 @@ def query_targets_for_frame(frame: dict[str, Any], config: CatalogConfig) -> pd.
     return out[_output_columns()]
 
 
-def _query_gaia(*, bounds: tuple[float, float, float, float], config: CatalogConfig, max_sources: int) -> pd.DataFrame:
+def _query_gaia(*, bounds: tuple[float, float, float, float], config: CatalogConfig, max_sources: int | None) -> pd.DataFrame:
     root = config.cache_root / "gaia" / "parquet" / "dr3_source_lite"
-    if not root.exists() or max_sources <= 0:
+    if not root.exists():
         return pd.DataFrame(columns=GAIA_COLUMNS)
     hpx_values = _candidate_hpx(bounds, hpx_level=3, samples=7)
     if not hpx_values:
@@ -150,7 +160,8 @@ def _query_gaia(*, bounds: tuple[float, float, float, float], config: CatalogCon
         return pd.DataFrame(columns=GAIA_COLUMNS)
     parquet_expr = _duckdb_parquet_list(parquet_files)
     ra_clause, ra_params = _ra_where("ra", bounds[0], bounds[1])
-    params: list[Any] = [config.gaia_g_min, config.gaia_g_max, *hpx_values, *ra_params, bounds[2], bounds[3], max_sources]
+    limit_clause, limit_params = _limit_clause(max_sources)
+    params: list[Any] = [config.gaia_g_min, config.gaia_g_max, *hpx_values, *ra_params, bounds[2], bounds[3], *limit_params]
     sql = f"""
         SELECT {", ".join(GAIA_COLUMNS)}
         FROM read_parquet({parquet_expr}, hive_partitioning=true)
@@ -159,14 +170,14 @@ def _query_gaia(*, bounds: tuple[float, float, float, float], config: CatalogCon
           AND {ra_clause}
           AND dec BETWEEN ? AND ?
         ORDER BY phot_g_mean_mag, source_id
-        LIMIT ?
+        {limit_clause}
     """
     return _execute_df(sql, params)
 
 
-def _query_2mass(*, bounds: tuple[float, float, float, float], config: CatalogConfig, max_sources: int) -> pd.DataFrame:
+def _query_2mass(*, bounds: tuple[float, float, float, float], config: CatalogConfig, max_sources: int | None) -> pd.DataFrame:
     root = config.cache_root / "2mass" / "parquet" / "psc_lite"
-    if not root.exists() or max_sources <= 0:
+    if not root.exists():
         return pd.DataFrame(columns=TWOMASS_COLUMNS)
     hpx_values = _candidate_hpx(bounds, hpx_level=5, samples=7)
     if not hpx_values:
@@ -176,24 +187,18 @@ def _query_2mass(*, bounds: tuple[float, float, float, float], config: CatalogCo
         return pd.DataFrame(columns=TWOMASS_COLUMNS)
     parquet_expr = _duckdb_parquet_list(parquet_files)
     ra_clause, ra_params = _ra_where("ra_deg", bounds[0], bounds[1])
-    params: list[Any] = [
-        config.twomass_mag_min,
-        config.twomass_mag_max,
-        *hpx_values,
-        *ra_params,
-        bounds[2],
-        bounds[3],
-        max_sources,
-    ]
+    mag_clause, mag_params = _twomass_mag_clause(config)
+    limit_clause, limit_params = _limit_clause(max_sources)
+    params: list[Any] = [*mag_params, *hpx_values, *ra_params, bounds[2], bounds[3], *limit_params]
     sql = f"""
         SELECT {", ".join(TWOMASS_COLUMNS)}
         FROM read_parquet({parquet_expr}, hive_partitioning=true)
-        WHERE mag_primary BETWEEN ? AND ?
+        WHERE {mag_clause}
           AND hpx IN ({", ".join("?" for _ in hpx_values)})
           AND {ra_clause}
           AND dec_deg BETWEEN ? AND ?
         ORDER BY mag_primary, target_id
-        LIMIT ?
+        {limit_clause}
     """
     return _execute_df(sql, params)
 
@@ -271,6 +276,65 @@ def _ra_where(column: str, ra_min: float, ra_max: float) -> tuple[str, list[floa
 
 def _ra_wraps(ra_min: float, ra_max: float) -> bool:
     return float(ra_min) > float(ra_max)
+
+
+def _resolve_catalog_limit(config: CatalogConfig, catalog: str) -> int | None:
+    if catalog == "gaia":
+        specific = config.gaia_max_sources_per_frame
+    elif catalog == "2mass":
+        specific = config.twomass_max_sources_per_frame
+    else:
+        raise ValueError(f"Unknown catalog limit key: {catalog}")
+
+    if specific is not None:
+        return _normalize_limit(specific)
+
+    legacy = config.max_sources_per_frame
+    if legacy is None:
+        return None
+    legacy_limit = _normalize_limit(legacy)
+    if legacy_limit is None:
+        return None
+    if config.catalog == "all":
+        return max(1, legacy_limit // 2)
+    return legacy_limit
+
+
+def _normalize_limit(limit: int | None) -> int | None:
+    if limit is None:
+        return None
+    value = int(limit)
+    if value <= 0:
+        return None
+    return value
+
+
+def _limit_clause(max_sources: int | None) -> tuple[str, list[int]]:
+    if max_sources is None:
+        return "", []
+    return "LIMIT ?", [int(max_sources)]
+
+
+def _twomass_mag_clause(config: CatalogConfig) -> tuple[str, list[float]]:
+    lower = config.twomass_mag_min
+    upper = config.twomass_mag_max
+    if lower is None and upper is None:
+        return "TRUE", []
+    if lower is not None and upper is not None:
+        if float(lower) > float(upper):
+            raise ValueError("twomass_mag_min must be <= twomass_mag_max")
+        return "mag_primary BETWEEN ? AND ?", [float(lower), float(upper)]
+    if lower is not None:
+        return "mag_primary >= ?", [float(lower)]
+    return "mag_primary <= ?", [float(upper)]
+
+
+def _json_int_or_none(value: int | None) -> int | None:
+    return None if value is None else int(value)
+
+
+def _json_float_or_none(value: float | None) -> float | None:
+    return None if value is None else float(value)
 
 
 def _execute_df(sql: str, params: list[Any]) -> pd.DataFrame:

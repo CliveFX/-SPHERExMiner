@@ -32,6 +32,38 @@ The estimator can only count rows that exist in the input projected-target
 Parquet. A true all-2MASS estimate therefore requires an upstream frame-target
 projection that was not capped to a small per-frame 2MASS sample.
 
+Use capped frame-target products only for smoke tests and local performance
+sampling:
+
+```bash
+.venv/bin/luxquarry-allsky build-frame-targets \
+  --manifest runs/manifest_sample/frame_manifest.parquet \
+  --out runs/frame_targets_sample_capped/frame_targets.parquet \
+  --catalog all \
+  --gaia-g-min 8 \
+  --gaia-g-max 14 \
+  --twomass-no-mag-filter \
+  --gaia-max-sources-per-frame 20000 \
+  --twomass-max-sources-per-frame 20000
+```
+
+Use the explicit all-2MASS path only when the frame count and expected row count
+are intentional:
+
+```bash
+.venv/bin/luxquarry-allsky build-frame-targets \
+  --manifest runs/manifest_sample/frame_manifest.parquet \
+  --out runs/frame_targets_sample_all2mass/frame_targets.parquet \
+  --catalog all \
+  --gaia-g-min 8 \
+  --gaia-g-max 14 \
+  --gaia-max-sources-per-frame 0 \
+  --all-2mass
+```
+
+`--all-2mass` disables both the 2MASS `mag_primary` filter and the 2MASS SQL
+`LIMIT`. The Gaia G range remains active.
+
 Before every serious cloud estimate, the planner must write the actual catalog
 cardinality used for the run:
 
