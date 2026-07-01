@@ -4562,3 +4562,75 @@ Decision:
 - Both shapes are runnable and row-equivalent. Larger shards remain useful for
   storage/viewer-pressure experiments, but they are not the default performance
   setting from this evidence.
+
+## 2026-06-30 / Frame-boundary profile cleanup
+
+Purpose:
+
+Avoid mistaking overlapped prefetch work for critical-path GPU-worker time. The
+frame worker can prefetch FITS payloads in a background thread. In that mode,
+the critical path is `payload_wait`, not the full summed `fits_read_wall_sec`.
+
+Run:
+
+```text
+run: local_task_queue_frame_boundary_profile_6f
+frames_per_task: 6
+devices: cuda:0
+prefetch_frames: 1
+shard_batch_frames: 1
+measurement_column_profile: compact
+measurement_parquet_compression: none
+enable_psf: true
+psf_kernel_build_mode: gpu_bilinear
+completed_frames: 6
+measurement_rows: 107,259
+ok_measurement_rows: 104,665
+failed_frames: 0
+worker_payload_max_wall_sec: 1.451
+measurements_per_sec_worker_payload: 73,900
+```
+
+New per-frame timing fields:
+
+```text
+coordinate_extract_wall_sec
+edge_filter_wall_sec
+target_row_select_wall_sec
+metadata_build_wall_sec
+```
+
+Profiler correction:
+
+- If `payload_prefetched` is true, `fits_read_wall_sec` and
+  `staging_wall_sec` are reported as `prefetch_worker`, not
+  `worker_payload`.
+- `psf_gather` is labeled as `cupy_psf_best_candidate_gather`. It is device-side
+  CuPy/DLPack candidate selection, not a CPU gather.
+
+Corrected top worker-payload bottlenecks:
+
+```text
+upload_frame_to_gpu:       0.162 sec, 11.18%
+async_shard_write_wait:    0.127 sec,  8.75%
+psf_device_submit_sync:    0.096 sec,  6.62%
+psf_gather:                0.095 sec,  6.52%
+payload_wait:              0.091 sec,  6.30%
+```
+
+Important non-critical async-writer costs:
+
+```text
+metadata_to_cudf:          0.274 sec, async_writer phase
+column_attach:             0.084 sec, async_writer phase
+```
+
+Decision:
+
+- Do not chase FITS read as a direct worker critical-path problem while prefetch
+  is active; it is mostly overlapped in this shape.
+- The next meaningful architecture work is larger GPU work units: frame-stack
+  processing, resident target arrays, and PSF candidate/gather fusion where
+  possible.
+- Keep table/metadata assembly visible because it can become a real bottleneck
+  when async writer wait grows or output pressure increases.

@@ -176,13 +176,17 @@ def _frame_stage_defs() -> list[dict[str, Any]]:
         _stage("stage_fits_object", "staging_wall_sec", "local_or_object_staging", "worker_payload"),
         _stage("read_fits", "fits_read_wall_sec", "astropy_fits_read", "worker_payload"),
         _stage("select_targets", "selection_wall_sec", "pandas_frame_target_selection", "worker_payload"),
+        _stage("extract_target_coordinates", "coordinate_extract_wall_sec", "pandas_numpy_target_coordinates", "worker_payload"),
+        _stage("edge_filter_targets", "edge_filter_wall_sec", "numpy_frame_edge_filter", "worker_payload"),
+        _stage("select_target_rows", "target_row_select_wall_sec", "pandas_selected_target_rows", "worker_payload"),
         _stage("upload_frame_to_gpu", "frame_upload_wall_sec", "warp_device_upload", "worker_payload"),
         _stage("aperture_kernel", "aperture_kernel_wall_sec", "warp_gpu_aperture", "worker_payload"),
         _stage("psf_candidate_grid", "psf_candidate_grid_wall_sec", "warp_gpu_psf_grid", "worker_payload"),
         _stage("psf_spline_coeff", "psf_spline_coeff_wall_sec", "scipy_cpu_spline_coefficients", "worker_payload"),
         _stage("psf_upload", "psf_upload_wall_sec", "warp_gpu_psf_grid", "worker_payload"),
         _stage("psf_device_submit_sync", "psf_device_submit_sync_wall_sec", "warp_gpu_psf_grid", "worker_payload"),
-        _stage("psf_gather", "psf_gather_wall_sec", "gpu_to_cpu_psf_gather", "worker_payload"),
+        _stage("psf_gather", "psf_gather_wall_sec", "cupy_psf_best_candidate_gather", "worker_payload"),
+        _stage("build_measurement_metadata", "metadata_build_wall_sec", "pandas_measurement_metadata", "worker_payload"),
         _stage("assemble_measurement_table", "table_wall_sec", "cudf_measurement_table", "worker_payload"),
         _stage("submit_measurement_shard", "shard_submit_wall_sec", "async_shard_writer", "worker_payload"),
         _stage("frame_compute_inclusive", "frame_compute_wall_sec", "persistent_gpu_frame_worker", "worker_payload", True),
@@ -203,6 +207,9 @@ def _frame_stage_row(
     completed_frames: int,
 ) -> dict[str, Any]:
     field = str(stage["field"])
+    phase = str(stage["phase"])
+    if field in {"fits_read_wall_sec", "staging_wall_sec"} and _any_prefetched(frames):
+        phase = "prefetch_worker"
     summed = _sum_column(frames, field)
     critical = _max_group_sum(frames, "worker_id", field)
     rows_out = measurement_rows
@@ -211,7 +218,7 @@ def _frame_stage_row(
     return {
         "run_id": run_id,
         "stage": stage["stage"],
-        "phase": stage["phase"],
+        "phase": phase,
         "backend": stage["backend"],
         "inclusive": bool(stage["inclusive"]),
         "summed_wall_sec": summed,
@@ -223,6 +230,15 @@ def _frame_stage_row(
         "throughput_rows_per_sec_critical": _rate(rows_out, critical),
         "decision_hint": _decision_hint(stage["stage"], critical, denominator_wall),
     }
+
+
+def _any_prefetched(frames: pd.DataFrame) -> bool:
+    if "payload_prefetched" not in frames.columns or frames.empty:
+        return False
+    try:
+        return bool(frames["payload_prefetched"].fillna(False).astype(bool).any())
+    except Exception:
+        return False
 
 
 def _shard_write_phase(shards: pd.DataFrame) -> str:
@@ -337,7 +353,7 @@ def _decision_hint(stage: str, critical: float, denominator: float) -> str:
     }:
         return "Hot durable-output path; consider larger shard batches, cuDF parquet tuning, or async writer isolation."
     if stage.startswith("psf"):
-        return "Hot PSF path; keep kernels resident and remove CPU/device round trips before changing math."
+        return "Hot PSF path; keep kernels resident and fuse candidate selection/gather where possible."
     if stage == "select_targets":
         return "Hot selection path; replace per-frame pandas filtering with prepartitioned frame target batches or cuDF."
     return "Above 5% critical-path threshold; profile and decide keep/accelerate/rewrite."

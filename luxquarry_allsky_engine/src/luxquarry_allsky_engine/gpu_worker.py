@@ -453,16 +453,22 @@ class PersistentGpuFrameWorker:
         calibration = self._get_calibration(release=release, detector=detector)
 
         t_select = time.perf_counter()
+        t_coord = time.perf_counter()
         x_zero = targets["x_pix"].to_numpy(dtype=np.float32) - np.float32(1.0)
         y_zero = targets["y_pix"].to_numpy(dtype=np.float32) - np.float32(1.0)
+        coordinate_extract_wall = time.perf_counter() - t_coord
+        t_edge = time.perf_counter()
         edge_zero = np.minimum.reduce(
             [x_zero, y_zero, payload.image.shape[1] - 1 - x_zero, payload.image.shape[0] - 1 - y_zero]
         )
         selected = np.isfinite(edge_zero) & (edge_zero >= self.config.aperture.edge_margin_pix)
+        edge_filter_wall = time.perf_counter() - t_edge
+        t_select_rows = time.perf_counter()
         selected_targets = targets.loc[selected].reset_index(drop=True)
         selected_edge = edge_zero[selected]
         x_selected = x_zero[selected]
         y_selected = y_zero[selected]
+        target_row_select_wall = time.perf_counter() - t_select_rows
         selection_wall = time.perf_counter() - t_select
 
         t_frame_upload = time.perf_counter()
@@ -524,6 +530,7 @@ class PersistentGpuFrameWorker:
             psf_timings = {f"psf_{name}": float(value) for name, value in psf_batch.timings.items()}
 
         t_table = time.perf_counter()
+        t_metadata = time.perf_counter()
         metadata = self._measurement_metadata(
             frame=frame,
             selected_targets=selected_targets,
@@ -533,6 +540,7 @@ class PersistentGpuFrameWorker:
             aperture=self.config.aperture,
             column_profile=self.config.measurement_column_profile,
         )
+        metadata_build_wall = time.perf_counter() - t_metadata
         ok_count = int((batch.status == 0).sum().get())
         if self.config.batch_table_assembly:
             measurement = FrameMeasurement(
@@ -558,6 +566,9 @@ class PersistentGpuFrameWorker:
             "staging_wall_sec": payload.staging_wall_sec,
             "staged_bytes": payload.staged_bytes,
             "selection_wall_sec": selection_wall,
+            "coordinate_extract_wall_sec": coordinate_extract_wall,
+            "edge_filter_wall_sec": edge_filter_wall,
+            "target_row_select_wall_sec": target_row_select_wall,
             "frame_upload_wall_sec": frame_upload_wall,
             "kernel_wall_sec": kernel_wall,
             "aperture_kernel_wall_sec": kernel_wall,
@@ -566,6 +577,7 @@ class PersistentGpuFrameWorker:
             "ok_psf_count": psf_ok_count,
             **psf_timings,
             **table_timings,
+            "metadata_build_wall_sec": metadata_build_wall,
             "table_wall_sec": table_wall,
             "frame_compute_wall_sec": time.perf_counter() - frame_started,
         }
