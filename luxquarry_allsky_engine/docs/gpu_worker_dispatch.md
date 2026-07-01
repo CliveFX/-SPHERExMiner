@@ -276,6 +276,28 @@ The queue worker is the local control-plane analogue for EKS. The hot-path goal
 is still frame-level GPU work: load one frame, process all in-frame targets,
 emit durable measurement rows, and avoid per-target setup.
 
+Leases are recoverable. Each worker checks `leased/*.json` before claiming new
+work and requeues leases older than `--lease-timeout-sec` unless the task has
+already reached `--max-task-attempts`. The default timeout is conservative
+(`21600` seconds) so normal long frame batches are not reclaimed accidentally.
+For crash-recovery tests, lower it deliberately:
+
+```bash
+.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir runs/task_queue_gc_dense_smoke \
+  --out-dir runs/task_queue_gc_dense_smoke/worker_cuda0 \
+  --run-id task_queue_gc_dense_smoke \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --lease-timeout-sec 60 \
+  --max-task-attempts 3
+```
+
+This makes the local task queue closer to the EKS deployment shape: workers can
+die independently, replacement workers reclaim stale frame batches, and
+post-processing can treat remaining `failed/` task records as durable failure
+evidence.
+
 For local workstation runs, use the one-command queue runner:
 
 ```bash

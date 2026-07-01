@@ -145,6 +145,17 @@ Implemented stages:
   --batch-table-assembly \
   --local-cache-dir /tmp/luxquarry_stage_smoke
 
+# Queue-fed worker services are the EKS-shaped path. They recover stale leases
+# if a worker dies before completing a frame batch.
+.venv/bin/luxquarry-allsky run-gpu-worker-service \
+  --queue-dir runs/task_queue_gc_dense_smoke \
+  --out-dir runs/task_queue_gc_dense_smoke/worker_cuda0 \
+  --run-id task_queue_gc_dense_smoke \
+  --worker-id worker-cuda0 \
+  --device cuda:0 \
+  --lease-timeout-sec 21600 \
+  --max-task-attempts 3
+
 # Write a multi-GPU dispatch plan. The generated shell script launches one
 # persistent worker per device; the JSON is the same contract an EKS job
 # generator should use.

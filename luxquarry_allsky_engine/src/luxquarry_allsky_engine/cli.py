@@ -393,6 +393,18 @@ def main(argv: list[str] | None = None) -> int:
     worker_service.add_argument("--cache-root", type=Path, default=Path("/mnt/niroseti/spherex_cache"))
     worker_service.add_argument("--device", default="cuda:0")
     worker_service.add_argument("--max-tasks", type=int)
+    worker_service.add_argument(
+        "--lease-timeout-sec",
+        type=float,
+        default=21600.0,
+        help="Requeue leased tasks older than this many seconds. Use 0 to disable stale-lease recovery.",
+    )
+    worker_service.add_argument(
+        "--max-task-attempts",
+        type=int,
+        default=3,
+        help="Fail a task instead of requeuing it after this many stale lease attempts.",
+    )
     worker_service.add_argument("--no-rmm-pool", action="store_true")
     worker_service.add_argument("--async-shard-writes", action="store_true")
     worker_service.add_argument("--batch-table-assembly", action="store_true")
@@ -508,6 +520,18 @@ def main(argv: list[str] | None = None) -> int:
     local_task_queue.add_argument("--devices", default="cuda:0")
     local_task_queue.add_argument("--frames-per-task", type=int, default=25)
     local_task_queue.add_argument("--limit-frames", type=int)
+    local_task_queue.add_argument(
+        "--lease-timeout-sec",
+        type=float,
+        default=21600.0,
+        help="Pass stale-lease timeout to each worker service. Use 0 to disable stale-lease recovery.",
+    )
+    local_task_queue.add_argument(
+        "--max-task-attempts",
+        type=int,
+        default=3,
+        help="Pass max stale retry attempts to each worker service.",
+    )
     local_task_queue.add_argument(
         "--materialize-task-inputs",
         action="store_true",
@@ -1428,6 +1452,10 @@ def cmd_run_gpu_worker_service(args: argparse.Namespace) -> int:
         raise ValueError("--status-interval-frames must be positive")
     if args.max_tasks is not None and args.max_tasks <= 0:
         raise ValueError("--max-tasks must be positive")
+    if args.lease_timeout_sec < 0:
+        raise ValueError("--lease-timeout-sec must be non-negative")
+    if args.max_task_attempts <= 0:
+        raise ValueError("--max-task-attempts must be positive")
     summary = run_gpu_worker_service(
         GpuWorkerServiceConfig(
             queue_dir=args.queue_dir,
@@ -1435,6 +1463,8 @@ def cmd_run_gpu_worker_service(args: argparse.Namespace) -> int:
             run_id=args.run_id,
             worker_id=args.worker_id,
             max_tasks=args.max_tasks,
+            lease_timeout_sec=args.lease_timeout_sec,
+            max_task_attempts=args.max_task_attempts,
             worker_config=PersistentWorkerConfig(
                 aperture=ApertureConfig(
                     cache_root=args.cache_root,
@@ -1563,6 +1593,10 @@ def cmd_run_local_task_queue(args: argparse.Namespace) -> int:
         raise ValueError("--prefetch-frames must be non-negative")
     if args.status_interval_frames <= 0:
         raise ValueError("--status-interval-frames must be positive")
+    if args.lease_timeout_sec < 0:
+        raise ValueError("--lease-timeout-sec must be non-negative")
+    if args.max_task_attempts <= 0:
+        raise ValueError("--max-task-attempts must be positive")
 
     started = time.perf_counter()
     out_dir = args.out_dir
@@ -1735,6 +1769,10 @@ def _local_task_queue_worker_command(
         str(args.prefetch_frames),
         "--status-interval-frames",
         str(args.status_interval_frames),
+        "--lease-timeout-sec",
+        str(args.lease_timeout_sec),
+        "--max-task-attempts",
+        str(args.max_task_attempts),
         "--measurement-column-profile",
         args.measurement_column_profile,
         "--measurement-parquet-compression",

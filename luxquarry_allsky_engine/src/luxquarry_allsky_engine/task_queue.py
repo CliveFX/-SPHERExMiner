@@ -32,6 +32,8 @@ class GpuWorkerServiceConfig:
     worker_id: str
     worker_config: PersistentWorkerConfig
     max_tasks: int | None = None
+    lease_timeout_sec: float = 21600.0
+    max_task_attempts: int = 3
 
 
 @dataclass(frozen=True)
@@ -167,6 +169,8 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
         "resident_source_target_rows": int(len(source_targets)) if source_targets is not None else 0,
         "tasks_completed": 0,
         "tasks_failed": 0,
+        "stale_leases_requeued": 0,
+        "stale_leases_failed": 0,
         "frames_completed": 0,
         "measurement_rows": 0,
         "ok_measurement_rows": 0,
@@ -176,7 +180,15 @@ def run_gpu_worker_service(config: GpuWorkerServiceConfig) -> dict[str, Any]:
     _write_service_status(status_dir / f"{config.worker_id}.json", summary, started, state="running")
 
     while config.max_tasks is None or summary["tasks_completed"] + summary["tasks_failed"] < config.max_tasks:
-        claimed = _claim_next_task(queue_dir, config.worker_id)
+        stale = _requeue_stale_leases(
+            queue_dir,
+            worker_id=config.worker_id,
+            lease_timeout_sec=config.lease_timeout_sec,
+            max_task_attempts=config.max_task_attempts,
+        )
+        summary["stale_leases_requeued"] += int(stale["requeued"])
+        summary["stale_leases_failed"] += int(stale["failed"])
+        claimed = _claim_next_task(queue_dir, config.worker_id, max_task_attempts=config.max_task_attempts)
         if claimed is None:
             break
         lease_path, task = claimed
@@ -516,7 +528,12 @@ def _worker_payload_rows(task_rows: list[dict[str, Any]]) -> list[dict[str, Any]
     return sorted(grouped.values(), key=lambda item: item["worker_id"])
 
 
-def _claim_next_task(queue_dir: Path, worker_id: str) -> tuple[Path, dict[str, Any]] | None:
+def _claim_next_task(
+    queue_dir: Path,
+    worker_id: str,
+    *,
+    max_task_attempts: int,
+) -> tuple[Path, dict[str, Any]] | None:
     for pending_path in sorted((queue_dir / "pending").glob("*.json")):
         lease_path = queue_dir / "leased" / f"{pending_path.stem}.{worker_id}.json"
         try:
@@ -524,12 +541,98 @@ def _claim_next_task(queue_dir: Path, worker_id: str) -> tuple[Path, dict[str, A
         except FileNotFoundError:
             continue
         task = json.loads(lease_path.read_text(encoding="utf-8"))
+        next_attempt = int(task.get("attempt") or 0) + 1
+        if next_attempt > max_task_attempts:
+            failed = {
+                **task,
+                "status": "failed",
+                "failed_utc": _utc_now(),
+                "worker_id": worker_id,
+                "error": f"Task exceeded max_task_attempts={max_task_attempts} before lease",
+            }
+            _write_json_atomic(queue_dir / "failed" / f"{pending_path.stem}.max_attempts.json", failed)
+            lease_path.unlink(missing_ok=True)
+            continue
+        task["attempt"] = next_attempt
         task["status"] = "leased"
         task["lease_owner"] = worker_id
         task["leased_utc"] = _utc_now()
         _write_json_atomic(lease_path, task)
         return lease_path, task
     return None
+
+
+def _requeue_stale_leases(
+    queue_dir: Path,
+    *,
+    worker_id: str,
+    lease_timeout_sec: float,
+    max_task_attempts: int,
+) -> dict[str, int]:
+    if lease_timeout_sec <= 0:
+        return {"checked": 0, "stale": 0, "requeued": 0, "failed": 0}
+
+    checked = stale_count = requeued = failed = 0
+    for lease_path in sorted((queue_dir / "leased").glob("*.json")):
+        checked += 1
+        try:
+            task = json.loads(lease_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            continue
+        age_sec = _lease_age_sec(lease_path, task)
+        if age_sec < lease_timeout_sec:
+            continue
+        stale_count += 1
+        task_id = str(task.get("task_id") or lease_path.stem.split(".")[0])
+        if (queue_dir / "complete" / f"{task_id}.json").exists():
+            lease_path.unlink(missing_ok=True)
+            continue
+        attempt = int(task.get("attempt") or 0)
+        if attempt >= max_task_attempts:
+            failed_task = {
+                **task,
+                "status": "failed",
+                "failed_utc": _utc_now(),
+                "requeue_worker_id": worker_id,
+                "stale_lease_age_sec": age_sec,
+                "error": f"Stale lease exceeded max_task_attempts={max_task_attempts}",
+            }
+            _write_json_atomic(queue_dir / "failed" / f"{lease_path.stem}.stale.json", failed_task)
+            lease_path.unlink(missing_ok=True)
+            failed += 1
+            continue
+
+        requeued_task = {
+            **task,
+            "status": "pending",
+            "requeued_utc": _utc_now(),
+            "requeue_worker_id": worker_id,
+            "previous_lease_owner": task.get("lease_owner"),
+            "stale_lease_age_sec": age_sec,
+            "stale_requeue_count": int(task.get("stale_requeue_count") or 0) + 1,
+        }
+        requeued_task.pop("lease_owner", None)
+        requeued_task.pop("leased_utc", None)
+        _write_json_atomic(queue_dir / "pending" / f"{task_id}.json", requeued_task)
+        lease_path.unlink(missing_ok=True)
+        requeued += 1
+    return {"checked": checked, "stale": stale_count, "requeued": requeued, "failed": failed}
+
+
+def _lease_age_sec(lease_path: Path, task: dict[str, Any]) -> float:
+    leased_utc = task.get("leased_utc")
+    if leased_utc:
+        try:
+            leased_at = datetime.fromisoformat(str(leased_utc))
+            if leased_at.tzinfo is None:
+                leased_at = leased_at.replace(tzinfo=timezone.utc)
+            return max(0.0, (datetime.now(timezone.utc) - leased_at).total_seconds())
+        except ValueError:
+            pass
+    try:
+        return max(0.0, time.time() - lease_path.stat().st_mtime)
+    except FileNotFoundError:
+        return 0.0
 
 
 def _frame_timing_rows(*, task: dict[str, Any], worker_summary: dict[str, Any]) -> list[dict[str, Any]]:
