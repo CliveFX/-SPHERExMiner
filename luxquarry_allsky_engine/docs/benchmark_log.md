@@ -4317,3 +4317,76 @@ Interpretation:
 - The next meaningful performance work remains the same: reduce FITS read/cache
   overhead, reduce metadata-to-cuDF conversion, and reduce PSF gather/host-sync
   work.
+
+## 2026-06-30: Worker In-Frame Target Prefilter
+
+Patch:
+
+- `process_frame_batch()` now filters the task target table to `in_frame`
+  targets once during batch setup.
+- The frame loop now reads an already in-frame group from `targets_by_frame`
+  instead of applying `frame_targets_all["in_frame"].astype(bool)` for every
+  frame.
+- Worker summaries now include:
+  - `input_projected_rows`
+  - `in_frame_projected_rows`
+  - `target_setup_wall_sec`
+
+One-frame compact+PSF smoke:
+
+```text
+run: local_task_queue_inframe_prefilter_smoke1
+input_projected_rows: 20,000
+in_frame_projected_rows: 18,088
+target_setup_wall_sec: 0.0080
+completed_frames: 1
+measurement_rows: 17,875
+failed_frames: 0
+```
+
+Schema/provenance comparison against the prior compact reference:
+
+```text
+rows equal: true
+columns equal: true
+checked equal:
+  frame_group_id
+  image_id
+  target_id
+  fits_path
+  cwave_um
+  cband_um
+  aperture_flux_uJy
+  psf_flux_uJy
+  aperture_status_code
+  psf_status_code
+```
+
+Six one-frame task verification:
+
+```text
+run: local_task_queue_inframe_prefilter_6f_verify
+completed_frames: 6
+measurement_rows: 107,259
+ok_measurement_rows: 104,665
+failed_frames: 0
+measurements_per_sec_worker_payload: 52,270
+target_setup_wall_sec total: 0.0399
+per-task target setup: 0.0063-0.0080 sec
+```
+
+Shard manifest comparison against the previous six-frame compact verification:
+
+```text
+shard_count: 6 -> 6
+measurement_rows: 107,259 -> 107,259
+ok_rows: 104,665 -> 104,665
+```
+
+Decision:
+
+- Keep. This is a modest setup cleanup, not a critical-path breakthrough.
+- The effect is largest for many small scheduler tasks because it removes
+  repeated per-frame target masking and gives us explicit target setup timing.
+- Larger performance work remains in FITS/cache I/O, output metadata
+  conversion, and PSF host-sync/gather paths.

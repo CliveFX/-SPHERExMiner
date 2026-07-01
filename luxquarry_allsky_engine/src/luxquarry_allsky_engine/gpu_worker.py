@@ -230,14 +230,21 @@ class PersistentGpuFrameWorker:
         calibration_start_misses = self._calibration_cache_misses
         calibration_start_load_wall = self._calibration_load_wall_sec
 
+        target_setup_started = time.perf_counter()
         manifest = manifest.reset_index(drop=True).copy()
         targets = targets.copy()
         frame_ids = set(manifest["frame_group_id"].astype(str))
         targets = targets[targets["frame_group_id"].astype(str).isin(frame_ids)].copy()
+        input_projected_rows = int(len(targets))
+        if "in_frame" in targets.columns:
+            in_frame_targets = targets[targets["in_frame"].astype(bool)].copy()
+        else:
+            in_frame_targets = targets
         targets_by_frame = {
             str(frame_group_id): frame_targets
-            for frame_group_id, frame_targets in targets.groupby("frame_group_id", sort=False)
+            for frame_group_id, frame_targets in in_frame_targets.groupby("frame_group_id", sort=False)
         }
+        target_setup_wall = time.perf_counter() - target_setup_started
 
         summary: dict[str, Any] = {
             "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -249,7 +256,9 @@ class PersistentGpuFrameWorker:
             "worker_index": self.config.worker_index,
             "worker_count": self.config.worker_count,
             "frame_count": int(len(manifest)),
-            "input_projected_rows": int(len(targets)),
+            "input_projected_rows": input_projected_rows,
+            "in_frame_projected_rows": int(len(in_frame_targets)),
+            "target_setup_wall_sec": target_setup_wall,
             "measurement_rows": 0,
             "ok_measurement_rows": 0,
             "failed_frames": 0,
@@ -300,11 +309,8 @@ class PersistentGpuFrameWorker:
                 frame = payload_result.frame
                 payload = payload_result.payload
                 frame_group_id = str(frame.get("frame_group_id"))
-                frame_targets_all = targets_by_frame.get(frame_group_id)
-                if frame_targets_all is None or frame_targets_all.empty:
-                    continue
-                frame_targets = frame_targets_all[frame_targets_all["in_frame"].astype(bool)]
-                if frame_targets.empty:
+                frame_targets = targets_by_frame.get(frame_group_id)
+                if frame_targets is None or frame_targets.empty:
                     continue
                 t0 = time.perf_counter()
                 try:

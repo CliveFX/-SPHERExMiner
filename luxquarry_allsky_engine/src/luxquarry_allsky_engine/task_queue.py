@@ -588,6 +588,8 @@ def _compact_worker_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "frame_count",
         "completed_frames",
         "input_projected_rows",
+        "in_frame_projected_rows",
+        "target_setup_wall_sec",
         "measurement_rows",
         "ok_measurement_rows",
         "failed_frames",
