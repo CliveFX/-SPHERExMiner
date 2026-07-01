@@ -208,6 +208,7 @@ def _query_gaia(*, bounds: tuple[float, float, float, float], config: CatalogCon
     parquet_expr = _duckdb_parquet_list(parquet_files)
     ra_clause, ra_params = _ra_where("ra", bounds[0], bounds[1])
     limit_clause, limit_params = _limit_clause(max_sources)
+    order_clause = _order_clause(max_sources, "phot_g_mean_mag, source_id")
     params: list[Any] = [config.gaia_g_min, config.gaia_g_max, *hpx_values, *ra_params, bounds[2], bounds[3], *limit_params]
     sql = f"""
         SELECT {", ".join(GAIA_COLUMNS)}
@@ -216,7 +217,7 @@ def _query_gaia(*, bounds: tuple[float, float, float, float], config: CatalogCon
           AND hpx IN ({", ".join("?" for _ in hpx_values)})
           AND {ra_clause}
           AND dec BETWEEN ? AND ?
-        ORDER BY phot_g_mean_mag, source_id
+        {order_clause}
         {limit_clause}
     """
     return _execute_df(sql, params)
@@ -236,6 +237,7 @@ def _query_2mass(*, bounds: tuple[float, float, float, float], config: CatalogCo
     ra_clause, ra_params = _ra_where("ra_deg", bounds[0], bounds[1])
     mag_clause, mag_params = _twomass_mag_clause(config)
     limit_clause, limit_params = _limit_clause(max_sources)
+    order_clause = _order_clause(max_sources, "mag_primary, target_id")
     params: list[Any] = [*mag_params, *hpx_values, *ra_params, bounds[2], bounds[3], *limit_params]
     sql = f"""
         SELECT {", ".join(TWOMASS_COLUMNS)}
@@ -244,7 +246,7 @@ def _query_2mass(*, bounds: tuple[float, float, float, float], config: CatalogCo
           AND hpx IN ({", ".join("?" for _ in hpx_values)})
           AND {ra_clause}
           AND dec_deg BETWEEN ? AND ?
-        ORDER BY mag_primary, target_id
+        {order_clause}
         {limit_clause}
     """
     return _execute_df(sql, params)
@@ -360,6 +362,12 @@ def _limit_clause(max_sources: int | None) -> tuple[str, list[int]]:
     if max_sources is None:
         return "", []
     return "LIMIT ?", [int(max_sources)]
+
+
+def _order_clause(max_sources: int | None, order_by: str) -> str:
+    if max_sources is None:
+        return ""
+    return f"ORDER BY {order_by}"
 
 
 def _twomass_mag_clause(config: CatalogConfig) -> tuple[str, list[float]]:

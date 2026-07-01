@@ -4823,3 +4823,49 @@ The cuDF groupby is much faster, but at this size total wall is dominated by
 Parquet read and converting the reduced grouped result for JSON. This is still
 the right interface for larger representative cells because it keeps the hot
 groupby path GPU-capable.
+
+## 2026-06-30 / Uncapped catalog query ORDER BY removal
+
+Change:
+
+- Capped catalog queries still use deterministic `ORDER BY` before `LIMIT`.
+- Uncapped catalog queries omit `ORDER BY` because survey mode needs all rows
+  and downstream work groups by catalog/source IDs, not row order.
+
+Compatibility check:
+
+```text
+capped smoke: catalog=all, max_sources_per_frame=10, limit_frames=1
+result: 5 Gaia + 5 2MASS, unchanged behavior
+```
+
+Dense one-frame warm-cache comparison:
+
+```text
+before:
+  target rows: 923,860
+  Gaia query: 0.651 sec
+  2MASS query: 1.388 sec
+  frame target-build wall: 2.625 sec
+  total wall: 3.653 sec
+
+after:
+  target rows: 923,860
+  Gaia query: 0.719 sec
+  2MASS query: 1.320 sec
+  frame target-build wall: 2.637 sec
+  total wall: 3.658 sec
+
+row-set comparison:
+  missing_from_after: 0
+  extra_in_after: 0
+```
+
+Interpretation:
+
+- The query shape is cleaner for uncapped survey mode, but this warm-cache
+  one-frame sample does not show a meaningful wall-time improvement.
+- The next catalog-side optimization should not assume sort removal is enough.
+  More likely candidates are reducing repeated catalog reads across overlapping
+  frames, staging catalog partitions locally, and avoiding repeated per-frame
+  dedup/write pressure.
