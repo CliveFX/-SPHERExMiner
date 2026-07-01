@@ -65,6 +65,7 @@ from .spectra import (
 )
 from .staging_benchmark import ObjectStagingBenchmarkConfig, benchmark_object_staging
 from .status import DispatchStatusConfig, write_dispatch_status_snapshot
+from .survey_depth import ProjectedDepthSummaryConfig, summarize_projected_depth
 from .survey_economics import (
     SurveyEconomicsConfig,
     SurveyPlanConfig,
@@ -517,6 +518,20 @@ def main(argv: list[str] | None = None) -> int:
     survey_sample.add_argument("--sample-cell-count", type=int)
     survey_sample.add_argument("--budget-usd", type=float, default=5000.0)
     survey_sample.set_defaults(func=cmd_extrapolate_survey_sample)
+
+    depth_summary = sub.add_parser(
+        "summarize-projected-depth",
+        help="Summarize per-target measurement depth in a projected-target parquet.",
+    )
+    depth_summary.add_argument("--projected-targets", type=Path, required=True)
+    depth_summary.add_argument("--out", type=Path)
+    depth_summary.add_argument("--backend", choices=["auto", "cudf", "pandas"], default="auto")
+    depth_summary.add_argument(
+        "--include-out-of-frame",
+        action="store_true",
+        help="Count all projected rows instead of only in_frame rows.",
+    )
+    depth_summary.set_defaults(func=cmd_summarize_projected_depth)
 
     local_task_queue = sub.add_parser(
         "run-local-task-queue",
@@ -1587,6 +1602,19 @@ def cmd_extrapolate_survey_sample(args: argparse.Namespace) -> int:
             target_cell_count=args.target_cell_count,
             sample_cell_count=args.sample_cell_count,
             budget_usd=args.budget_usd,
+        )
+    )
+    print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def cmd_summarize_projected_depth(args: argparse.Namespace) -> int:
+    summary = summarize_projected_depth(
+        ProjectedDepthSummaryConfig(
+            projected_targets_path=args.projected_targets,
+            output_path=args.out,
+            backend=args.backend,
+            only_in_frame=not args.include_out_of_frame,
         )
     )
     print(json.dumps(summary, indent=2, sort_keys=True))

@@ -4794,3 +4794,32 @@ Interpretation:
   measurement count scale directly with overlap depth.
 - Next cost samples should use representative cells with many frames, then
   report both measurement count and per-target depth distribution.
+
+Reusable depth command added:
+
+```text
+luxquarry-allsky summarize-projected-depth \
+  --projected-targets runs/projected_targets_gc_3frame_all2mass_true/frame_targets_projected.parquet \
+  --out runs/survey_economics_gc_3frame_all2mass_true/depth_summary.json \
+  --backend auto
+```
+
+Backend comparison on this 3-frame sample:
+
+```text
+cuDF auto backend:
+  input rows: 2,519,713
+  unique targets: 876,529
+  groupby wall: 0.044 sec
+  total wall: 1.42 sec
+
+pandas backend:
+  same counts/histogram
+  groupby wall: 0.749 sec
+  total wall: 1.46 sec
+```
+
+The cuDF groupby is much faster, but at this size total wall is dominated by
+Parquet read and converting the reduced grouped result for JSON. This is still
+the right interface for larger representative cells because it keeps the hot
+groupby path GPU-capable.
